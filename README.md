@@ -59,7 +59,11 @@ The public routes are:
 - `POST /v1/events/concierge` (timestamped HMAC signature required)
 
 Set the same `CAPTAIN_SHARED_SECRET` value in Captain on Fly and Concierge on
-Vercel. Configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`,
+Vercel. Captain calls Concierge capabilities (such as `website.search`) through
+the signed bridge endpoint at `POST /api/captain-bridge` (override with
+`CONCIERGE_BRIDGE_URL` if needed). The request/response envelope and signature
+scheme live in `src/bridge-protocol.ts`, which is kept identical to
+`server/concierge/bridge-protocol.ts` in the opemipo.com repo. Configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`,
 `CONCIERGE_EMAIL_FROM`, and `OWNER_EMAIL` on Captain. Concierge escalation
 emails use `CONCIERGE_EMAIL_FROM`; Telegram-initiated email uses
 `CAPTAIN_EMAIL_FROM` when set.
