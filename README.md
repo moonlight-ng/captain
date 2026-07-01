@@ -8,16 +8,16 @@ this private repository.
 
 1. Open `@BotFather` in Telegram.
 2. Send `/newbot`, choose a name and username, and copy the bot token.
-3. In a local shell, expose the token without committing it:
+3. Copy the environment template and put the token in the ignored `.env` file:
 
    ```sh
-   export TELEGRAM_BOT_TOKEN='...'
+   cp .env.example .env
    corepack pnpm install
    pnpm telegram:identify
    ```
 
 4. Send `/start` to the new bot. The script prints
-   `TELEGRAM_OWNER_USER_ID=...`.
+   `TELEGRAM_OWNER_USER_ID=...`; add that value to `.env`.
 
 ## 2. Create a repository deploy key
 
@@ -35,18 +35,15 @@ Fly:
 base64 < captain_deploy_key | tr -d '\n'
 ```
 
-Delete the local private-key files after the Fly secret is configured.
+Put the encoded value in `GIT_SSH_PRIVATE_KEY_B64` in `.env`. Delete the
+original private-key files after the Fly secret is configured.
 
 ## 3. Test locally
 
-Copy `.env.example` to `.env`, fill in the Telegram, owner and OpenAI values,
-then export them into your shell. Captain does not automatically load `.env`.
-Git synchronization is disabled by default locally.
+Fill in the Telegram, owner and OpenAI values in `.env`. Captain loads this
+file automatically. Git synchronization is disabled by default locally.
 
 ```sh
-set -a
-. ./.env
-set +a
 pnpm dev
 ```
 
@@ -60,14 +57,13 @@ Install and authenticate `flyctl`, then choose an unused app name if
 ```sh
 fly apps create fathermerry-captain
 fly volumes create captain_data --region lhr --size 1 --snapshot-retention 14
-fly secrets set \
-  TELEGRAM_BOT_TOKEN='...' \
-  TELEGRAM_OWNER_USER_ID='...' \
-  OPENAI_API_KEY='...' \
-  GIT_SSH_PRIVATE_KEY_B64='...'
+fly secrets import < .env
 fly deploy
 fly scale count 1
 ```
+
+Fly stores the imported values as encrypted secrets; it does not upload the
+`.env` file into the image.
 
 This is a worker process with no public HTTP service. The Machine long-polls
 Telegram and remains active until the process exits.
