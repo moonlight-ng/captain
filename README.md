@@ -1,8 +1,8 @@
 # Captain
 
 Captain is Opemipo's private core agent. The first milestone is a single-owner
-Telegram bot running continuously on Fly.io, with Markdown memory committed to
-this private repository.
+Telegram bot running continuously on Fly.io, using Vercel AI Gateway and
+committing Markdown memory to this private repository.
 
 ## 1. Create the Telegram bot
 
@@ -40,8 +40,9 @@ original private-key files after the Fly secret is configured.
 
 ## 3. Test locally
 
-Fill in the Telegram, owner and OpenAI values in `.env`. Captain loads this
-file automatically. Git synchronization is disabled by default locally.
+Fill in the Telegram, owner and Vercel AI Gateway values in `.env`. Captain
+loads this file automatically. Git synchronization is disabled by default
+locally.
 
 ```sh
 pnpm dev
