@@ -34,10 +34,10 @@ Only private messages from `TELEGRAM_OWNER_USER_ID` receive a response.
 ## 3. Deploy to Fly.io
 
 Install and authenticate `flyctl`, then choose an unused app name if
-`fathermerry-captain` is unavailable and update `fly.toml`.
+`opemipo-captain` is unavailable and update `fly.toml`.
 
 ```sh
-fly apps create fathermerry-captain
+fly apps create opemipo-captain
 fly volumes create captain_data --region lhr --size 1 --snapshot-retention 14
 fly secrets import < .env
 fly deploy
