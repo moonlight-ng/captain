@@ -6,3 +6,5 @@ dist
 coverage
 tests
 *.log
+.captain-memory
+memory

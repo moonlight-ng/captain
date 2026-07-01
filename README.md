@@ -2,7 +2,7 @@
 
 Captain is Opemipo's private core agent. The first milestone is a single-owner
 Telegram bot running continuously on Fly.io, using Vercel AI Gateway and
-committing Markdown memory to this private repository.
+keeping private Markdown memory on an encrypted Fly Volume.
 
 ## 1. Create the Telegram bot
 
@@ -19,30 +19,11 @@ committing Markdown memory to this private repository.
 4. Send `/start` to the new bot. The script prints
    `TELEGRAM_OWNER_USER_ID=...`; add that value to `.env`.
 
-## 2. Create a repository deploy key
-
-Generate a dedicated key with no passphrase:
-
-```sh
-ssh-keygen -t ed25519 -C captain@opemipo.com -f captain_deploy_key -N ''
-```
-
-In GitHub, open this repository's **Settings → Deploy keys**, add the contents
-of `captain_deploy_key.pub`, and enable write access. Encode the private key for
-Fly:
-
-```sh
-base64 < captain_deploy_key | tr -d '\n'
-```
-
-Put the encoded value in `GIT_SSH_PRIVATE_KEY_B64` in `.env`. Delete the
-original private-key files after the Fly secret is configured.
-
-## 3. Test locally
+## 2. Test locally
 
 Fill in the Telegram, owner and Vercel AI Gateway values in `.env`. Captain
-loads this file automatically. Git synchronization is disabled by default
-locally.
+loads this file automatically. Local memory is created under the ignored
+`.captain-memory/` directory.
 
 ```sh
 pnpm dev
@@ -50,7 +31,7 @@ pnpm dev
 
 Only private messages from `TELEGRAM_OWNER_USER_ID` receive a response.
 
-## 4. Deploy to Fly.io
+## 3. Deploy to Fly.io
 
 Install and authenticate `flyctl`, then choose an unused app name if
 `fathermerry-captain` is unavailable and update `fly.toml`.
@@ -69,12 +50,18 @@ Fly stores the imported values as encrypted secrets; it does not upload the
 This is a worker process with no public HTTP service. The Machine long-polls
 Telegram and remains active until the process exits.
 
-## Memory and Git safety
+## Private memory
 
-Captain reads `memory/identity.md`, `memory/profile.md`, `memory/core.md`, and
-the current UTC journal. It only stages and commits the `memory/` path.
-Failed pushes remain committed on the Fly Volume and are retried at startup or
-after the next exchange. Non-memory working-tree changes prevent startup.
+On first start, Captain creates `/data/memory/identity.md`,
+`/data/memory/profile.md`, `/data/memory/core.md`, and the `journal/`
+directory. Deployments do not replace existing files. Nothing under this path
+is copied into or committed to Git.
+
+Inspect the private files through Fly SSH:
+
+```sh
+fly ssh console -C "find /data/memory -maxdepth 2 -type f"
+```
 
 Fly snapshots reduce recovery risk but are not a replacement for an independent
-backup. The Git remote is the durable copy of successfully pushed memory.
+backup.
