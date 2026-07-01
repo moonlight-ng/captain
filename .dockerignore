@@ -7,4 +7,5 @@ coverage
 tests
 *.log
 .captain-memory
+.captain-state
 memory

@@ -47,8 +47,17 @@ fly scale count 1
 Fly stores the imported values as encrypted secrets; it does not upload the
 `.env` file into the image.
 
-This is a worker process with no public HTTP service. The Machine long-polls
-Telegram and remains active until the process exits.
+This is a single always-on service. The Machine long-polls Telegram, receives
+signed Concierge events over HTTPS, and remains active until the process exits.
+
+The public routes are:
+
+- `GET /health`
+- `POST /v1/events/concierge` (timestamped HMAC signature required)
+
+Set the same `CAPTAIN_SHARED_SECRET` value in Captain on Fly and Concierge on
+Vercel. Successful Concierge event IDs are recorded under
+`/data/state/concierge-events/` so retries do not send duplicate alerts.
 
 ## Private memory
 

@@ -7,4 +7,5 @@ coverage
 *.log
 .DS_Store
 .captain-memory
+.captain-state
 memory
