@@ -1,8 +1,8 @@
 # Captain
 
 Captain is Opemipo's private core agent. The first milestone is a single-owner
-Telegram bot running continuously on Fly.io, using Vercel AI Gateway and
-keeping private Markdown memory on an encrypted Fly Volume.
+Telegram bot running continuously on Fly.io, using Vercel AI Gateway with
+memory, events, and email stored in the shared Supabase project.
 
 ## 1. Create the Telegram bot
 
@@ -21,15 +21,19 @@ keeping private Markdown memory on an encrypted Fly Volume.
 
 ## 2. Test locally
 
-Fill in the Telegram, owner and Vercel AI Gateway values in `.env`. Captain
-loads this file automatically. Local memory is created under the ignored
-`.captain-memory/` directory.
+Fill in the Telegram, Supabase, Vercel AI Gateway, and Resend values in `.env`.
+Captain loads this file automatically.
 
 ```sh
 pnpm dev
 ```
 
 Only private messages from `TELEGRAM_OWNER_USER_ID` receive a response.
+Captain can send email to the owner through Resend when asked in Telegram.
+
+Apply the Concierge Supabase migrations (including
+`202607021000_concierge_namespace_and_captain_state.sql`) before starting
+Captain locally.
 
 ## 3. Deploy to Fly.io
 
@@ -38,7 +42,6 @@ Install and authenticate `flyctl`, then choose an unused app name if
 
 ```sh
 fly apps create opemipo-captain
-fly volumes create captain_data --region lhr --size 1 --snapshot-retention 14
 fly secrets import < .env
 fly deploy
 fly scale count 1
@@ -56,21 +59,11 @@ The public routes are:
 - `POST /v1/events/concierge` (timestamped HMAC signature required)
 
 Set the same `CAPTAIN_SHARED_SECRET` value in Captain on Fly and Concierge on
-Vercel. Successful Concierge event IDs are recorded under
-`/data/state/concierge-events/` so retries do not send duplicate alerts.
+Vercel. Configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`,
+`CONCIERGE_EMAIL_FROM`, and `OWNER_EMAIL` on Captain. Concierge escalation
+emails use `CONCIERGE_EMAIL_FROM`; Telegram-initiated email uses
+`CAPTAIN_EMAIL_FROM` when set.
 
-## Private memory
-
-On first start, Captain creates `/data/memory/identity.md`,
-`/data/memory/profile.md`, `/data/memory/core.md`, and the `journal/`
-directory. Deployments do not replace existing files. Nothing under this path
-is copied into or committed to Git.
-
-Inspect the private files through Fly SSH:
-
-```sh
-fly ssh console -C "find /data/memory -maxdepth 2 -type f"
-```
-
-Fly snapshots reduce recovery risk but are not a replacement for an independent
-backup.
+Captain stores private memory in `captain_memory_documents` and event delivery
+in `captain_events`. Concierge chat data lives in `concierge_*` tables in the
+same Supabase project.
