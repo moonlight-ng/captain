@@ -32,7 +32,8 @@ Only private messages from `TELEGRAM_OWNER_USER_ID` receive a response.
 Captain can send email to the owner through Resend when asked in Telegram.
 
 Apply the Concierge Supabase migrations (including
-`202607021000_concierge_namespace_and_captain_state.sql`) before starting
+`202607021000_concierge_namespace_and_captain_state.sql` and
+`202607021100_captain_telegram_messages.sql`) before starting
 Captain locally.
 
 ## 3. Deploy to Fly.io
@@ -79,6 +80,7 @@ scheme live in `src/bridge-protocol.ts`, which is kept identical to
 emails use `CONCIERGE_EMAIL_FROM`; Telegram-initiated email uses
 `CAPTAIN_EMAIL_FROM` when set.
 
-Captain stores private memory in `captain_memory_documents` and event delivery
+Captain stores private memory in `captain_memory_documents`, Telegram
+conversation turns in `captain_telegram_messages`, and event delivery
 in `captain_events`. Concierge chat data lives in `concierge_*` tables in the
 same Supabase project.
