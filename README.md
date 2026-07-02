@@ -47,6 +47,17 @@ fly deploy
 fly scale count 1
 ```
 
+Pushes to `main` deploy automatically through GitHub Actions
+(`.github/workflows/fly-deploy.yml`). One-time setup for the repo:
+
+```sh
+fly tokens create deploy -a opemipo-captain
+```
+
+Add the printed token as the `FLY_API_TOKEN` repository secret in GitHub.
+Secrets and env vars already on Fly are reused; CI only builds and deploys
+the image.
+
 Fly stores the imported values as encrypted secrets; it does not upload the
 `.env` file into the image.
 
