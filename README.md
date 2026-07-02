@@ -31,10 +31,14 @@ pnpm dev
 Only private messages from `TELEGRAM_OWNER_USER_ID` receive a response.
 Captain can send email to the owner through Resend when asked in Telegram.
 
-Apply the Concierge Supabase migrations (including
-`202607021000_concierge_namespace_and_captain_state.sql` and
-`202607021100_captain_telegram_messages.sql`) before starting
-Captain locally.
+This repo owns the shared Supabase schema (Concierge `concierge_*` tables and
+Captain `captain_*` tables). Link the project once, then apply migrations before
+starting Captain locally:
+
+```sh
+supabase link
+supabase db push
+```
 
 ## 3. Deploy to Fly.io
 
