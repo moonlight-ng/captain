@@ -22,8 +22,10 @@
     "vitest": "4.1.9"
   },
   "dependencies": {
+    "@solana/web3.js": "^1.98.4",
     "@supabase/supabase-js": "2.108.2",
     "ai": "7.0.4",
+    "bs58": "^6.0.0",
     "resend": "6.16.0",
     "zod": "4.3.6"
   }
