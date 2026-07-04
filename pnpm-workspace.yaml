@@ -1,7 +1,7 @@
 allowBuilds:
-  bufferutil: set this to true or false
+  bufferutil: false
   esbuild: true
-  utf-8-validate: set this to true or false
+  utf-8-validate: false
 minimumReleaseAgeExclude:
   - '@ai-sdk/gateway@4.0.11'
   - '@ai-sdk/provider-utils@5.0.5'
