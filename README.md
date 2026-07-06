@@ -87,7 +87,8 @@ The public routes are:
 
 The browser connects to Captain at `/v1/concierge/*` (see opemipo.com `_data/concierge.yml`).
 Site knowledge is fetched from `SITE_KNOWLEDGE_URL` and `NOTES_CATALOG_URL` (published
-`agents.md` and `notes.json` on opemipo.com).
+`agents.md` and `notes.json` on opemipo.com). Notes search calls
+`NOTES_SEARCH_URL` (`POST /api/notes/search` on opemipo.com) with Captain HMAC signing.
 
 Configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`,
 `CONCIERGE_EMAIL_FROM`, `OWNER_EMAIL`, `CAPTAIN_SHARED_SECRET`, and Concierge env vars

@@ -12,6 +12,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "telegram:identify": "tsx scripts/identify-telegram-user.ts",
+    "notes:search": "tsx scripts/test-notes-search.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
