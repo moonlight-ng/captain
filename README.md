@@ -77,17 +77,22 @@ signed Concierge events over HTTPS, and remains active until the process exits.
 The public routes are:
 
 - `GET /health`
-- `POST /v1/events/concierge` (timestamped HMAC signature required)
+- `POST /v1/concierge/chat` — AI chat (Bearer auth, streaming)
+- `POST /v1/concierge/conversations` — create conversation
+- `GET|POST|DELETE /v1/concierge/escalate` — owner handoff
+- `POST /v1/concierge/owner-join` — redeem join token
+- `POST /v1/concierge/conversation-mode` — hand back to Concierge
+- `POST /v1/concierge/transcribe` — voice input
+- `POST /v1/events/concierge` — legacy inbound escalation events (HMAC; kept for rollback)
 
-Set the same `CAPTAIN_SHARED_SECRET` value in Captain on Fly and Concierge on
-Vercel. Captain calls Concierge capabilities (such as `website.search`) through
-the signed bridge endpoint at `POST /api/captain-bridge` (override with
-`CONCIERGE_BRIDGE_URL` if needed). The request/response envelope and signature
-scheme live in `src/bridge-protocol.ts`, which is kept identical to
-`server/concierge/bridge-protocol.ts` in the opemipo.com repo. Configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`,
-`CONCIERGE_EMAIL_FROM`, and `OWNER_EMAIL` on Captain. Concierge escalation
-emails use `CONCIERGE_EMAIL_FROM`; Telegram-initiated email uses
-`CAPTAIN_EMAIL_FROM` when set.
+The browser connects to Captain at `/v1/concierge/*` (see opemipo.com `_data/concierge.yml`).
+Site knowledge is fetched from `SITE_KNOWLEDGE_URL` and `NOTES_CATALOG_URL` (published
+`agents.md` and `notes.json` on opemipo.com).
+
+Configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`,
+`CONCIERGE_EMAIL_FROM`, `OWNER_EMAIL`, `CAPTAIN_SHARED_SECRET`, and Concierge env vars
+in `.env.example` on Captain. Concierge escalation emails use `CONCIERGE_EMAIL_FROM`;
+Telegram-initiated email uses `CAPTAIN_EMAIL_FROM` when set.
 
 Captain stores private memory in `captain_memory_documents`, Telegram
 conversation turns in `captain_telegram_messages`, and event delivery
