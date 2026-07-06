@@ -40,6 +40,11 @@ supabase link
 supabase db push
 ```
 
+If an older notes-search schema was already applied, run
+`supabase/reset_concierge_clean.sql` in the Supabase SQL editor instead. It
+deletes existing Concierge data and recreates the schema without notes or
+vector-search tables.
+
 ## 3. Deploy to Fly.io
 
 Install and authenticate `flyctl`, then choose an unused app name if
