@@ -11,5 +11,5 @@ coverage
 .DS_Store
 .captain-memory
 .captain-state
+.captain-pi/
 memory
-
