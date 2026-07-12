@@ -103,6 +103,6 @@ same Supabase project.
 ## 4. Keep a cold mirror on a Raspberry Pi
 
 The optional [Pi sync package](deploy/pi-sync/README.md) keeps an hourly copy of
-the repository and compressed Supabase database snapshots under
-`/srv/captain/{code,data/supabase}`. It does not install or run Captain on the
-Pi. Its persistent systemd timer runs after boot and hourly while the Pi is on.
+the repository, a local Supabase mirror, and Data API snapshots under
+`/srv/captain/{code,data/supabase}`. It does not run Captain on the Pi. Its
+persistent systemd timer runs after boot and hourly while the Pi is on.
