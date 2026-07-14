@@ -100,6 +100,32 @@ conversation turns in `captain_telegram_messages`, and event delivery
 in `captain_events`. Concierge chat data lives in `concierge_*` tables in the
 same Supabase project.
 
+### Flight providers and comparison runs
+
+Captain can search through LetsFG, Duffel, or both. Set the relevant credentials
+in `.env` and choose the production default with `FLIGHT_SEARCH_PROVIDER`.
+Searches and watches can also select a provider explicitly; a watch remains pinned
+to the provider it started with.
+
+For a one-shot Duffel-versus-LetsFG comparison, use the standalone runner with a
+JSON config of one or more flights (and optional multi-leg trips). Schedule
+repeated runs externally if you want a longitudinal series:
+
+```sh
+pnpm flights:compare -- --config scripts/flight-comparison.config.example.json
+```
+
+Each flight can be a single origin/destination query or a `legs[]` array that is
+expanded into separate per-leg searches. Shared defaults apply to every flight/leg
+unless overridden. Ad-hoc single-route CLI flags (`--origin`, `--destination`,
+`--departure-date`, …) still work when `--config` is omitted.
+
+The runner compares both providers concurrently per job, runs jobs sequentially,
+and writes paired JSON/Markdown under `results/` after each job. By default it
+refuses Duffel test tokens because Duffel Airways does not provide realistic
+schedules or prices; `--allow-test-mode` is available only for integration checks.
+Price gaps are calculated only when both providers return the same currency.
+
 ## 4. Keep a cold mirror on a Raspberry Pi
 
 The optional [Pi sync package](deploy/pi-sync/README.md) keeps an hourly copy of
