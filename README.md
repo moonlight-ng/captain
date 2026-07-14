@@ -1,8 +1,10 @@
 # Captain
 
-Captain is Opemipo's private core agent. The first milestone is a single-owner
-Telegram bot running continuously on Fly.io, using Vercel AI Gateway with
-memory, events, and email stored in the shared Supabase project.
+Captain is Opemipo's private core agent. Production is one Eve application on
+Fly.io: Eve owns durable sessions, Telegram webhooks, Concierge HTTP ingress,
+approvals, schedules, tools, and subagents. Supabase stores Workflow and
+operational state. Private memory is Markdown on an encrypted Fly volume and is
+cold-mirrored to a Raspberry Pi.
 
 ## 1. Create the Telegram bot
 
@@ -19,17 +21,20 @@ memory, events, and email stored in the shared Supabase project.
 4. Send `/start` to the new bot. The script prints
    `TELEGRAM_OWNER_USER_ID=...`; add that value to `.env`.
 
-## 2. Test locally
+## 2. Run locally
 
 Fill in the Telegram, Supabase, Vercel AI Gateway, and Resend values in `.env`.
-Captain loads this file automatically.
+Captain's scripts load this file automatically. Eve itself reads environment
+variables, so export the file before starting a local Eve process:
 
 ```sh
+set -a; . ./.env; set +a
 pnpm dev
 ```
 
-Only private messages from `TELEGRAM_OWNER_USER_ID` receive a response.
-Captain can send email to the owner through Resend when asked in Telegram.
+Local Markdown defaults to `.captain-memory/`. Only private messages from
+`TELEGRAM_OWNER_USER_ID` are accepted. Owner-requested email and trading
+enablement changes use Eve's approval flow.
 
 This repo owns the shared Supabase schema (Concierge `concierge_*` tables and
 Captain `captain_*` tables). Link the project once, then apply migrations before
@@ -45,17 +50,27 @@ If an older notes-search schema was already applied, run
 deletes existing Concierge data and recreates the schema without notes or
 vector-search tables.
 
-## 3. Deploy to Fly.io
+## 3. Deploy Eve to Fly.io
 
 Install and authenticate `flyctl`, then choose an unused app name if
 `opemipo-captain` is unavailable and update `fly.toml`.
 
 ```sh
 fly apps create opemipo-captain
+fly volumes create captain_data --region lhr --size 1
 fly secrets import < .env
 fly deploy
 fly scale count 1
 ```
+
+Set `WORKFLOW_POSTGRES_URL` to a direct Supabase Postgres connection owned by a
+dedicated `captain_eve` login. Run `supabase/workflow-postgres-setup.sql` after
+creating that role. The Fly release command runs the pinned, idempotent Postgres
+World bootstrap before each deployment. Supabase direct URLs should use
+`uselibpqcompat=true&sslmode=require`.
+After the first successful bootstrap, run
+`supabase/workflow-postgres-harden.sql` to revoke temporary `public` schema
+creation privileges from the Workflow role.
 
 Pushes to `main` deploy automatically through GitHub Actions
 (`.github/workflows/fly-deploy.yml`). One-time setup for the repo:
@@ -71,8 +86,24 @@ the image.
 Fly stores the imported values as encrypted secrets; it does not upload the
 `.env` file into the image.
 
-This is a single always-on service. The Machine long-polls Telegram, receives
-signed Concierge events over HTTPS, and remains active until the process exits.
+Before the first filesystem cutover, export Supabase memory onto the mounted
+volume without logging its contents:
+
+```sh
+fly ssh console -C 'node --experimental-strip-types scripts/export-memory.ts --root /data/captain --dry-run'
+fly ssh console -C 'node --experimental-strip-types scripts/export-memory.ts --root /data/captain --overwrite'
+```
+
+After health and Concierge checks pass, register the webhook from a trusted
+machine with the production environment loaded:
+
+```sh
+pnpm telegram:webhook
+```
+
+Rollback starts by removing the webhook with
+`pnpm telegram:webhook -- --delete`, restoring the previous Fly image, and
+setting `CAPTAIN_LEGACY_MODE=active`.
 
 The public routes are:
 
@@ -84,6 +115,9 @@ The public routes are:
 - `POST /v1/concierge/conversation-mode` — hand back to Concierge
 - `POST /v1/concierge/transcribe` — voice input
 - `POST /v1/events/concierge` — legacy inbound escalation events (HMAC; kept for rollback)
+- `POST /eve/v1/telegram` — Telegram webhook (secret + owner/private-chat checks)
+- `/eve/*` — shared-secret protected Eve session and inspection routes
+- `/.well-known/workflow/*` — Workflow callbacks and hooks
 
 The browser connects to Captain at `/v1/concierge/*` (see opemipo.com `_data/concierge.yml`).
 Site knowledge is fetched from `SITE_KNOWLEDGE_URL` and `NOTES_CATALOG_URL` (published
@@ -95,10 +129,10 @@ Configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`,
 in `.env.example` on Captain. Concierge escalation emails use `CONCIERGE_EMAIL_FROM`;
 Telegram-initiated email uses `CAPTAIN_EMAIL_FROM` when set.
 
-Captain stores private memory in `captain_memory_documents`, Telegram
-conversation turns in `captain_telegram_messages`, and event delivery
-in `captain_events`. Concierge chat data lives in `concierge_*` tables in the
-same Supabase project.
+Captain stores memory under `/data/captain/memory/*.md` and journals under
+`/data/captain/journals/YYYY/YYYY-MM-DD.md`. `captain_memory_documents` remains
+the rollback source during migration. Telegram mirrors, scheduled jobs, job
+runs, flights, trades, event delivery, and Concierge data remain in Supabase.
 
 ### Flight providers and comparison runs
 
@@ -129,6 +163,5 @@ Price gaps are calculated only when both providers return the same currency.
 ## 4. Keep a cold mirror on a Raspberry Pi
 
 The optional [Pi sync package](deploy/pi-sync/README.md) keeps an hourly copy of
-the repository, a local Supabase mirror, and Data API snapshots under
-`/srv/captain/{code,data/supabase}`. It does not run Captain on the Pi. Its
-persistent systemd timer runs after boot and hourly while the Pi is on.
+the repository, a local Supabase mirror, API snapshots, and an atomic one-way
+copy of the Fly memory volume. It does not run Captain or write to production.

@@ -8,9 +8,17 @@
   },
   "packageManager": "pnpm@11.6.0",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "build": "eve build",
+    "build:legacy": "tsc -p tsconfig.build.json",
+    "dev": "eve dev --no-ui",
+    "dev:legacy": "tsx watch src/index.ts",
+    "eval": "eve eval",
+    "eve:info": "eve info",
+    "start": "eve start --host 0.0.0.0 --port 8080",
+    "start:legacy": "node dist/index.js",
+    "workflow:bootstrap": "bootstrap",
+    "memory:export": "node --env-file-if-exists=.env --experimental-strip-types scripts/export-memory.ts",
+    "telegram:webhook": "node --env-file-if-exists=.env --experimental-strip-types scripts/configure-telegram-webhook.ts",
     "telegram:identify": "tsx scripts/identify-telegram-user.ts",
     "notes:search": "tsx scripts/test-notes-search.ts",
     "notes:plan": "tsx scripts/test-search-query-planner.ts",
@@ -26,10 +34,12 @@
     "vitest": "4.1.9"
   },
   "dependencies": {
+    "@workflow/world-postgres": "5.0.0-beta.24",
     "@solana/web3.js": "^1.98.4",
     "@supabase/supabase-js": "2.108.2",
     "ai": "7.0.4",
     "bs58": "^6.0.0",
+    "eve": "0.23.0",
     "resend": "6.16.0",
     "zod": "4.3.6"
   }

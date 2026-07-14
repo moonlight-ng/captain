@@ -2,10 +2,15 @@
 .env
 .env.*
 node_modules
+.pnpm-store
 dist
 coverage
 tests
+results
 *.log
 .captain-memory
 .captain-state
+.eve
+.output
 memory
+journals

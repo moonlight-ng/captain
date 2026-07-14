@@ -7,9 +7,13 @@ dist
 .env.*
 !.env.example
 coverage
+.eve/
+.output/
 *.log
 .DS_Store
-.captain-memory
+.captain-memory/
 .captain-state
 .captain-pi/
-memory
+memory/
+journals/
+results/
