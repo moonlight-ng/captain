@@ -10,11 +10,10 @@ cold-mirrored to a Raspberry Pi.
 
 - `agent/` — Eve agents, channels, schedules, instructions, and tool adapters.
 - `services/app/` — environment loading and the application service container.
-- `services/plugins/` — deterministic implementations behind Eve tools.
-- `services/concierge/`, `services/flights/`, and `services/trading/` — product domains.
+- `services/concierge/`, `services/flights/`, and `services/trading/` — product domains and actions.
 - `services/memory/`, `services/scheduling/`, and `services/storage/` — shared infrastructure.
 - `services/biodata/`, `services/curiosity/`, `services/review/`, and `services/skills/` — background work.
-- `services/telegram/` and `services/solana/` — external platform integrations.
+- `services/email/`, `services/telegram/`, and `services/solana/` — external platform integrations.
 - `deploy/` — Raspberry Pi mirror package.
 - `evals/`, `tests/`, and `scripts/` — evaluation, verification, and operations.
 - `supabase/` — domain migrations and Workflow role bootstrap SQL.
