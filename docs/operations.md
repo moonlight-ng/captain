@@ -21,9 +21,16 @@
 4. Deploy with `fly deploy` or push to `main` to use GitHub Actions.
 5. Check `/health`, the Fly machine health checks, and Workflow queue activity.
 
+`/health` is process liveness. Fly checks `/ready`, which also validates service
+initialization, the Markdown volume, and Supabase access.
+
 The Fly release command runs the pinned Postgres World bootstrap before each
 deployment. Keep `WORKFLOW_POSTGRES_URL` on a direct encrypted Supabase
 connection owned by the dedicated Workflow role.
+
+The Telegram inbox migration must be present before the new image becomes
+ready. It durably serializes messages for the private Telegram continuation and
+recovers expired dispatch claims after a restart.
 
 ## Telegram webhook
 

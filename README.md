@@ -83,7 +83,7 @@ World bootstrap before each deployment. Supabase direct URLs should use
 `uselibpqcompat=true&sslmode=require`.
 After the first successful bootstrap, run
 `supabase/workflow-postgres-harden.sql` to revoke temporary `public` schema
-creation privileges from the Workflow role.
+and database creation privileges from the Workflow role.
 
 Pushes to `main` deploy automatically through GitHub Actions
 (`.github/workflows/fly-deploy.yml`). One-time setup for the repo:
@@ -120,7 +120,7 @@ The public routes are:
 - `POST /v1/concierge/transcribe` — voice input
 - `POST /v1/events/concierge` — signed inbound escalation events
 - `POST /eve/v1/telegram` — Telegram webhook (secret + owner/private-chat checks)
-- `/eve/*` — shared-secret protected Eve session and inspection routes
+- `/eve/*` — dedicated Basic-credential protected Eve session and inspection routes
 - `/.well-known/workflow/*` — Workflow callbacks and hooks
 
 The browser connects to Captain at `/v1/concierge/*` (see opemipo.com `_data/concierge.yml`).
@@ -129,9 +129,13 @@ Site knowledge is fetched from `SITE_KNOWLEDGE_URL` and `NOTES_CATALOG_URL` (pub
 `NOTES_SEARCH_URL` (`POST /api/notes/search` on opemipo.com) with Captain HMAC signing.
 
 Configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`,
-`CONCIERGE_EMAIL_FROM`, `OWNER_EMAIL`, `CAPTAIN_SHARED_SECRET`, and Concierge env vars
+`CONCIERGE_EMAIL_FROM`, `OWNER_EMAIL`, the three scoped Captain secrets, and Concierge env vars
 in `.env.example` on Captain. Concierge escalation emails use `CONCIERGE_EMAIL_FROM`;
 Telegram-initiated email uses `CAPTAIN_EMAIL_FROM` when set.
+
+Use independent values for `CAPTAIN_EVE_BASIC_PASSWORD`,
+`CAPTAIN_CONCIERGE_EVENT_SECRET`, and `CAPTAIN_NOTES_SEARCH_SECRET`. Rotating one
+integration must not grant or invalidate credentials for the others.
 
 Captain stores memory under `/data/captain/memory/*.md` and journals under
 `/data/captain/journals/YYYY/YYYY-MM-DD.md`. Telegram mirrors, scheduled jobs,
