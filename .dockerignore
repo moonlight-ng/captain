@@ -1,6 +1,9 @@
 .git
 .env
 .env.*
+.agents
+.captain-pi
+.cursor
 node_modules
 .pnpm-store
 dist

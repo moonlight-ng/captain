@@ -6,6 +6,16 @@ approvals, schedules, tools, and subagents. Supabase stores Workflow and
 operational state. Private memory is Markdown on an encrypted Fly volume and is
 cold-mirrored to a Raspberry Pi.
 
+## Repository layout
+
+- `agent/` — Eve agents, channels, schedules, instructions, and tool adapters.
+- `src/concierge/` — Concierge routes, handoff, site knowledge, and responder.
+- `src/flights/`, `src/trading/`, and `src/solana/` — deterministic domains.
+- `src/*.ts` — shared memory, scheduling, Supabase, and delivery services.
+- `deploy/` — Raspberry Pi mirror package.
+- `evals/`, `tests/`, and `scripts/` — evaluation, verification, and operations.
+- `supabase/` — domain migrations and Workflow role bootstrap SQL.
+
 ## 1. Create the Telegram bot
 
 1. Open `@BotFather` in Telegram.
@@ -86,14 +96,6 @@ the image.
 Fly stores the imported values as encrypted secrets; it does not upload the
 `.env` file into the image.
 
-Before the first filesystem cutover, export Supabase memory onto the mounted
-volume without logging its contents:
-
-```sh
-fly ssh console -C 'node --experimental-strip-types scripts/export-memory.ts --root /data/captain --dry-run'
-fly ssh console -C 'node --experimental-strip-types scripts/export-memory.ts --root /data/captain --overwrite'
-```
-
 After health and Concierge checks pass, register the webhook from a trusted
 machine with the production environment loaded:
 
@@ -101,9 +103,8 @@ machine with the production environment loaded:
 pnpm telegram:webhook
 ```
 
-Rollback starts by removing the webhook with
-`pnpm telegram:webhook -- --delete`, restoring the previous Fly image, and
-setting `CAPTAIN_LEGACY_MODE=active`.
+Operational deployment, recovery, and backup procedures live in
+[`docs/operations.md`](docs/operations.md).
 
 The public routes are:
 
@@ -114,7 +115,7 @@ The public routes are:
 - `POST /v1/concierge/owner-join` — redeem join token
 - `POST /v1/concierge/conversation-mode` — hand back to Concierge
 - `POST /v1/concierge/transcribe` — voice input
-- `POST /v1/events/concierge` — legacy inbound escalation events (HMAC; kept for rollback)
+- `POST /v1/events/concierge` — signed inbound escalation events
 - `POST /eve/v1/telegram` — Telegram webhook (secret + owner/private-chat checks)
 - `/eve/*` — shared-secret protected Eve session and inspection routes
 - `/.well-known/workflow/*` — Workflow callbacks and hooks
@@ -130,9 +131,9 @@ in `.env.example` on Captain. Concierge escalation emails use `CONCIERGE_EMAIL_F
 Telegram-initiated email uses `CAPTAIN_EMAIL_FROM` when set.
 
 Captain stores memory under `/data/captain/memory/*.md` and journals under
-`/data/captain/journals/YYYY/YYYY-MM-DD.md`. `captain_memory_documents` remains
-the rollback source during migration. Telegram mirrors, scheduled jobs, job
-runs, flights, trades, event delivery, and Concierge data remain in Supabase.
+`/data/captain/journals/YYYY/YYYY-MM-DD.md`. Telegram mirrors, scheduled jobs,
+job runs, flights, trades, event delivery, Workflow state, and Concierge data
+remain in Supabase.
 
 ### Flight providers and comparison runs
 

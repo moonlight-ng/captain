@@ -1,6 +1,7 @@
 node_modules
 dist
 .agents/
+.cursor/
 .pnpm-store
 .pnpm-debug.log
 .env
