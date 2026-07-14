@@ -9,9 +9,12 @@ cold-mirrored to a Raspberry Pi.
 ## Repository layout
 
 - `agent/` — Eve agents, channels, schedules, instructions, and tool adapters.
-- `src/concierge/` — Concierge routes, handoff, site knowledge, and responder.
-- `src/flights/`, `src/trading/`, and `src/solana/` — deterministic domains.
-- `src/*.ts` — shared memory, scheduling, Supabase, and delivery services.
+- `services/app/` — environment loading and the application service container.
+- `services/plugins/` — deterministic implementations behind Eve tools.
+- `services/concierge/`, `services/flights/`, and `services/trading/` — product domains.
+- `services/memory/`, `services/scheduling/`, and `services/storage/` — shared infrastructure.
+- `services/biodata/`, `services/curiosity/`, `services/review/`, and `services/skills/` — background work.
+- `services/telegram/` and `services/solana/` — external platform integrations.
 - `deploy/` — Raspberry Pi mirror package.
 - `evals/`, `tests/`, and `scripts/` — evaluation, verification, and operations.
 - `supabase/` — domain migrations and Workflow role bootstrap SQL.
@@ -42,7 +45,7 @@ set -a; . ./.env; set +a
 pnpm dev
 ```
 
-Local Markdown defaults to `.captain-memory/`. Only private messages from
+Local Markdown defaults to `.memory/`. Only private messages from
 `TELEGRAM_OWNER_USER_ID` are accepted. Owner-requested email and trading
 enablement changes use Eve's approval flow.
 

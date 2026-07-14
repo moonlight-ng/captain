@@ -2,7 +2,7 @@
 .env
 .env.*
 .agents
-.captain-pi
+.pi
 .cursor
 node_modules
 .pnpm-store
@@ -11,9 +11,9 @@ coverage
 tests
 results
 *.log
-.captain-memory
+.memory
 .captain-state
 .eve
 .output
-memory
-journals
+/memory
+/journals

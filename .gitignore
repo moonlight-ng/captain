@@ -12,9 +12,9 @@ coverage
 .output/
 *.log
 .DS_Store
-.captain-memory/
+.memory/
 .captain-state
-.captain-pi/
-memory/
-journals/
+.pi/
+/memory/
+/journals/
 results/
