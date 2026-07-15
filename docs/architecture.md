@@ -17,6 +17,8 @@ flowchart LR
   Eve --> Services[Deterministic TypeScript services]
   Eve --> Workflow[Supabase Workflow state]
   Services --> Domain[Supabase domain data]
+  Services --> Codex[Isolated general and flight Codex queue]
+  Codex --> Web[Optional public web search]
   Services --> Memory[Fly Markdown volume]
   Memory -. one-way cold mirror .-> Pi[Raspberry Pi]
 ```
@@ -60,13 +62,28 @@ Workflow own durable turn delivery.
 3. A deterministic handler or named task subagent produces the result.
 4. Deterministic services validate side effects and record the run.
 
+Interactive flight discovery is deliberately two-phase. The normal Telegram
+turn returns Duffel inventory immediately and enqueues a typed `flight` request.
+The scheduled Codex worker later sends a separate, sourced web-discovery
+message. The owner-only `ask_codex` tool queues a typed `general` request through
+the same worker, with web search enabled only when the request needs it. This is
+an explicit second-opinion path today and can become a controlled fallback for
+other request classes later.
+
+Codex never receives traveller identities or Captain credentials and does not
+book flights or perform other side effects.
+
+Codex CLI authentication persists at `/data/codex`, outside the
+`/data/captain` memory subtree mirrored to the Pi. Each research run gets a new
+temporary working directory while reusing only that CLI authentication home.
+
 ## Responsibility boundaries
 
 | Layer | Owns | Does not own |
 | --- | --- | --- |
 | Eve | Sessions, turns, channels, approvals, schedules, tool invocation, named subagents | Provider-specific business rules or direct unrestricted machine access |
 | `agent/` | Eve declarations, principal-aware instructions, channels, schedules, and thin tool adapters | Core domain implementations |
-| `services/` | Memory operations, provider calls, validation, risk controls, persistence, and outbound delivery | Session orchestration |
+| `services/` | Memory operations, provider calls, validation, risk controls, durable flight-research queueing, persistence, and outbound delivery | Session orchestration |
 | Supabase | Workflow persistence and operational/domain records | Personal Markdown memory |
 | Fly volume | Authoritative personal memory and journals | Workflow or domain tables |
 | Raspberry Pi | Read-only recovery copies | Live reads, live writes, or agent execution |
@@ -112,8 +129,15 @@ Supabase stores:
 - The Pi remains outside the live request path.
 - Supabase remains the durable operational database.
 - Unsafe shell, filesystem, browser, computer, and unrestricted web tools stay
-  disabled.
-- A future Codex worker is not part of this architecture.
+  disabled on the root agent.
+- Codex runs read-only in an empty temporary directory with shell, apps,
+  subagents, hooks, goals, and memory disabled. It receives a bounded general
+  prompt or a sanitized flight request; web search is optional for general
+  requests and required for flight research.
+- Its ChatGPT-managed CLI credential is file-backed on the Fly volume and is
+  not included in the Pi memory mirror.
+- Web-discovered fares remain advisory; Duffel is the only bookable inventory
+  source.
 
 These constraints prevent the framework redesign from turning into a
 distributed multi-worker system. See [`runbook.md`](runbook.md) for operating

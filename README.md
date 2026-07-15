@@ -146,31 +146,34 @@ Captain stores memory under `/data/captain/memory/*.md` and journals under
 job runs, flights, trades, event delivery, Workflow state, and Concierge data
 remain in Supabase.
 
-### Flight providers and comparison runs
+### Flight discovery
 
-Captain can search through LetsFG, Duffel, or both. Set the relevant credentials
-in `.env` and choose the production default with `FLIGHT_SEARCH_PROVIDER`.
-Searches and watches can also select a provider explicitly; a watch remains pinned
-to the provider it started with.
+Captain uses Duffel for the immediate, bookable response. Configure a live-mode
+`DUFFEL_ACCESS_TOKEN`; interactive searches and fare watches remain pinned to
+Duffel.
 
-For a one-shot Duffel-versus-LetsFG comparison, use the standalone runner with a
-JSON config of one or more flights (and optional multi-leg trips). Schedule
-repeated runs externally if you want a longitudinal series:
+When Codex is enabled, each interactive search also queues a typed `flight`
+request with live web search. The normal Telegram turn returns the Duffel result
+without waiting. The scheduled `codex` worker later sends a separate comparison
+message containing only exact-date, sourced web fares. Those findings are
+explicitly discovery-only and are never presented as Duffel-bookable inventory.
 
-```sh
-pnpm flights:compare -- --config scripts/flight-comparison.config.example.json
-```
+The same durable service accepts typed `general` requests through the owner-only
+`ask_codex` tool. This provides an explicit second-opinion and research path now,
+and a reusable fallback boundary for other requests later. General web search is
+opt-in per request; results always arrive as a separate Telegram message.
 
-Each flight can be a single origin/destination query or a `legs[]` array that is
-expanded into separate per-leg searches. Shared defaults apply to every flight/leg
-unless overridden. Ad-hoc single-route CLI flags (`--origin`, `--destination`,
-`--departure-date`, …) still work when `--config` is omitted.
-
-The runner compares both providers concurrently per job, runs jobs sequentially,
-and writes paired JSON/Markdown under `results/` after each job. By default it
-refuses Duffel test tokens because Duffel Airways does not provide realistic
-schedules or prices; `--allow-test-mode` is available only for integration checks.
-Price gaps are calculated only when both providers return the same currency.
+The Codex worker runs read-only in an empty temporary directory with shell,
+apps, subagents, hooks, goals, and memory disabled. It receives no Captain
+service secrets or traveller identities, cannot execute bookings or other side
+effects, and is retried through the Supabase-backed `captain_codex_jobs` queue.
+The CLI reuses ChatGPT-managed authentication from `CAPTAIN_CODEX_HOME`; no
+Codex API key is required.
+Production keeps the reusable login at `/data/codex`, outside the
+`/data/captain` tree mirrored to the Pi. The feature defaults off so a deploy
+cannot queue work before the one-time CLI login is complete. See the
+[runbook](docs/runbook.md#codex-cli-authentication), then set
+`CAPTAIN_CODEX_ENABLED=true`.
 
 ## 4. Keep a cold mirror on a Raspberry Pi
 
