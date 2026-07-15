@@ -152,31 +152,26 @@ Captain uses Duffel for the immediate, bookable response. Configure a live-mode
 `DUFFEL_ACCESS_TOKEN`; interactive searches and fare watches remain pinned to
 Duffel.
 
-When Codex is enabled, each interactive search also queues a typed `flight`
-request with live web search. The normal Telegram turn returns the Duffel result
-without waiting. The scheduled `codex` worker later sends a separate comparison
-message containing only exact-date, sourced web fares. Those findings are
-explicitly discovery-only and are never presented as Duffel-bookable inventory.
+Codex is exposed to Eve as the owner-only `research_web` provider. Eve supplies
+a closed JSON request containing a topic, objective, explicit questions,
+freshness, preferred domains, and result limit. Codex uses live web search and
+returns validated provider-style JSON containing ranked findings, direct source
+URLs, evidence strength, gaps, and search metadata. Eve receives that object in
+the active turn and decides how to present it, just as it does with Duffel data.
+There is no free-form `ask_codex` tool, `/codex` shortcut, autonomous queue, or
+direct Codex-to-Telegram delivery.
 
-The same durable service accepts typed `general` requests through the owner-only
-`ask_codex` tool. This provides an explicit second-opinion and research path now,
-and a reusable fallback boundary for other requests later. General web search is
-opt-in per request; results always arrive as a separate Telegram message.
-Telegram messages beginning with `Ask Codex ...` or `/codex ...` are routed
-directly to the durable queue with web search, without relying on model tool
-selection.
-
-The Codex worker runs read-only in an empty temporary directory with shell,
+The Codex provider runs read-only in an empty temporary directory with shell,
 apps, subagents, hooks, goals, and memory disabled. It receives no Captain
-service secrets or traveller identities, cannot execute bookings or other side
-effects, and is retried through the Supabase-backed `captain_codex_jobs` queue.
+service secrets or traveller identities and cannot execute bookings or other
+side effects.
 The CLI reuses ChatGPT-managed authentication from `CAPTAIN_CODEX_HOME`; no
 Codex API key is required. The runtime image supplies the system CA bundle to
 the otherwise isolated CLI environment so ChatGPT HTTPS and WebSocket
 connections can be verified without forwarding Captain's service environment.
 Production keeps the reusable login at `/data/codex`, outside the
-`/data/captain` tree mirrored to the Pi. The feature defaults off so a deploy
-cannot queue work before the one-time CLI login is complete. See the
+`/data/captain` tree mirrored to the Pi. The feature defaults off so the tool is
+unavailable before the one-time CLI login is complete. See the
 [runbook](docs/runbook.md#codex-cli-authentication), then set
 `CAPTAIN_CODEX_ENABLED=true`.
 
