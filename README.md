@@ -165,6 +165,8 @@ stable app link under Captain's own `CAPTAIN_EVE_PUBLIC_URL`, at
 does not authorize access. The internal browser and its API calls use the same
 `CAPTAIN_EVE_BASIC_PASSWORD` owner credential as Captain's Eve interface.
 Programmatic API clients may instead use a valid Supabase bearer session.
+When `CAPTAIN_APP_LINKS_PUBLIC=true`, individual opaque app links and their
+card actions are passwordless; the `/apps` index remains owner-only.
 Configure the immutable Supabase user ID in
 `CAPTAIN_APP_OWNER_USER_ID`; until configured, access falls back to a
 session whose email matches `OWNER_EMAIL`.

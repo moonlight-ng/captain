@@ -20,6 +20,10 @@ required. API clients can also authenticate with Supabase. Captain accepts only
 yet, it temporarily falls back to the authenticated user whose email matches
 `OWNER_EMAIL`.
 
+`CAPTAIN_APP_LINKS_PUBLIC=true` makes an individual opaque app URL and its
+discrete actions passwordless. It does not expose the `/apps` goal index. Keep
+the flag false when link possession should not grant access.
+
 `GET /apps` is the goal index. It links to one stable detail route per
 goal, so links are organized by outcome rather than by conversation, search,
 or individual flight result.
