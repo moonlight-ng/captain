@@ -14,12 +14,57 @@ This document covers deployment, health checks, backup, and recovery. See
 5. Check `/health`, `/ready`, the Fly machine checks, and Workflow queue
    activity.
 
+For Codex follow-ups, leave `CAPTAIN_CODEX_ENABLED=false` on the first
+deployment, complete the one-time CLI login below, then enable the worker and
+deploy again. Confirm
+the `codex` scheduled job plus `captain_codex_jobs` queue afterwards. Duffel
+searches continue to work while Codex is disabled.
+
 `/health` reports process liveness. Fly checks `/ready`, which also validates
 service initialization, the Markdown volume, and Supabase access.
 
 The Fly release command runs the pinned Postgres World bootstrap before each
 deployment. Keep `WORKFLOW_POSTGRES_URL` on a direct encrypted Supabase
 connection owned by the dedicated Workflow role.
+
+### Codex CLI authentication
+
+The production worker uses ChatGPT-managed Codex CLI authentication stored on
+the Fly volume. Deploy the image once with the worker disabled, then open an
+interactive console:
+
+```sh
+fly ssh console
+export CODEX_HOME=/data/codex
+mkdir -p "$CODEX_HOME"
+chmod 700 "$CODEX_HOME"
+/app/node_modules/.bin/codex -c 'cli_auth_credentials_store="file"' login --device-auth
+/app/node_modules/.bin/codex -c 'cli_auth_credentials_store="file"' login status
+```
+
+Follow the displayed URL and code in a browser where the intended ChatGPT
+account is already signed in. A successful login creates
+`/data/codex/auth.json`. Treat that file like a password: do not commit it,
+place it under `/data/captain`, or copy it to the Pi mirror.
+
+If device authorization is blocked from Fly's egress, seed `auth.json` from an
+already authenticated, trusted workstation using `fly ssh sftp shell`, then
+set its remote mode to `0600`. Never print the file or pass it through command
+arguments. Confirm the result with the absolute-path `login status` command
+above.
+
+After login succeeds, change `CAPTAIN_CODEX_ENABLED` to `true` in `fly.toml`,
+deploy again, and run a Telegram flight search or explicitly ask Captain for a
+Codex second opinion. Duffel should answer in the original flight turn; Codex
+should arrive later as a second message. Re-run `login status` over SSH when
+diagnosing authentication, and repeat `login --device-auth` if the session has
+been revoked.
+
+For local development, the worker defaults to `CODEX_HOME` when set and then
+to `~/.codex`, and reuses a file-backed login there. Check it with the same
+`login status` command above; if needed, repeat `login --device-auth` locally
+with the `cli_auth_credentials_store="file"` override. The production path
+remains explicitly pinned by `CAPTAIN_CODEX_HOME=/data/codex`.
 
 ## Telegram webhook
 

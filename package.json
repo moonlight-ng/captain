@@ -18,7 +18,6 @@
     "telegram:identify": "tsx scripts/identify-telegram-user.ts",
     "notes:search": "tsx scripts/test-notes-search.ts",
     "notes:plan": "tsx scripts/test-search-query-planner.ts",
-    "flights:compare": "tsx scripts/compare-flight-providers.ts",
     "trading:verify": "tsx scripts/verify-trading.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
@@ -30,9 +29,11 @@
     "vitest": "4.1.9"
   },
   "dependencies": {
-    "@workflow/world-postgres": "5.0.0-beta.24",
+    "@openai/codex": "0.144.3",
+    "@openai/codex-sdk": "0.144.3",
     "@solana/web3.js": "^1.98.4",
     "@supabase/supabase-js": "2.108.2",
+    "@workflow/world-postgres": "5.0.0-beta.24",
     "ai": "7.0.4",
     "bs58": "^6.0.0",
     "eve": "0.23.0",
