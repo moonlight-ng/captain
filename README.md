@@ -162,13 +162,18 @@ The same durable service accepts typed `general` requests through the owner-only
 `ask_codex` tool. This provides an explicit second-opinion and research path now,
 and a reusable fallback boundary for other requests later. General web search is
 opt-in per request; results always arrive as a separate Telegram message.
+Telegram messages beginning with `Ask Codex ...` or `/codex ...` are routed
+directly to the durable queue with web search, without relying on model tool
+selection.
 
 The Codex worker runs read-only in an empty temporary directory with shell,
 apps, subagents, hooks, goals, and memory disabled. It receives no Captain
 service secrets or traveller identities, cannot execute bookings or other side
 effects, and is retried through the Supabase-backed `captain_codex_jobs` queue.
 The CLI reuses ChatGPT-managed authentication from `CAPTAIN_CODEX_HOME`; no
-Codex API key is required.
+Codex API key is required. The runtime image supplies the system CA bundle to
+the otherwise isolated CLI environment so ChatGPT HTTPS and WebSocket
+connections can be verified without forwarding Captain's service environment.
 Production keeps the reusable login at `/data/codex`, outside the
 `/data/captain` tree mirrored to the Pi. The feature defaults off so a deploy
 cannot queue work before the one-time CLI login is complete. See the
