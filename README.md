@@ -15,8 +15,13 @@ cold-mirrored to a Raspberry Pi.
 - `services/biodata/`, `services/curiosity/`, `services/review/`, and `services/skills/` — background work.
 - `services/email/`, `services/telegram/`, and `services/solana/` — external platform integrations.
 - `deploy/` — Raspberry Pi mirror package.
+- `docs/` — architecture explanation and production runbook.
 - `evals/`, `tests/`, and `scripts/` — evaluation, verification, and operations.
 - `supabase/` — domain migrations and Workflow role bootstrap SQL.
+
+Start with [`docs/architecture.md`](docs/architecture.md) for the current system
+shape. Deployment, backup, and recovery procedures live in
+[`docs/runbook.md`](docs/runbook.md).
 
 ## 1. Create the Telegram bot
 
@@ -106,7 +111,7 @@ pnpm telegram:webhook
 ```
 
 Operational deployment, recovery, and backup procedures live in
-[`docs/operations.md`](docs/operations.md).
+[`docs/runbook.md`](docs/runbook.md).
 
 The public routes are:
 

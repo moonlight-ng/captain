@@ -1,15 +1,7 @@
-# Captain operations
+# Captain runbook
 
-## Runtime
-
-- Eve is the only production process and serves Telegram, Concierge, durable
-  sessions, approvals, schedules, tools, and subagents.
-- `@workflow/world-postgres@5.0.0-beta.24` persists Eve runs, events, hooks,
-  streams, and queues in Supabase Postgres.
-- Deterministic TypeScript services own provider calls, risk checks, database
-  writes, and outbound delivery.
-- `/data/captain` is the single-writer Markdown memory volume. The Raspberry Pi
-  is a read-only cold mirror and never participates in live memory reads.
+This document covers deployment, health checks, backup, and recovery. See
+[`architecture.md`](architecture.md) for how the system is assembled.
 
 ## Deploy
 
@@ -19,18 +11,15 @@
    `supabase/workflow-postgres-harden.sql`.
 3. Run `pnpm test`, `pnpm typecheck`, `pnpm eve:info`, and `pnpm build`.
 4. Deploy with `fly deploy` or push to `main` to use GitHub Actions.
-5. Check `/health`, the Fly machine health checks, and Workflow queue activity.
+5. Check `/health`, `/ready`, the Fly machine checks, and Workflow queue
+   activity.
 
-`/health` is process liveness. Fly checks `/ready`, which also validates service
-initialization, the Markdown volume, and Supabase access.
+`/health` reports process liveness. Fly checks `/ready`, which also validates
+service initialization, the Markdown volume, and Supabase access.
 
 The Fly release command runs the pinned Postgres World bootstrap before each
 deployment. Keep `WORKFLOW_POSTGRES_URL` on a direct encrypted Supabase
 connection owned by the dedicated Workflow role.
-
-The Telegram inbox migration must be present before the new image becomes
-ready. It durably serializes messages for the private Telegram continuation and
-recovers expired dispatch claims after a restart.
 
 ## Telegram webhook
 
@@ -76,7 +65,7 @@ dispatcher and mutable outbound tools fail closed in canary mode.
 
 1. Remove the Telegram webhook.
 2. Restore the previous Fly image while keeping the existing volume mounted.
-3. Confirm Workflow bootstrap and `/health` succeed.
+3. Confirm Workflow bootstrap, `/health`, and `/ready` succeed.
 4. Re-register the webhook after Telegram and Concierge smoke tests pass.
 
 Restoring an image does not roll back Markdown memory. Recover memory from the
