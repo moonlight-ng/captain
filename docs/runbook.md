@@ -47,6 +47,12 @@ account is already signed in. A successful login creates
 `/data/codex/auth.json`. Treat that file like a password: do not commit it,
 place it under `/data/captain`, or copy it to the Pi mirror.
 
+The runtime image installs Debian's `ca-certificates` bundle and exposes only
+its path to the isolated Codex subprocess through `CODEX_CA_CERTIFICATE`. If
+Codex reports `UnknownIssuer`, verify that
+`/etc/ssl/certs/ca-certificates.crt` exists in the running image before
+re-authenticating; a valid login alone does not repair a missing CA bundle.
+
 If device authorization is blocked from Fly's egress, seed `auth.json` from an
 already authenticated, trusted workstation using `fly ssh sftp shell`, then
 set its remote mode to `0600`. Never print the file or pass it through command
