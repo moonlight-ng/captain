@@ -122,6 +122,10 @@ The public routes are:
 - `POST /v1/concierge/owner-join` — redeem join token
 - `POST /v1/concierge/conversation-mode` — hand back to Concierge
 - `POST /v1/concierge/transcribe` — voice input
+- `GET /v1/workspaces` — list flight-selection workspaces, or read one with `?key=...`
+- `POST /v1/workspaces/actions` — apply a versioned pass, save, select, or undo decision
+- `GET /workspaces` — protected goal index rendered by Captain
+- `GET /workspaces/:workspaceKey` — protected flight-selection card workspace
 - `POST /v1/events/concierge` — signed inbound escalation events
 - `POST /eve/v1/telegram` — Telegram webhook (secret + owner/private-chat checks)
 - `/eve/*` — dedicated Basic-credential protected Eve session and inspection routes
@@ -151,6 +155,28 @@ remain in Supabase.
 Captain uses Duffel for the immediate, bookable response. Configure a live-mode
 `DUFFEL_ACCESS_TOKEN`; interactive searches and fare watches remain pinned to
 Duffel.
+
+When the owner asks Captain to plan or select flights, Captain creates a
+durable flight-selection goal, runs the initial Duffel search, and returns one
+stable workspace link under Captain's own `CAPTAIN_EVE_PUBLIC_URL`, at
+`/workspaces/:workspaceKey`. The opaque workspace key identifies the goal but
+does not authorize access. The internal browser and its API calls use the same
+`CAPTAIN_EVE_BASIC_PASSWORD` owner credential as Captain's Eve interface.
+Programmatic API clients may instead use a valid Supabase bearer session.
+Configure the immutable Supabase user ID in
+`CAPTAIN_WORKSPACE_OWNER_USER_ID`; until configured, access falls back to a
+session whose email matches `OWNER_EMAIL`.
+
+The selection workspace supports ordered multi-city routes. Pass, save,
+select, and undo are explicit optimistic-concurrency actions recorded in an
+append-only history. The browser renders agent-curated journeys as a swipeable
+card deck, but every swipe maps to one of those explicit actions. Back/forward
+navigation and history inspection are read-only. Selecting performs another
+live Duffel search and only completes the goal when the itinerary and price
+still match. Selection does not create a booking intent or purchase a ticket.
+
+See [the flight workspace contract](docs/flight-workspaces.md) for the browser
+view model and action protocol.
 
 Codex is exposed to Eve as the owner-only `research_web` provider. Eve supplies
 a closed JSON request containing a topic, objective, explicit questions,
