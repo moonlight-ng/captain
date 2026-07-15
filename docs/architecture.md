@@ -14,7 +14,7 @@ service.
 flowchart LR
   Telegram[Telegram webhook] --> Eve[Captain Eve application]
   Concierge[opemipo.com Concierge] --> Eve
-  Workspace[Goal workspace UI] --> Eve
+  App[Goal app UI] --> Eve
   Eve --> Services[Deterministic TypeScript services]
   Eve --> Workflow[Supabase Workflow state]
   Services --> Domain[Supabase domain data]
@@ -73,8 +73,8 @@ Codex never receives traveller identities or Captain credentials and does not
 book flights or perform other side effects.
 
 Flight planning is goal-oriented. A durable flight-selection goal owns its
-ordered journey specification, live search candidates, stable opaque workspace
-key, current phase, and append-only decision history. The browser workspace is
+ordered journey specification, live search candidates, stable opaque app key,
+current phase, and append-only decision history. The browser app is
 a projection of that goal; it is not a separate worker or source of truth.
 Discrete browser actions update the goal through deterministic services, and
 the active goal summaries are loaded into the owner's next Eve turn.
@@ -118,7 +118,7 @@ Supabase stores:
 - Scheduled jobs and job-run history.
 - Concierge conversations and delivery events.
 - Flights, trades, token usage, and other operational records.
-- Flight-selection goals, candidate decisions, and workspace history.
+- Flight-selection goals, candidate decisions, and app history.
 
 ## Repository map
 
