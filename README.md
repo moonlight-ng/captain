@@ -55,8 +55,10 @@ during this rollout.
 
 Production uses a dedicated `flight_agent_runtime` Postgres login for both
 `DATABASE_URL` and `WORKFLOW_POSTGRES_URL`. The Fly release command verifies the
-domain migrations and bootstraps the isolated `flight_agent_eve` Workflow
-namespace before a machine starts.
+domain migration ledger before a machine starts. Apply domain migrations and
+bootstrap the isolated `flight_agent_eve` Workflow namespace separately with an
+administrator connection whenever their schemas change; the runtime login does
+not receive database-level creation privileges.
 
 ## Commands
 
