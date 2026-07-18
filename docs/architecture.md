@@ -63,21 +63,18 @@ Workflow own durable turn delivery.
 3. A deterministic handler or named task subagent produces the result.
 4. Deterministic services validate side effects and record the run.
 
-Interactive flight discovery returns structured Duffel inventory to Eve. When
-the owner requests a broader public-web comparison, Eve can also call the
-owner-only `research_web` tool with a closed JSON request. Codex returns ranked,
-sourced JSON in the same turn; Eve—not Codex—owns interpretation and delivery.
-There is no free-form Codex request or autonomous Telegram follow-up path.
+Flight discovery is delegated to the independent Flight Agent service. Captain
+starts and retrieves trip agents through a signed bridge and does not hold a
+Duffel credential. Flight Agent calls Captain's isolated Codex provider only
+for an explicit fare-and-research request; a Codex failure does not invalidate
+successfully observed fares.
 
 Codex never receives traveller identities or Captain credentials and does not
 book flights or perform other side effects.
 
-Flight planning is goal-oriented. A durable flight-selection goal owns its
-ordered journey specification, live search candidates, stable opaque app key,
-current phase, and append-only decision history. The browser app is
-a projection of that goal; it is not a separate worker or source of truth.
-Discrete browser actions update the goal through deterministic services, and
-the active goal summaries are loaded into the owner's next Eve turn.
+Each trip is a durable Flight Agent with a normalized brief, independent
+cadence, pause state, observed flight identities, and workspace URL. Captain
+loads a small list of active remote agents into the owner's next Eve turn.
 
 Codex CLI authentication persists at `/data/codex`, outside the
 `/data/captain` memory subtree mirrored to the Pi. Each research run gets a new
@@ -89,7 +86,7 @@ temporary working directory while reusing only that CLI authentication home.
 | --- | --- | --- |
 | Eve | Sessions, turns, channels, approvals, schedules, tool invocation, named subagents | Provider-specific business rules or direct unrestricted machine access |
 | `agent/` | Eve declarations, principal-aware instructions, channels, schedules, and thin tool adapters | Core domain implementations |
-| `services/` | Memory operations, provider calls, structured research validation, risk controls, persistence, and outbound delivery | Session orchestration |
+| `services/` | Memory operations, provider calls, structured research validation, persistence, and outbound delivery | Session orchestration |
 | Supabase | Workflow persistence and operational/domain records | Personal Markdown memory |
 | Fly volume | Authoritative personal memory and journals | Workflow or domain tables |
 | Raspberry Pi | Read-only recovery copies | Live reads, live writes, or agent execution |
@@ -117,8 +114,9 @@ Supabase stores:
 - Telegram conversation mirrors.
 - Scheduled jobs and job-run history.
 - Concierge conversations and delivery events.
-- Flights, trades, token usage, and other operational records.
-- Flight-selection goals, candidate decisions, and app history.
+- Captain scheduled-job outcomes and current product state.
+- Read-only historical flight, trading, and token-usage archives retained for
+  audit and schema reconstruction.
 
 ## Repository map
 
@@ -143,8 +141,8 @@ Supabase stores:
   web search is required for every request.
 - Its ChatGPT-managed CLI credential is file-backed on the Fly volume and is
   not included in the Pi memory mirror.
-- Web-discovered fares remain advisory; Duffel is the only bookable inventory
-  source.
+- Web research remains advisory; Flight Agent's Duffel observations are the
+  only displayed fare source.
 
 These constraints prevent the framework redesign from turning into a
 distributed multi-worker system. See [`runbook.md`](runbook.md) for operating

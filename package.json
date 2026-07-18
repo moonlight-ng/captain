@@ -9,6 +9,7 @@
   "packageManager": "pnpm@11.6.0",
   "scripts": {
     "build": "eve build",
+    "backup:retired-domains": "tsx scripts/backup-retired-domain-data.ts",
     "dev": "eve dev --no-ui",
     "eval": "eve eval",
     "eve:info": "eve info",
@@ -18,8 +19,6 @@
     "telegram:identify": "tsx scripts/identify-telegram-user.ts",
     "notes:search": "tsx scripts/test-notes-search.ts",
     "notes:plan": "tsx scripts/test-search-query-planner.ts",
-    "app:preview": "tsx scripts/preview-flight-app.ts",
-    "trading:verify": "tsx scripts/verify-trading.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
