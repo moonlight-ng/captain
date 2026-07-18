@@ -16,8 +16,9 @@ This document covers deployment, health checks, backup, and recovery. See
 
 For structured Codex research, leave `CAPTAIN_CODEX_ENABLED=false` on the first
 deployment, complete the one-time CLI login below, then enable the provider and
-deploy again. Confirm the `research_web` tool is available afterwards. Duffel
-searches continue to work while Codex is disabled.
+deploy again. Confirm the `research_web` tool and signed Flight Agent research
+endpoint are available afterwards. Flight Agent records a partial check when
+Codex is disabled or unavailable.
 
 `/health` reports process liveness. Fly checks `/ready`, which also validates
 service initialization, the Markdown volume, and Supabase access.

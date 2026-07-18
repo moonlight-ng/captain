@@ -10,7 +10,7 @@ cold-mirrored to a Raspberry Pi.
 
 - `agent/` — Eve agents, channels, schedules, instructions, and tool adapters.
 - `services/app/` — environment loading and the application service container.
-- `services/concierge/`, `services/flights/`, and `services/trading/` — product domains and actions.
+- `services/concierge/`, `services/flight-agent/`, and `services/wallet/` — product boundaries and read-only integrations.
 - `services/memory/`, `services/scheduling/`, and `services/storage/` — shared infrastructure.
 - `services/biodata/`, `services/curiosity/`, `services/review/`, and `services/skills/` — background work.
 - `services/email/`, `services/telegram/`, and `services/solana/` — external platform integrations.
@@ -50,8 +50,8 @@ pnpm dev
 ```
 
 Local Markdown defaults to `.memory/`. Only private messages from
-`TELEGRAM_OWNER_USER_ID` are accepted. Owner-requested email and trading
-enablement changes use Eve's approval flow.
+`TELEGRAM_OWNER_USER_ID` are accepted. Owner-requested email changes use Eve's
+approval flow. Wallet access is read-only and owner-only.
 
 This repo owns the shared Supabase schema (Concierge `concierge_*` tables and
 Captain `captain_*` tables). Link the project once, then apply migrations before
@@ -122,10 +122,8 @@ The public routes are:
 - `POST /v1/concierge/owner-join` — redeem join token
 - `POST /v1/concierge/conversation-mode` — hand back to Concierge
 - `POST /v1/concierge/transcribe` — voice input
-- `GET /v1/apps` — list flight-selection apps, or read one with `?key=...`
-- `POST /v1/apps/actions` — apply a versioned pass, save, select, or undo decision
-- `GET /apps` — protected goal app index rendered by Captain
-- `GET /apps/:appKey` — protected flight-selection card app
+- `GET /apps/:appKey` and `/workspaces/:appKey` — permanent redirects to the independent Flight Agent
+- `POST /internal/v1/codex/research` — signed Flight Agent research bridge
 - `POST /v1/events/concierge` — signed inbound escalation events
 - `POST /eve/v1/telegram` — Telegram webhook (secret + owner/private-chat checks)
 - `/eve/*` — dedicated Basic-credential protected Eve session and inspection routes
@@ -149,45 +147,28 @@ For deployment continuity, the Eve/app password falls back to the legacy
 
 Captain stores memory under `/data/captain/memory/*.md` and journals under
 `/data/captain/journals/YYYY/YYYY-MM-DD.md`. Telegram mirrors, scheduled jobs,
-job runs, flights, trades, event delivery, Workflow state, and Concierge data
-remain in Supabase.
+job runs, event delivery, Workflow state, and Concierge data remain in
+Supabase. Historical trading, token-usage, and embedded-flight tables are
+retained as read-only archives; active code does not write to them.
 
-### Flight discovery
+### Flight Agents
 
-Captain uses Duffel for the immediate, bookable response. Configure a live-mode
-`DUFFEL_ACCESS_TOKEN`; interactive searches and fare watches remain pinned to
-Duffel.
-
-When the owner asks Captain to plan or select flights, Captain creates a
-durable flight-selection goal, runs the initial Duffel search, and returns one
-stable app link under Captain's own `CAPTAIN_EVE_PUBLIC_URL`, at
-`/apps/:appKey`. The opaque app key identifies the goal but
-does not authorize access. The internal browser and its API calls use the same
-`CAPTAIN_EVE_BASIC_PASSWORD` owner credential as Captain's Eve interface.
-Programmatic API clients may instead use a valid Supabase bearer session.
-When `CAPTAIN_APP_LINKS_PUBLIC=true`, individual opaque app links and their
-card actions are passwordless; the `/apps` index remains owner-only.
-Configure the immutable Supabase user ID in
-`CAPTAIN_APP_OWNER_USER_ID`; until configured, access falls back to a
-session whose email matches `OWNER_EMAIL`.
-
-The selection app supports ordered multi-city routes. Pass, save,
-select, and undo are explicit optimistic-concurrency actions recorded in an
-append-only history. The browser renders agent-curated journeys as a swipeable
-card deck, but every swipe maps to one of those explicit actions. Back/forward
-navigation and history inspection are read-only. Selecting performs another
-live Duffel search and only completes the goal when the itinerary and price
-still match. Selection does not create a booking intent or purchase a ticket.
-
-See [the flight app contract](docs/flight-apps.md) for the browser
-view model and action protocol.
+Duffel, flight scheduling, price histories, and the browser workspace now live
+in the independent Flight Agent service. Captain exposes only
+`start_flight_agent`, `get_flight_agent`, `list_flight_agents`,
+`refresh_flight_agent`, and `research_flight_agent`, backed by a signed HMAC
+bridge configured with `FLIGHT_AGENT_BASE_URL` and distinct directional
+secrets. Existing Captain app links redirect to the migrated agent key. Captain
+keeps the historical tables read-only for rollback.
 
 Codex is exposed to Eve as the owner-only `research_web` provider. Eve supplies
 a closed JSON request containing a topic, objective, explicit questions,
 freshness, preferred domains, and result limit. Codex uses live web search and
 returns validated provider-style JSON containing ranked findings, direct source
 URLs, evidence strength, gaps, and search metadata. Eve receives that object in
-the active turn and decides how to present it, just as it does with Duffel data.
+the active turn and decides how to present it. Flight Agent may call the same
+isolated provider through its signed internal endpoint only when the owner
+explicitly requests fare-plus-research.
 There is no free-form `ask_codex` tool, `/codex` shortcut, autonomous queue, or
 direct Codex-to-Telegram delivery.
 
