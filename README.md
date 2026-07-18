@@ -53,6 +53,11 @@ selection app keys. Normalized checks, activities, research runs, and price
 observations are append-only; `agent_states` remains the operational snapshot
 during this rollout.
 
+Production uses a dedicated `flight_agent_runtime` Postgres login for both
+`DATABASE_URL` and `WORKFLOW_POSTGRES_URL`. The Fly release command verifies the
+domain migrations and bootstraps the isolated `flight_agent_eve` Workflow
+namespace before a machine starts.
+
 ## Commands
 
 ```sh
