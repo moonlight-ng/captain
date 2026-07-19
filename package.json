@@ -19,12 +19,13 @@
     "telegram:identify": "tsx scripts/identify-telegram-user.ts",
     "notes:search": "tsx scripts/test-notes-search.ts",
     "notes:plan": "tsx scripts/test-search-query-planner.ts",
+    "flight:smoke": "tsx scripts/smoke-flight-planning.ts",
+    "flight:smoke:cleanup": "tsx scripts/cleanup-flight-smoke.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "24.10.1",
-    "tsx": "4.22.4",
     "typescript": "6.0.3",
     "vitest": "4.1.9"
   },
@@ -38,6 +39,7 @@
     "bs58": "^6.0.0",
     "eve": "0.23.0",
     "resend": "6.16.0",
+    "tsx": "4.22.4",
     "zod": "4.3.6"
   }
 }
