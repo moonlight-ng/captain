@@ -8,7 +8,7 @@ stores new flight observations.
 
 - `plan_trip` loads flight memory only for the planning workflow, reconciles a
   natural-language request into a durable trip draft, and sends the complete
-  brief for explicit confirmation. The Telegram **Start tracking** callback is
+  brief for explicit confirmation. The Telegram **Start agent** callback is
   the only path that creates a trip-specific Flight Agent.
 - `get_flight_agent` retrieves one agent's status, latest check, notable flights,
   price changes, research, and workspace URL.
