@@ -7,9 +7,9 @@ stores new flight observations.
 ## Captain tools
 
 - `plan_trip` loads flight memory only for the planning workflow, reconciles a
-  natural-language request into a durable trip draft, and sends the complete
-  brief for explicit confirmation. The Telegram **Start agent** callback is
-  the only path that creates a trip-specific Flight Agent.
+  natural-language request into a durable trip draft, starts the Flight Agent
+  when the brief is complete, and sends a Telegram card with a single **Edit**
+  button that opens the agent settings page (`?settings=brief`).
 - `get_flight_agent` retrieves one agent's status, latest check, notable flights,
   price changes, research, and workspace URL.
 - `list_flight_agents` retrieves paginated summaries and agent keys.
