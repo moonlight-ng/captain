@@ -26,6 +26,7 @@
     "@fontsource/libre-franklin": "^5.2.8",
     "@workflow/world-postgres": "5.0.0-beta.24",
     "eve": "0.23.0",
+    "liveline": "0.0.7",
     "postgres": "3.4.7",
     "react": "19.2.7",
     "react-dom": "19.2.7",

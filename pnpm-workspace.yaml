@@ -8,3 +8,5 @@ minimumReleaseAgeExclude:
   - '@ai-sdk/provider@4.0.2'
   - ai@7.0.14
   - eve@0.23.0
+patchedDependencies:
+  liveline@0.0.7: patches/liveline@0.0.7.patch

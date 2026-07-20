@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  liveline@0.0.7: 287d84352180f2b093b89743bb10e6cc7ee24336504ec85aa363fd6adbb673eb
+
 importers:
 
   .:
@@ -17,6 +20,9 @@ importers:
       eve:
         specifier: 0.23.0
         version: 0.23.0(ai@7.0.31(zod@4.3.6))(dotenv@17.3.1)(drizzle-orm@0.45.2(@types/pg@8.20.0)(pg@8.20.0)(postgres@3.4.7))(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(tsx@4.22.4))
+      liveline:
+        specifier: 0.0.7
+        version: 0.0.7(patch_hash=287d84352180f2b093b89743bb10e6cc7ee24336504ec85aa363fd6adbb673eb)(react@19.2.7)
       postgres:
         specifier: 3.4.7
         version: 3.4.7
@@ -999,6 +1005,12 @@ packages:
 
   lines-and-columns@1.2.4:
     resolution: {integrity: sha512-7ylylesZQ/PV29jhEDl3Ufjo6ZX7gCqJr5F7PKrqc93v7fzSymt1BpwEU8nAUXs8qzzvqhbjhK5QZg6Mt/HkBg==}
+
+  liveline@0.0.7:
+    resolution: {integrity: sha512-S1Weo1kmefiOCNaW/WFXErqJXlV8A/ldIkIthaOeT57I2ZhqhKLKQDJ1wfabtMSK9vJeU8PeMNHd8Sr8TLByWQ==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      react: '>=18'
 
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
@@ -2255,6 +2267,10 @@ snapshots:
       lightningcss-win32-x64-msvc: 1.32.0
 
   lines-and-columns@1.2.4: {}
+
+  liveline@0.0.7(patch_hash=287d84352180f2b093b89743bb10e6cc7ee24336504ec85aa363fd6adbb673eb)(react@19.2.7):
+    dependencies:
+      react: 19.2.7
 
   magic-string@0.30.21:
     dependencies:

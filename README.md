@@ -1,15 +1,15 @@
 # Flight Agent
 
 A private, independent Eve service for live flight exploration. Each trip is a
-durable Flight Agent that searches Duffel, builds a transparent working set,
-tracks price observations against stable destination/date/airline identities,
+durable Flight Agent that searches Duffel and Captain's isolated Codex web
+research in parallel, builds a transparent working set, tracks source-specific
+price observations against canonical segment-and-time itinerary identities,
 and promotes notable options for review.
 
 Captain no longer owns Duffel. It starts and retrieves Flight Agents through a
-signed bridge. Checks are fare-only unless the owner explicitly requests
-fare-plus-research, in which case Flight Agent calls Captain's isolated Codex
-bridge after preserving the Duffel result. Conversation remains external to
-this interface.
+signed bridge. Every check publishes fast Duffel results first, then merges
+verified Codex/Skyscanner offers when the slower research run completes.
+Conversation remains external to this interface.
 
 ## Local development
 
@@ -39,12 +39,17 @@ deploying:
 - `FLIGHT_AGENT_TO_CAPTAIN_SECRET`
 - the AI gateway variables required by Eve
 
+Owner UI/API authentication defaults to enabled in production. Set
+`FLIGHT_AGENT_OWNER_AUTH_ENABLED=false` only when intentionally allowing public
+read and write access; the signed Captain bridge remains separately protected.
+
 The Fly machine scales to zero with `auto_stop_machines="stop"` and wakes on
 HTTP requests. There is no cron wake-up. Due checks are attempted
 opportunistically by readiness traffic while the process is already awake.
 `POST /internal/v1/flight-agents/:agentKey/checks` requires timestamped HMAC
-authentication and an idempotency key; `{ "mode": "fare" }` refreshes fares,
-while `{ "mode": "fare_and_research" }` refreshes fares and then calls Captain.
+authentication and an idempotency key. The existing `fare` and
+`fare_and_research` modes remain wire-compatible; both now execute the complete
+multi-source observation check.
 
 `pnpm db:migrate` owns the dedicated `flight_agent` schema. After deploying the
 schema and before switching Captain redirects, run `pnpm db:import-captain` once
