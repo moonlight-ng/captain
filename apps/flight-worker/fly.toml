@@ -1,0 +1,33 @@
+app = "opemipo-flight-worker"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "apps/flight-worker/Dockerfile"
+
+[env]
+  PORT = "8080"
+  DUFFEL_BASE_URL = "https://api.duffel.com"
+  FLIGHT_WORKER_ID = "flight-worker-1"
+  FLIGHT_WORKER_TICK_MS = "60000"
+  FLIGHT_WORKER_LEASE_MS = "180000"
+  FLIGHT_SEARCH_FRESHNESS_MS = "900000"
+  FLIGHT_WORKER_CLAIM_LIMIT = "4"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/ready"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  cpus = 1

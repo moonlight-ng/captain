@@ -1,5 +1,5 @@
 {
-  "name": "flight-agent",
+  "name": "@agents/captain",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -23,8 +23,14 @@
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.service.json --noEmit --pretty false"
   },
   "dependencies": {
+    "@agents/conversation-core": "workspace:*",
+    "@agents/flight-domain": "workspace:*",
+    "@agents/flight-store": "workspace:*",
+    "@agents/observability": "workspace:*",
+    "@agents/telegram-core": "workspace:*",
     "@fontsource/libre-franklin": "^5.2.8",
     "@workflow/world-postgres": "5.0.0-beta.24",
+    "ai": "7.0.4",
     "eve": "0.23.0",
     "liveline": "0.0.7",
     "postgres": "3.4.7",

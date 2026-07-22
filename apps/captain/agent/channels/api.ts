@@ -2,8 +2,16 @@ import { timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 
-import { DELETE, GET, POST, defineChannel } from "eve/channels";
+import { DELETE, GET, PATCH, POST, defineChannel } from "eve/channels";
 import { z, ZodError } from "zod";
+import {
+  TripLimitError,
+  TripNotFoundError,
+  TripVersionConflictError,
+  createTripSchema,
+  tripActionSchema,
+  updateTripSchema
+} from "@agents/flight-domain";
 
 import { getFlightAgentServices } from "../../services/app/services.js";
 import {
@@ -22,6 +30,7 @@ import {
   type FlightAgentWorkspace
 } from "../../services/domain/types.js";
 import type { FlightAgentStore } from "../../services/store/contracts.js";
+import { verifyCaptainSessionToken } from "../lib/session-token.js";
 
 const MAX_BODY_BYTES = 512 * 1024;
 const bridgeReplayGuard = new BridgeReplayGuard();
@@ -29,12 +38,13 @@ const internalCheckSchema = z.object({ mode: checkModeSchema }).strict();
 const internalDeleteSchema = z.object({
   createIdempotencyKey: z.string().trim().min(8).max(200)
 }).strict();
+const PILOT_USER_ID = "00000000-0000-4000-8000-000000000001";
 
 export default defineChannel({
   kindHint: "flight-agent-api",
   cors: {
     origin: ["http://127.0.0.1:4178", "https://opemipo-flight-agent.fly.dev"],
-    methods: ["GET", "POST", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type", "Idempotency-Key"],
     maxAge: 86_400
   },
@@ -42,7 +52,8 @@ export default defineChannel({
     GET("/health", async () => Response.json({ status: "ok" })),
     GET("/ready", readiness),
     GET("/", serveIndex),
-    GET("/agents/:agentKey", serveIndex),
+    GET("/agents/:agentKey", redirectLegacyAgent),
+    GET("/trips/:tripId", owner(serveTrip)),
     GET("/assets/:asset", serveAsset),
     GET("/v1/agents", owner(listAgents)),
     POST("/v1/agents", owner(createAgent)),
@@ -54,6 +65,18 @@ export default defineChannel({
     POST("/v1/agents/:agentKey/folders/:folderId", owner(renameFolder)),
     DELETE("/v1/agents/:agentKey/folders/:folderId", owner(deleteFolder)),
     POST("/v1/agents/:agentKey/folders/:folderId/members", owner(setFolderMembership)),
+    GET("/v1/me/trips", traveller(listTrips)),
+    POST("/v1/trips", traveller(createTrip)),
+    GET("/v1/trips/:tripId", traveller(getTrip)),
+    PATCH("/v1/trips/:tripId", traveller(updateTrip)),
+    POST("/v1/trips/:tripId/actions", traveller(tripAction)),
+    GET("/v1/trips/:tripId/offers", traveller(listTripOffers)),
+    GET("/internal/v1/trips", internal(listInternalTrips)),
+    POST("/internal/v1/trips", internal(createInternalTrip)),
+    GET("/internal/v1/trips/:tripId", internal(getInternalTrip)),
+    PATCH("/internal/v1/trips/:tripId", internal(updateInternalTrip)),
+    POST("/internal/v1/trips/:tripId/actions", internal(internalTripAction)),
+    GET("/internal/v1/trips/:tripId/offers", internal(listInternalTripOffers)),
     POST("/internal/v1/flight-agents", internal(createInternalAgent)),
     GET("/internal/v1/flight-agents", internal(listInternalAgents)),
     GET("/internal/v1/flight-agents/:agentKey", internal(getInternalAgent)),
@@ -65,6 +88,22 @@ export default defineChannel({
 
 type RouteContext = { params: Readonly<Record<string, string>> };
 type Handler = (request: Request, context: RouteContext) => Promise<Response>;
+type TravellerHandler = (request: Request, context: RouteContext, userId: string) => Promise<Response>;
+
+function traveller(handler: TravellerHandler): Handler {
+  return async (request, context) => {
+    const services = await getFlightAgentServices();
+    const secret = services.env.captainSessionSecret;
+    const authorization = request.headers.get("authorization");
+    const userId = secret && authorization?.startsWith("Bearer ")
+      ? verifyCaptainSessionToken(authorization.slice(7), secret)
+      : null;
+    if (!userId) return Response.json({ error: "unauthorized" }, { status: 401 });
+    const user = await services.platformStore.getUser(userId);
+    if (!user || user.status !== "active") return Response.json({ error: "unauthorized" }, { status: 401 });
+    return safely(() => handler(request, context, userId));
+  };
+}
 
 function owner(handler: Handler): Handler {
   return async (request, context) => {
@@ -90,6 +129,10 @@ function internal(handler: Handler): Handler {
     const body = request.method === "GET" ? "" : await limitedText(request);
     const timestamp = request.headers.get("x-bridge-timestamp");
     const signature = request.headers.get("x-bridge-signature");
+    const isTripRoute = new URL(request.url).pathname.startsWith("/internal/v1/trips");
+    if (isTripRoute && request.headers.get("x-bridge-service") !== "pilot") {
+      return Response.json({ error: "unauthorized_service" }, { status: 401 });
+    }
     if (!secret || !verifyBridgeRequest({
       secret,
       method: request.method,
@@ -114,15 +157,123 @@ async function readiness(): Promise<Response> {
   try {
     const services = await getFlightAgentServices();
     await services.agents.list({ limit: 1 });
-    void services.agents.tick(1).catch((error) => logApiError(
-      "flight_agent.opportunistic_tick_failed",
-      error
-    ));
     return Response.json({ status: "ready", storage: services.env.databaseUrl ? "postgres" : "memory" });
   } catch (error) {
     logApiError("flight_agent.readiness_failed", error);
     return Response.json({ status: "unavailable" }, { status: 503 });
   }
+}
+
+async function listTrips(_request: Request, _context: RouteContext, userId: string): Promise<Response> {
+  const services = await getFlightAgentServices();
+  return Response.json({ trips: await services.trips.list(userId) }, { headers: noStore() });
+}
+
+async function createTrip(request: Request, _context: RouteContext, userId: string): Promise<Response> {
+  return createTripForUser(request, userId, `trip:create:${userId}`);
+}
+
+async function getTrip(_request: Request, context: RouteContext, userId: string): Promise<Response> {
+  return getTripForUser(userId, requiredParam(context, "tripId"));
+}
+
+async function updateTrip(request: Request, context: RouteContext, userId: string): Promise<Response> {
+  return updateTripForUser(request, userId, requiredParam(context, "tripId"));
+}
+
+async function tripAction(request: Request, context: RouteContext, userId: string): Promise<Response> {
+  return tripActionForUser(request, userId, requiredParam(context, "tripId"));
+}
+
+async function listTripOffers(_request: Request, context: RouteContext, userId: string): Promise<Response> {
+  return offersForUser(userId, requiredParam(context, "tripId"));
+}
+
+async function listInternalTrips(): Promise<Response> {
+  const services = await getFlightAgentServices();
+  return Response.json({ trips: await services.trips.list(PILOT_USER_ID) }, { headers: noStore() });
+}
+
+async function createInternalTrip(request: Request): Promise<Response> {
+  return createTripForUser(request, PILOT_USER_ID, "internal:trip:create");
+}
+
+async function getInternalTrip(_request: Request, context: RouteContext): Promise<Response> {
+  const tripReference = requiredParam(context, "tripId");
+  const services = await getFlightAgentServices();
+  const trip = await resolvePilotTrip(tripReference);
+  if (!trip) throw new TripNotFoundError();
+  return Response.json({
+    trip,
+    watch: await services.platformStore.getWatch(PILOT_USER_ID, trip.id),
+    offers: await services.trips.offers(PILOT_USER_ID, trip.id)
+  }, { headers: noStore() });
+}
+
+async function updateInternalTrip(request: Request, context: RouteContext): Promise<Response> {
+  const trip = await resolvePilotTrip(requiredParam(context, "tripId"));
+  if (!trip) throw new TripNotFoundError();
+  return updateTripForUser(request, PILOT_USER_ID, trip.id);
+}
+
+async function internalTripAction(request: Request, context: RouteContext): Promise<Response> {
+  const trip = await resolvePilotTrip(requiredParam(context, "tripId"));
+  if (!trip) throw new TripNotFoundError();
+  return tripActionForUser(request, PILOT_USER_ID, trip.id);
+}
+
+async function listInternalTripOffers(_request: Request, context: RouteContext): Promise<Response> {
+  const trip = await resolvePilotTrip(requiredParam(context, "tripId"));
+  if (!trip) throw new TripNotFoundError();
+  return offersForUser(PILOT_USER_ID, trip.id);
+}
+
+async function resolvePilotTrip(reference: string) {
+  const services = await getFlightAgentServices();
+  return await services.trips.get(PILOT_USER_ID, reference)
+    ?? await services.platformStore.getTripByLegacyKey(PILOT_USER_ID, reference);
+}
+
+async function createTripForUser(request: Request, userId: string, scope: string): Promise<Response> {
+  const text = await limitedText(request);
+  const services = await getFlightAgentServices();
+  const cached = await idempotentResponse(request, scope, text, services.store);
+  if (cached) return cached;
+  const result = await services.trips.create(userId, createTripSchema.parse(parseJson(text)));
+  return rememberResponse(request, scope, text, 202, result, services.store);
+}
+
+async function getTripForUser(userId: string, tripId: string): Promise<Response> {
+  const services = await getFlightAgentServices();
+  const trip = await services.trips.get(userId, tripId);
+  if (!trip) throw new TripNotFoundError();
+  return Response.json({ trip }, { headers: noStore() });
+}
+
+async function updateTripForUser(request: Request, userId: string, tripId: string): Promise<Response> {
+  const text = await limitedText(request);
+  const services = await getFlightAgentServices();
+  const scope = `trip:update:${userId}:${tripId}`;
+  const cached = await idempotentResponse(request, scope, text, services.store);
+  if (cached) return cached;
+  const trip = await services.trips.update(userId, tripId, updateTripSchema.parse(parseJson(text)));
+  return rememberResponse(request, scope, text, 200, { trip }, services.store);
+}
+
+async function tripActionForUser(request: Request, userId: string, tripId: string): Promise<Response> {
+  const text = await limitedText(request);
+  const services = await getFlightAgentServices();
+  const scope = `trip:action:${userId}:${tripId}`;
+  const cached = await idempotentResponse(request, scope, text, services.store);
+  if (cached) return cached;
+  const trip = await services.trips.action(userId, tripId, tripActionSchema.parse(parseJson(text)));
+  return rememberResponse(request, scope, text, 202, { trip }, services.store);
+}
+
+async function offersForUser(userId: string, tripId: string): Promise<Response> {
+  const services = await getFlightAgentServices();
+  if (!await services.trips.get(userId, tripId)) throw new TripNotFoundError();
+  return Response.json({ offers: await services.trips.offers(userId, tripId) }, { headers: noStore() });
 }
 
 async function createAgent(request: Request): Promise<Response> {
@@ -348,6 +499,29 @@ async function serveIndex(request: Request): Promise<Response> {
   }
 }
 
+async function redirectLegacyAgent(request: Request, context: RouteContext): Promise<Response> {
+  const key = requiredParam(context, "agentKey");
+  return Response.redirect(new URL(`/trips/${encodeURIComponent(key)}`, request.url), 308);
+}
+
+async function serveTrip(_request: Request, context: RouteContext): Promise<Response> {
+  const trip = await resolvePilotTrip(requiredParam(context, "tripId"));
+  if (!trip) throw new TripNotFoundError();
+  const services = await getFlightAgentServices();
+  const offers = await services.trips.offers(PILOT_USER_ID, trip.id);
+  const offerRows = offers.slice(0, 20).map((offer) => {
+    const summary = typeof offer.snapshot.route === "string" ? offer.snapshot.route : offer.itineraryKey;
+    const flights = Array.isArray(offer.snapshot.flightNumbers) ? offer.snapshot.flightNumbers.join(", ") : "";
+    return `<tr><td>${html(flights || "Flight")}</td><td>${html(summary)}</td><td>${html(`${offer.currency} ${offer.price.toFixed(2)}`)}</td><td>${html(new Date(offer.observedAt).toLocaleString("en-GB"))}</td></tr>`;
+  }).join("");
+  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${html(trip.title)} · Captain</title><style>body{font-family:system-ui,sans-serif;max-width:960px;margin:48px auto;padding:0 24px;color:#18211d;background:#f7f4ec}a{color:inherit}header{margin-bottom:32px}.eyebrow{text-transform:uppercase;letter-spacing:.12em;font-size:12px;color:#607068}h1{font-size:38px;margin:8px 0}.meta{color:#607068}table{width:100%;border-collapse:collapse;background:white;border-radius:14px;overflow:hidden}th,td{text-align:left;padding:14px;border-bottom:1px solid #e7e3da}th{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#607068}.empty{padding:28px;background:white;border-radius:14px}</style></head><body><header><p class="eyebrow">Captain Trip · ${html(trip.status)}</p><h1>${html(trip.title)}</h1><p class="meta">${html(trip.brief.originAirports.join("/"))} → ${html(trip.brief.destinationAirports.join("/"))} · ${html(trip.brief.departureWindow.start)} to ${html(trip.brief.departureWindow.end)}</p></header>${offers.length > 0 ? `<table><thead><tr><th>Flight</th><th>Route</th><th>Current price</th><th>Observed</th></tr></thead><tbody>${offerRows}</tbody></table>` : '<p class="empty">Captain is tracking this Trip. Current results will appear after the flight worker completes its first search.</p>'}</body></html>`;
+  return new Response(body, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+}
+
+function html(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
 async function serveAsset(
   _request: Request,
   context: RouteContext
@@ -381,6 +555,15 @@ async function safely(run: () => Promise<Response>): Promise<Response> {
     }
     if (error instanceof InvalidStateError) {
       return Response.json({ error: "invalid_state", message: error.message }, { status: 409 });
+    }
+    if (error instanceof TripVersionConflictError) {
+      return Response.json({ error: "version_conflict", currentVersion: error.currentVersion }, { status: 409 });
+    }
+    if (error instanceof TripNotFoundError) {
+      return Response.json({ error: "not_found" }, { status: 404 });
+    }
+    if (error instanceof TripLimitError) {
+      return Response.json({ error: "trip_limit", message: error.message }, { status: 409 });
     }
     if (error instanceof Error && error.message === "body_too_large") {
       return Response.json({ error: "body_too_large" }, { status: 413 });

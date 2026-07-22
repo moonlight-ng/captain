@@ -12,13 +12,19 @@ export type FlightAgentEnv = {
   duffelBaseUrl: string;
   duffelTimeoutMs: number;
   duffelSupplierTimeoutMs: number;
+  telegramBotToken: string | null;
+  telegramWebhookSecretToken: string | null;
+  allowlistTelegramUserIds: readonly number[];
+  autoAllowlist: boolean;
+  captainSessionSecret: string | null;
+  duffelLiveMode: boolean;
 };
 
 export function loadEnv(): FlightAgentEnv {
   const mode = process.env.NODE_ENV === "production" ? "production" : "development";
   const env: FlightAgentEnv = {
     mode,
-    publicUrl: (process.env.FLIGHT_AGENT_PUBLIC_URL?.trim() || "http://127.0.0.1:4178").replace(/\/$/, ""),
+    publicUrl: (process.env.CAPTAIN_PUBLIC_URL?.trim() || process.env.FLIGHT_AGENT_PUBLIC_URL?.trim() || "http://127.0.0.1:4178").replace(/\/$/, ""),
     databaseUrl: optional("DATABASE_URL"),
     basicUsername: process.env.FLIGHT_AGENT_BASIC_USERNAME?.trim() || "flight-agent",
     basicPassword: optional("FLIGHT_AGENT_BASIC_PASSWORD"),
@@ -29,7 +35,13 @@ export function loadEnv(): FlightAgentEnv {
     duffelAccessToken: optional("DUFFEL_ACCESS_TOKEN"),
     duffelBaseUrl: (process.env.DUFFEL_BASE_URL?.trim() || "https://api.duffel.com").replace(/\/$/, ""),
     duffelTimeoutMs: positiveInteger("FLIGHT_SEARCH_TIMEOUT_MS", 120_000),
-    duffelSupplierTimeoutMs: positiveInteger("DUFFEL_SUPPLIER_TIMEOUT_MS", 20_000)
+    duffelSupplierTimeoutMs: positiveInteger("DUFFEL_SUPPLIER_TIMEOUT_MS", 20_000),
+    telegramBotToken: optional("TELEGRAM_BOT_TOKEN"),
+    telegramWebhookSecretToken: optional("TELEGRAM_WEBHOOK_SECRET_TOKEN"),
+    allowlistTelegramUserIds: integerList("CAPTAIN_ALLOWLIST_TELEGRAM_USER_IDS"),
+    autoAllowlist: booleanValue("CAPTAIN_AUTO_ALLOWLIST", mode !== "production"),
+    captainSessionSecret: optional("CAPTAIN_SESSION_SECRET"),
+    duffelLiveMode: booleanValue("DUFFEL_LIVE_MODE", false)
   };
   if (mode === "production") {
     for (const [name, value] of [
@@ -37,7 +49,10 @@ export function loadEnv(): FlightAgentEnv {
       ["CAPTAIN_BASE_URL", env.captainBaseUrl],
       ["CAPTAIN_TO_FLIGHT_AGENT_SECRET", env.captainToFlightAgentSecret],
       ["FLIGHT_AGENT_TO_CAPTAIN_SECRET", env.flightAgentToCaptainSecret],
-      ["DUFFEL_ACCESS_TOKEN", env.duffelAccessToken]
+      ["DUFFEL_ACCESS_TOKEN", env.duffelAccessToken],
+      ["TELEGRAM_BOT_TOKEN", env.telegramBotToken],
+      ["TELEGRAM_WEBHOOK_SECRET_TOKEN", env.telegramWebhookSecretToken],
+      ["CAPTAIN_SESSION_SECRET", env.captainSessionSecret]
     ] as const) {
       if (!value) throw new Error(`Missing required production environment variable: ${name}`);
     }
@@ -62,4 +77,10 @@ function booleanValue(name: string, fallback: boolean): boolean {
   if (value === "true") return true;
   if (value === "false") return false;
   return fallback;
+}
+
+function integerList(name: string): number[] {
+  const value = process.env[name]?.trim();
+  if (!value) return [];
+  return value.split(",").map((item) => Number(item.trim())).filter(Number.isSafeInteger);
 }

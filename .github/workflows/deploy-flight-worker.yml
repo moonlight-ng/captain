@@ -1,0 +1,30 @@
+name: Deploy Flight Worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/flight-worker/**
+      - packages/flight-domain/**
+      - packages/flight-store/**
+      - packages/observability/**
+      - packages/provider-duffel/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/deploy-flight-worker.yml
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-flight-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy . --config apps/flight-worker/fly.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_FLIGHT_WORKER }}

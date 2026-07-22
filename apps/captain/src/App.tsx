@@ -113,8 +113,8 @@ export function App() {
       }
       if (navigate) {
         const path = settingsTarget
-          ? `/agents/${key}?settings=${settingsTarget === "menu" ? "1" : settingsTarget}`
-          : `/agents/${key}`;
+          ? `/trips/${key}?settings=${settingsTarget === "menu" ? "1" : settingsTarget}`
+          : `/trips/${key}`;
         window.history.pushState({}, "", path);
       }
     } catch (cause) {
@@ -356,7 +356,7 @@ function HomeScreen(props: {
       {props.agents.length > 0 && <div className="home-atmosphere" aria-hidden="true" />}
       <div className="home-content live-home-content">
         <div className="home-intro">
-          <h1>Flight Agents</h1>
+          <h1>Your Trips</h1>
           <button className="primary-pill" disabled={props.busy} onClick={props.onStart}>Start a brief</button>
         </div>
         <div className="agent-card-list" aria-label="Trips">
@@ -405,7 +405,7 @@ function BriefScreen(props: {
       </header>
       <div className="scroll-content structured-brief">
         <div className="brief-heading fade-up">
-          <h2>Where should your agent look?</h2>
+          <h2>Where would you like to go?</h2>
           <p>Add airports and travel dates.</p>
         </div>
         <FormSection label="Route">
@@ -482,7 +482,7 @@ function ReviewScreen(props: { readonly brief: FlightAgentBrief; readonly busy: 
     <section className="screen column-screen" data-screen="review">
       <header className="simple-header"><IconButton label="Back to brief" onClick={props.onBack}><ChevronLeftIcon /></IconButton><strong>Review brief</strong></header>
       <div className="scroll-content review-content">
-        <div className="review-intro fade-up"><SectionLabel>Your trip</SectionLabel><h2>Ready to start your agent?</h2><p>{briefSubtitle(brief)}. {brief.tripType === "round_trip" ? `${brief.stayNights?.preferred ?? 0} nights` : "One way"}, {cabinLabel(brief.cabin).toLowerCase()}.</p></div>
+        <div className="review-intro fade-up"><SectionLabel>Your trip</SectionLabel><h2>Ready to start tracking?</h2><p>{briefSubtitle(brief)}. {brief.tripType === "round_trip" ? `${brief.stayNights?.preferred ?? 0} nights` : "One way"}, {cabinLabel(brief.cabin).toLowerCase()}.</p></div>
         <div className="review-list">
           <ReviewRow label="Route" value={`${brief.originAirports.join("/")} → ${brief.destinationAirports.join("/")}`} />
           <ReviewRow label="Dates" value={brief.departureWindow.start === brief.departureWindow.end ? formatDate(brief.departureWindow.start) : `${formatDate(brief.departureWindow.start)}–${formatDate(brief.departureWindow.end)}`} />
@@ -491,15 +491,15 @@ function ReviewScreen(props: { readonly brief: FlightAgentBrief; readonly busy: 
           <ReviewRow label="Stops" value={brief.maxStops === 0 ? "Direct only" : `Up to ${brief.maxStops} stop${brief.maxStops === 1 ? "" : "s"}`} />
           <ReviewRow label="Budget" value={brief.maximumPrice ? `${brief.currency} ${brief.maximumPrice}` : "Open"} />
         </div>
-        <p className="quiet-copy">The agent searches immediately, then every six hours until you pause it.</p>
+        <p className="quiet-copy">Captain searches immediately, then every six hours until you pause the Trip.</p>
       </div>
-      <footer className="single-action-footer"><button className="primary-action" disabled={props.busy} onClick={props.onStart}>Start agent</button></footer>
+      <footer className="single-action-footer"><button className="primary-action" disabled={props.busy} onClick={props.onStart}>Start Trip</button></footer>
     </section>
   );
 }
 
 function StartingScreen({ stage }: { readonly stage: number }) {
-  return <section className="screen starting-screen" data-screen="starting" aria-live="polite"><div className="agent-orbit" aria-hidden="true"><span /><i /></div><div className="starting-copy" key={stage}><p>Starting your agent</p><h2>{STARTUP_STAGES[stage] ?? STARTUP_STAGES[0]}</h2></div><div className="stage-dots" aria-hidden="true">{STARTUP_STAGES.map((_, index) => <span className={index <= stage ? "active" : ""} key={index} />)}</div></section>;
+  return <section className="screen starting-screen" data-screen="starting" aria-live="polite"><div className="agent-orbit" aria-hidden="true"><span /><i /></div><div className="starting-copy" key={stage}><p>Starting your Trip</p><h2>{STARTUP_STAGES[stage] ?? STARTUP_STAGES[0]}</h2></div><div className="stage-dots" aria-hidden="true">{STARTUP_STAGES.map((_, index) => <span className={index <= stage ? "active" : ""} key={index} />)}</div></section>;
 }
 
 function WorkspaceScreen(props: {
@@ -528,7 +528,7 @@ function WorkspaceScreen(props: {
         {props.tab === "Flights" ? (
           <section className="saved-view">
             {workspace.reviewFlights.length === 0 ? (
-              <div className="empty-state"><div className="empty-mark" aria-hidden="true"><PlaneIcon /></div><h2>No tracked flights yet</h2><p>Your agent will add flights here for review.</p><button className="primary-pill" onClick={props.onBrowse}>Browse flights</button></div>
+              <div className="empty-state"><div className="empty-mark" aria-hidden="true"><PlaneIcon /></div><h2>No tracked flights yet</h2><p>Captain will add flights here for review.</p><button className="primary-pill" onClick={props.onBrowse}>Browse flights</button></div>
             ) : (
               <div className="flight-list">{workspace.reviewFlights.map((flight) => <FlightCard key={flight.id} flight={flight} onOpen={() => props.onOpenFlight(flight)} action={<button className="card-icon-action" aria-label="Remove from review" disabled={props.busy} onClick={(event) => { event.stopPropagation(); props.onDismiss(flight); }}><CloseIcon /></button>} />)}</div>
             )}
@@ -538,7 +538,7 @@ function WorkspaceScreen(props: {
             <div className="browse-toolbar"><button className={`sort-filter-button ${activeFilters ? "active" : ""}`} onClick={props.onFilters}><span className="sort-filter-title"><FilterIcon /><strong>Sort &amp; filter</strong></span><span className="sort-filter-summary"><span>{sortLabel(workspace.agent.browsePreferences.sort)}</span>{activeFilters > 0 && <b>{activeFilters}</b>}<ChevronRightIcon /></span></button></div>
             {activeFilters > 0 && <div className="active-filter-row" aria-label="Active filters">{filterChips(workspace.agent.browsePreferences).map((chip) => <span key={chip}>{chip}</span>)}<button disabled={props.busy} onClick={props.onClearFilters}>Clear all</button></div>}
             {flights.length === 0 ? (
-              <div className="empty-state compact"><div className="empty-mark" aria-hidden="true"><SearchIcon /></div><h2>{workspace.agent.latestCheck?.status === "failed" ? "Fares unavailable" : workspace.browseFlights.length === 0 ? "Search in progress" : "No matches"}</h2><p>{workspace.agent.latestCheck?.status === "failed" ? "Your agent will retry automatically." : workspace.browseFlights.length === 0 ? "Your agent is building the first set of options." : "Adjust the current filters to see more flights."}</p></div>
+              <div className="empty-state compact"><div className="empty-mark" aria-hidden="true"><SearchIcon /></div><h2>{workspace.agent.latestCheck?.status === "failed" ? "Fares unavailable" : workspace.browseFlights.length === 0 ? "Search in progress" : "No matches"}</h2><p>{workspace.agent.latestCheck?.status === "failed" ? "Captain will retry automatically." : workspace.browseFlights.length === 0 ? "Captain is building the first set of options." : "Adjust the current filters to see more flights."}</p></div>
             ) : (
               <div className="flight-list">{flights.map((flight) => <FlightCard key={flight.id} flight={flight} onOpen={() => props.onOpenFlight(flight)} action={flight.reviewState === "promoted" || flight.reviewState === "retained" ? <span className="review-badge"><i />Tracking</span> : <button className="card-icon-action" aria-label={`Track ${flight.marketingAirline} flight`} disabled={props.busy} onClick={(event) => { event.stopPropagation(); props.onRetain(flight); }}><TrackIcon /></button>} />)}</div>
             )}
@@ -592,7 +592,7 @@ function SettingsMenu(props: { readonly workspace: Workspace; readonly busy: boo
   return (
     <div className="settings-index">
       <section className="settings-status">
-        <div className="settings-status-line"><span><i className={`status-dot ${agent.status === "paused" ? "paused" : "active"}`} /><strong>{agent.status === "paused" ? "Agent paused" : check?.status === "running" ? "Checking flights" : "Agent active"}</strong></span><button className="switch-control" role="switch" aria-label="Agent active" aria-checked={agent.status !== "paused"} disabled={props.busy} onClick={props.onPause}><i /></button></div>
+        <div className="settings-status-line"><span><i className={`status-dot ${agent.status === "paused" ? "paused" : "active"}`} /><strong>{agent.status === "paused" ? "Trip paused" : check?.status === "running" ? "Checking flights" : "Trip active"}</strong></span><button className="switch-control" role="switch" aria-label="Trip active" aria-checked={agent.status !== "paused"} disabled={props.busy} onClick={props.onPause}><i /></button></div>
         <button className="check-now-action" disabled={props.busy || agent.status === "paused" || check?.status === "running"} onClick={props.onRun}>{check?.status === "running" ? "Checking now…" : "Check now"}</button>
       </section>
       <div className="brief-detail-card settings-search-summary">
@@ -601,7 +601,7 @@ function SettingsMenu(props: { readonly workspace: Workspace; readonly busy: boo
         <DetailRow label="Sources" value={workspaceSourcesLabel(props.workspace)} />
       </div>
       <SectionLabel>Automation</SectionLabel>
-      <SettingChoice title="Search frequency" detail="How often the agent refreshes fares."><div className="cadence-options">{([1, 6, 12, 24] as CadenceHours[]).map((value) => <button className={agent.cadenceHours === value ? "selected" : ""} aria-pressed={agent.cadenceHours === value} disabled={props.busy} key={value} onClick={() => props.onCadence(value)}>{value}h</button>)}</div></SettingChoice>
+      <SettingChoice title="Search frequency" detail="How often Captain refreshes fares for this Trip."><div className="cadence-options">{([1, 6, 12, 24] as CadenceHours[]).map((value) => <button className={agent.cadenceHours === value ? "selected" : ""} aria-pressed={agent.cadenceHours === value} disabled={props.busy} key={value} onClick={() => props.onCadence(value)}>{value}h</button>)}</div></SettingChoice>
       <SettingChoice title="Track selected flights" detail="Default tracking period after you save a flight."><div className="tracking-options">{([7, 14, 30, null] as TrackingWindowDays[]).map((value) => <button className={tracking === value ? "selected" : ""} aria-pressed={tracking === value} disabled={props.busy} key={value ?? "trip"} onClick={() => props.onTrackingWindow(value)}>{value === null ? "Until trip" : `${value}d`}</button>)}</div></SettingChoice>
       <SectionLabel>Trip</SectionLabel>
       <SettingsLink icon={<BriefIcon />} title="Brief" detail={briefSubtitle(agent.brief)} onClick={() => props.onPanel("brief")} />
@@ -616,7 +616,7 @@ function BriefSettings(props: { readonly brief: FlightAgentBrief; readonly onEdi
 }
 
 function ActivitySettings({ workspace }: { readonly workspace: Workspace }) {
-  return <div className="settings-section"><SectionLabel>Recorded events</SectionLabel><div className="activity-list">{workspace.activity.map((item) => <article key={item.id}><i className={item.kind.includes("failed") ? "error" : ""} /><span><strong>{item.message}</strong><small>{formatTimestamp(item.createdAt)}</small></span></article>)}</div>{workspace.activity.length === 0 && <p className="quiet-copy">Activity appears here as the agent works.</p>}</div>;
+  return <div className="settings-section"><SectionLabel>Recorded events</SectionLabel><div className="activity-list">{workspace.activity.map((item) => <article key={item.id}><i className={item.kind.includes("failed") ? "error" : ""} /><span><strong>{item.message}</strong><small>{formatTimestamp(item.createdAt)}</small></span></article>)}</div>{workspace.activity.length === 0 && <p className="quiet-copy">Activity appears here as Captain works.</p>}</div>;
 }
 
 function FlightDetailScreen(props: { readonly details: FlightDetails; readonly busy: boolean; readonly onBack: () => void; readonly onRetain: () => void; readonly onDismiss: () => void }) {
@@ -672,7 +672,7 @@ function FilterSheet(props: { readonly open: boolean; readonly preferences: Brow
   return <div className="sheet-backdrop" data-open={props.open} aria-hidden={!props.open} role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) props.onClose(); }}><section className="bottom-sheet filter-sheet" role="dialog" aria-modal={props.open} aria-label="Sort and filter flights"><header><span><strong>Sort &amp; filter</strong><small>{matches} matching flight{matches === 1 ? "" : "s"}</small></span><IconButton label="Close filters" onClick={props.onClose}><CloseIcon /></IconButton></header><div className="sheet-scroll"><FilterGroup label="Sort"><select value={props.preferences.sort} onInput={(event) => update("sort", event.currentTarget.value as BrowsePreferences["sort"])}><option value="recommended">Recommended</option><option value="price">Lowest price</option><option value="duration">Shortest duration</option><option value="departure">Earliest departure</option></select></FilterGroup><FilterGroup label="Stops"><div className="filter-choice-row">{[0, 1, 2].map((stops) => <button className={props.preferences.stops.includes(stops) ? "selected" : ""} key={stops} onClick={() => update("stops", toggle(props.preferences.stops, stops))}>{stops === 0 ? "Direct" : `${stops} stop${stops === 1 ? "" : "s"}`}</button>)}</div></FilterGroup>{airlines.length > 0 && <FilterGroup label="Airlines"><div className="filter-choice-row wrap">{airlines.map((airline) => <button className={props.preferences.airlines.includes(airline) ? "selected" : ""} key={airline} onClick={() => update("airlines", toggle(props.preferences.airlines, airline))}>{airline}</button>)}</div></FilterGroup>}{airports.length > 0 && <FilterGroup label="Airports"><div className="filter-choice-row wrap">{airports.map((airport) => <button className={props.preferences.airports.includes(airport) ? "selected" : ""} key={airport} onClick={() => update("airports", toggle(props.preferences.airports, airport))}>{airport}</button>)}</div></FilterGroup>}{cabins.length > 0 && <FilterGroup label="Cabin"><div className="filter-choice-row wrap">{cabins.map((cabin) => <button className={props.preferences.cabins.includes(cabin) ? "selected" : ""} key={cabin} onClick={() => update("cabins", toggle(props.preferences.cabins, cabin))}>{cabinLabel(cabin)}</button>)}</div></FilterGroup>}<FilterGroup label="Departure"><div className="filter-choice-row">{(["morning", "afternoon", "evening"] as const).map((period) => <button className={props.preferences.departurePeriods.includes(period) ? "selected" : ""} key={period} onClick={() => update("departurePeriods", toggle(props.preferences.departurePeriods, period))}>{period[0]!.toUpperCase() + period.slice(1)}</button>)}</div></FilterGroup><FilterGroup label="Maximum price"><input className="sheet-input" type="number" min={1} value={props.preferences.maximumPrice ?? ""} placeholder="No maximum" onChange={(event) => update("maximumPrice", event.target.value ? Number(event.target.value) : null)} /></FilterGroup></div><footer><button className="secondary-action" onClick={() => props.onPreferences(EMPTY_PREFERENCES)}>Reset</button><button className="primary-action" onClick={props.onApply}>Show {matches}</button></footer></section></div>;
 }
 
-function LoadingScreen() { return <section className="screen starting-screen"><div className="agent-orbit small" aria-hidden="true"><span /><i /></div><div className="starting-copy"><p>Flight Agent</p><h2>Opening workspace</h2></div></section>; }
+function LoadingScreen() { return <section className="screen starting-screen"><div className="agent-orbit small" aria-hidden="true"><span /><i /></div><div className="starting-copy"><p>Captain</p><h2>Opening Trip</h2></div></section>; }
 function ErrorNotice(props: { readonly message: string; readonly onClose: () => void }) {
   const [open, setOpen] = useState(true);
   useEffect(() => setOpen(true), [props.message]);
@@ -725,7 +725,7 @@ function workspaceTitle(brief: FlightAgentBrief): string { return `${brief.origi
 function latestActivitySummary(workspace: Workspace): string { const latest = workspace.activity[0]; return latest ? `${latest.message} · ${formatTimestamp(latest.createdAt)}` : "No activity yet"; }
 function trackingButtonLabel(flight: FlightItem): string { return flight.trackedUntilAt ? `Tracking until ${formatDate(flight.trackedUntilAt)}` : "Tracking"; }
 function errorMessage(cause: unknown): string { return cause instanceof Error ? cause.message : "Something went wrong"; }
-function agentKeyFromPath(): string | null { const match = /^\/agents\/([^/]+)$/.exec(window.location.pathname); return match?.[1] ? decodeURIComponent(match[1]) : null; }
+function agentKeyFromPath(): string | null { const match = /^\/(?:trips|agents)\/([^/]+)$/.exec(window.location.pathname); return match?.[1] ? decodeURIComponent(match[1]) : null; }
 function settingsTargetFromLocation(): SettingsPanel | null {
   const value = new URLSearchParams(window.location.search).get("settings");
   if (value === null) return null;

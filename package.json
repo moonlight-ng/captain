@@ -9,9 +9,10 @@
   "packageManager": "pnpm@11.6.0",
   "scripts": {
     "build": "pnpm -r --if-present build",
-    "check": "pnpm test && pnpm typecheck && pnpm build",
+    "check": "pnpm check:boundaries && pnpm test && pnpm typecheck && pnpm build",
+    "check:boundaries": "node scripts/check-dependency-boundaries.mjs",
+    "eve:info": "pnpm --filter @agents/pilot eve:info && pnpm --filter @agents/captain eve:info",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck"
   }
 }
-

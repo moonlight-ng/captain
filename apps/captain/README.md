@@ -1,80 +1,70 @@
-# Flight Agent
+# Captain
 
-A private, independent Eve service for live flight exploration. Each trip is a
-durable Flight Agent that searches Duffel and Captain's isolated Codex web
-research in parallel, builds a transparent working set, tracks source-specific
-price observations against canonical segment-and-time itinerary identities,
-and promotes notable options for review.
+Captain is the public, Telegram-first travel agent. A traveller creates a
+durable **Trip**; Captain tracks its flight combinations, discovers the
+strongest current option, and sends useful updates when the first results
+arrive, a price drops materially, a better itinerary appears, or tracking
+needs attention.
 
-Captain no longer owns Duffel. It starts and retrieves Flight Agents through a
-signed bridge. Every check publishes fast Duffel results first, then merges
-verified Codex/Skyscanner offers when the slower research run completes.
-Conversation remains external to this interface.
+There is deliberately no checkout or booking flow in this release. Captain
+does not collect payment, passport, identity-document, or complete passenger
+details in Telegram.
+
+## Runtime split
+
+- This app owns Telegram conversations, tenant authorization, Trip APIs, the
+  compatibility UI, and the new `captain` database schema.
+- `../flight-worker` is the only new runtime that schedules or executes Trip
+  searches. Health and readiness endpoints never run searches.
+- `../../packages/flight-domain` normalizes Trips and hashes provider requests.
+- `../../packages/flight-store` leases shared runs, stores price history,
+  evaluates each Trip separately, and queues idempotent notifications.
+- The legacy `/internal/v1/flight-agents` API remains available for one
+  compatibility release. Pilot now uses `/internal/v1/trips`.
+
+Each Telegram identity resolves from its 64-bit Telegram user ID. Production
+defaults to an allowlisted beta. Every Trip query and mutation is scoped to the
+authenticated Captain user; public API calls use a signed short-lived session
+token, while Pilot uses timestamped HMAC requests with replay protection and
+idempotency keys.
 
 ## Local development
 
-Requires Node.js 24+ and pnpm 11.
+From the monorepo root:
 
 ```sh
-pnpm install
-pnpm dev:api     # local API on 127.0.0.1:8080
-pnpm dev:agent   # optional full Eve dev runtime
-pnpm dev         # Vite UI on 127.0.0.1:4178
+corepack pnpm install
+pnpm --filter @agents/captain dev:agent
+pnpm --filter @agents/flight-worker start
 ```
 
-Vite proxies `/v1` to Eve. Without `DATABASE_URL`, local Eve uses an in-memory
-server store. Without `DUFFEL_ACCESS_TOKEN`, checks fail visibly and schedule a
-retry; the rest of the workspace remains operable. Copy `.env.example` for the
-full local bridge and provider configuration.
+Without `DATABASE_URL`, Captain uses an in-memory platform store. The worker
+requires PostgreSQL because it is an independent process. Copy `.env.example`
+and set a separate Captain database, Telegram bot token and webhook secret,
+Duffel token, signed bridge secrets, and a long random session secret.
 
-## Production
-
-The Fly app runs Vite and Eve from one origin. Configure these secrets before
-deploying:
-
-- `DATABASE_URL`
-- `DUFFEL_ACCESS_TOKEN`
-- `FLIGHT_AGENT_BASIC_PASSWORD`
-- `CAPTAIN_TO_FLIGHT_AGENT_SECRET`
-- `FLIGHT_AGENT_TO_CAPTAIN_SECRET`
-- the AI gateway variables required by Eve
-
-Owner UI/API authentication defaults to enabled in production. Set
-`FLIGHT_AGENT_OWNER_AUTH_ENABLED=false` only when intentionally allowing public
-read and write access; the signed Captain bridge remains separately protected.
-
-The Fly machine scales to zero with `auto_stop_machines="stop"` and wakes on
-HTTP requests. There is no cron wake-up. Due checks are attempted
-opportunistically by readiness traffic while the process is already awake.
-`POST /internal/v1/flight-agents/:agentKey/checks` requires timestamped HMAC
-authentication and an idempotency key. The existing `fare` and
-`fare_and_research` modes remain wire-compatible; both now execute the complete
-multi-source observation check.
-
-`pnpm db:migrate` owns the dedicated `flight_agent` schema. After deploying the
-schema and before switching Captain redirects, run `pnpm db:import-captain` once
-with the shared database URL. The importer is idempotent and preserves legacy
-selection app keys. Normalized checks, activities, research runs, and price
-observations are append-only; `agent_states` remains the operational snapshot
-during this rollout.
-
-Production uses a dedicated `flight_agent_runtime` Postgres login for both
-`DATABASE_URL` and `WORKFLOW_POSTGRES_URL`. The Fly release command verifies the
-domain migration ledger before a machine starts. Apply domain migrations and
-bootstrap the isolated `flight_agent_eve` Workflow namespace separately with an
-administrator connection whenever their schemas change; the runtime login does
-not receive database-level creation privileges.
-
-## Commands
+Apply domain migrations from this directory:
 
 ```sh
-pnpm typecheck
-pnpm test
-pnpm build
-pnpm eve:info
 pnpm db:migrate
-pnpm db:import-captain
 ```
 
-The original generated visual prototype remains under
-`prototype/voice-first-flight-exploration/` and is not part of the runtime.
+Migration `006_captain_platform.sql` creates the tenant, Trip, Watch, shared
+search, offer, history, notification, and audit tables. The migration command
+also builds SearchSpecs for imported legacy Trips and refuses to finish unless
+legacy Trip and price-history counts reconcile.
+
+## Production defaults
+
+- Maximum three active Trips per traveller.
+- Maximum 24 provider combinations per Trip.
+- Six-hour default tracking cadence; one-hour minimum.
+- Worker orchestration every 60 seconds.
+- Shared-result freshness of 15 minutes.
+- 180-second leases, three attempts, four globally active runs, and one Duffel
+  request at a time per worker.
+- Quiet hours from 22:00 to 07:00 in the traveller’s timezone for non-critical
+  notifications.
+
+The existing Fly app name `opemipo-flight-agent` is retained during migration
+to avoid a risky production identity change. The product name is Captain.

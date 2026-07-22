@@ -1,0 +1,159 @@
+import { z } from "zod";
+
+export const MAX_ACTIVE_TRIPS_PER_USER = 3;
+export const MAX_SEARCH_COMBINATIONS = 24;
+export const DEFAULT_CADENCE_HOURS = 6;
+export const MINIMUM_CADENCE_HOURS = 1;
+
+const iataCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/);
+const airlineCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,3}$/);
+
+export const travellersSchema = z.object({
+  adults: z.number().int().min(1).max(9),
+  childrenAges: z.array(z.number().int().min(2).max(17)).max(8).default([]),
+  infants: z.number().int().min(0).max(4).default(0)
+}).strict().superRefine((value, context) => {
+  if (value.infants > value.adults) {
+    context.addIssue({ code: "custom", path: ["infants"], message: "Each infant must travel with an adult" });
+  }
+  if (value.adults + value.childrenAges.length + value.infants > 9) {
+    context.addIssue({ code: "custom", message: "A Trip supports at most nine travellers" });
+  }
+});
+
+const stayNightsSchema = z.object({
+  minimum: z.number().int().min(1).max(30),
+  preferred: z.number().int().min(1).max(30),
+  maximum: z.number().int().min(1).max(30)
+}).strict().superRefine((value, context) => {
+  if (value.minimum > value.preferred || value.preferred > value.maximum) {
+    context.addIssue({ code: "custom", message: "Stay length must be ordered minimum, preferred, maximum" });
+  }
+});
+
+export const tripBriefSchema = z.object({
+  originAirports: z.array(iataCodeSchema).min(1).max(4),
+  destinationAirports: z.array(iataCodeSchema).min(1).max(6),
+  tripType: z.enum(["one_way", "round_trip"]),
+  departureWindow: z.object({ start: z.iso.date(), end: z.iso.date() }).strict(),
+  stayNights: stayNightsSchema.nullable(),
+  travellers: travellersSchema,
+  cabin: z.enum(["economy", "premium_economy", "business", "first"]),
+  maxStops: z.number().int().min(0).max(2),
+  currency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/),
+  maximumPrice: z.number().positive().nullable().default(null),
+  preferredAirlines: z.array(airlineCodeSchema).max(12).default([]),
+  excludedAirlines: z.array(airlineCodeSchema).max(12).default([]),
+  context: z.string().trim().max(1_000).default("")
+}).strict().superRefine((brief, context) => {
+  const start = Date.parse(`${brief.departureWindow.start}T00:00:00Z`);
+  const end = Date.parse(`${brief.departureWindow.end}T00:00:00Z`);
+  if (end < start) {
+    context.addIssue({ code: "custom", path: ["departureWindow", "end"], message: "Departure window end must not precede its start" });
+  }
+  if ((end - start) / 86_400_000 > 30) {
+    context.addIssue({ code: "custom", path: ["departureWindow"], message: "Departure windows are limited to 31 days" });
+  }
+  if (brief.tripType === "round_trip" && brief.stayNights === null) {
+    context.addIssue({ code: "custom", path: ["stayNights"], message: "Round trips require a stay length" });
+  }
+  if (brief.tripType === "one_way" && brief.stayNights !== null) {
+    context.addIssue({ code: "custom", path: ["stayNights"], message: "One-way trips cannot include a stay length" });
+  }
+  if (brief.originAirports.some((airport) => brief.destinationAirports.includes(airport))) {
+    context.addIssue({ code: "custom", path: ["destinationAirports"], message: "Origin and destination airports must differ" });
+  }
+});
+
+export type TripBrief = z.infer<typeof tripBriefSchema>;
+
+export const tripStatusSchema = z.enum([
+  "draft",
+  "tracking",
+  "recommended",
+  "paused",
+  "cancelled",
+  "completed"
+]);
+export type TripStatus = z.infer<typeof tripStatusSchema>;
+
+export const createTripSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+  brief: tripBriefSchema,
+  cadenceHours: z.number().int().min(MINIMUM_CADENCE_HOURS).max(24).default(DEFAULT_CADENCE_HOURS)
+}).strict();
+export type CreateTripInput = z.infer<typeof createTripSchema>;
+
+export const updateTripSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  title: z.string().trim().min(1).max(120).optional(),
+  brief: tripBriefSchema.optional()
+}).strict().refine((value) => value.title !== undefined || value.brief !== undefined, {
+  message: "At least one Trip field must be updated"
+});
+export type UpdateTripInput = z.infer<typeof updateTripSchema>;
+
+export const tripActionSchema = z.object({
+  type: z.enum(["pause", "resume", "refresh", "cancel", "complete"]),
+  expectedVersion: z.number().int().positive()
+}).strict();
+export type TripAction = z.infer<typeof tripActionSchema>;
+
+export type Trip = {
+  id: string;
+  userId: string;
+  legacyAgentKey: string | null;
+  title: string;
+  status: TripStatus;
+  version: number;
+  brief: TripBrief;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Watch = {
+  id: string;
+  tripId: string;
+  status: "active" | "paused" | "completed";
+  cadenceHours: number;
+  nextCheckAt: string | null;
+  lastCheckAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OfferSnapshot = {
+  id: string;
+  searchRunId: string;
+  searchSpecId: string;
+  itineraryKey: string;
+  provider: "duffel";
+  providerOfferId: string;
+  providerSearchId: string;
+  price: number;
+  currency: string;
+  expiresAt: string | null;
+  observedAt: string;
+  snapshot: Record<string, unknown>;
+};
+
+export class TripNotFoundError extends Error {
+  constructor() {
+    super("Trip not found");
+    this.name = "TripNotFoundError";
+  }
+}
+
+export class TripVersionConflictError extends Error {
+  constructor(readonly currentVersion: number) {
+    super("Trip version is stale");
+    this.name = "TripVersionConflictError";
+  }
+}
+
+export class TripLimitError extends Error {
+  constructor() {
+    super(`A user may have at most ${MAX_ACTIVE_TRIPS_PER_USER} active Trips`);
+    this.name = "TripLimitError";
+  }
+}

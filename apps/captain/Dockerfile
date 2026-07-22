@@ -4,37 +4,34 @@ WORKDIR /app
 ENV CI=true
 RUN corepack enable
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY patches ./patches
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY apps/pilot/package.json ./apps/pilot/package.json
+COPY apps/captain/package.json ./apps/captain/package.json
+COPY apps/flight-worker/package.json ./apps/flight-worker/package.json
+COPY apps/captain/patches ./apps/captain/patches
+COPY packages/conversation-core/package.json ./packages/conversation-core/package.json
+COPY packages/flight-domain/package.json ./packages/flight-domain/package.json
+COPY packages/flight-store/package.json ./packages/flight-store/package.json
+COPY packages/observability/package.json ./packages/observability/package.json
+COPY packages/provider-duffel/package.json ./packages/provider-duffel/package.json
+COPY packages/telegram-core/package.json ./packages/telegram-core/package.json
 RUN pnpm install --frozen-lockfile
 
-COPY tsconfig*.json vite.config.ts index.html ./
-COPY src ./src
-COPY agent ./agent
-COPY services ./services
-COPY scripts ./scripts
-COPY migrations ./migrations
+COPY apps/captain ./apps/captain
+COPY packages ./packages
+WORKDIR /app/apps/captain
 RUN pnpm build
-RUN pnpm prune --prod
 
 FROM node:24-bookworm-slim AS runtime
 
-WORKDIR /app
+WORKDIR /app/apps/captain
 ENV NODE_ENV=production
-ENV PATH="/app/node_modules/.bin:${PATH}"
+ENV PATH="/app/apps/captain/node_modules/.bin:/app/node_modules/.bin:${PATH}"
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/tsconfig*.json ./
-COPY --from=build /app/agent ./agent
-COPY --from=build /app/services ./services
-COPY --from=build /app/scripts ./scripts
-COPY --from=build /app/migrations ./migrations
-COPY --from=build /app/dist ./dist
-COPY --from=build /app/.eve ./.eve
-COPY --from=build /app/.output ./.output
-
+COPY --from=build /app/node_modules /app/node_modules
+COPY --from=build /app/apps/captain /app/apps/captain
+COPY --from=build /app/packages /app/packages
 CMD ["eve", "start", "--host", "0.0.0.0", "--port", "8080"]

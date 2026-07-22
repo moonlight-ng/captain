@@ -1,0 +1,31 @@
+name: Deploy Captain
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/captain/**
+      - packages/conversation-core/**
+      - packages/flight-domain/**
+      - packages/flight-store/**
+      - packages/observability/**
+      - packages/telegram-core/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/deploy-captain.yml
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-captain
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy . --config apps/captain/fly.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_CAPTAIN }}
