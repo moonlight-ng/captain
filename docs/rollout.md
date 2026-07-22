@@ -15,7 +15,8 @@ cp apps/flight-worker/.env.example apps/flight-worker/.env
 
 Put the new bot token in `TELEGRAM_BOT_TOKEN` in both files. Put the Captain
 Supabase Postgres connection string—not the project URL, anon key, or service
-role key—in `DATABASE_URL` in both files. Captain also needs a random
+role key—in `DATABASE_URL` in both files. Captain also needs
+`WORKFLOW_POSTGRES_URL` pointed at the Captain database, plus a random
 `TELEGRAM_WEBHOOK_SECRET_TOKEN` and `CAPTAIN_SESSION_SECRET`; the worker does
 not. The `.env` files are ignored by Git.
 
@@ -24,7 +25,8 @@ In production, install the same values as Fly secrets on their owning apps:
 ```sh
 fly secrets set -a opemipo-flight-agent \
   TELEGRAM_BOT_TOKEN='…' TELEGRAM_WEBHOOK_SECRET_TOKEN='…' \
-  DATABASE_URL='postgresql://…' CAPTAIN_SESSION_SECRET='…'
+  DATABASE_URL='postgresql://…' WORKFLOW_POSTGRES_URL='postgresql://…' \
+  CAPTAIN_SESSION_SECRET='…'
 
 fly secrets set -a opemipo-flight-worker \
   TELEGRAM_BOT_TOKEN='…' DATABASE_URL='postgresql://…' \

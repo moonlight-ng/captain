@@ -41,7 +41,9 @@ pnpm --filter @agents/flight-worker start
 Without `DATABASE_URL`, Captain uses an in-memory platform store. The worker
 requires PostgreSQL because it is an independent process. Copy `.env.example`
 and set a separate Captain database, Telegram bot token and webhook secret,
-Duffel token, signed bridge secrets, and a long random session secret.
+Duffel token, signed bridge secrets, and a long random session secret. Set
+`WORKFLOW_POSTGRES_URL` to Captain's database as well so its Eve conversations
+never enter Pilot's database.
 
 Register Captain's Telegram webhook after its public app URL and secrets are
 configured (or pass `--delete` to remove it without discarding pending updates):
