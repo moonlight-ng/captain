@@ -4,7 +4,7 @@
 
 `apps/pilot`, `apps/captain`, and `apps/flight-worker` are independently
 deployable. Pilot keeps its private Supabase project, secrets, prompt,
-tools, Telegram webhook, and `opemipo-pilot` Fly app. Its Markdown state uses
+tools, Telegram webhook, and `dr-pilot` Fly app. Its Markdown state uses
 the `pilot_data` volume mounted at `/data`, with memory under `/data/pilot`.
 Captain and the worker share Captain’s PostgreSQL database and public Telegram
 bot token, but run as separate processes. No app imports another app.

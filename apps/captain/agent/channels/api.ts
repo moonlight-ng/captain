@@ -43,7 +43,7 @@ const PILOT_USER_ID = "00000000-0000-4000-8000-000000000001";
 export default defineChannel({
   kindHint: "captain-api",
   cors: {
-    origin: ["http://127.0.0.1:4178", "https://opemipo-captain.fly.dev"],
+    origin: ["http://127.0.0.1:4178", "https://dr-pilot.fly.dev"],
     methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type", "Idempotency-Key"],
     maxAge: 86_400

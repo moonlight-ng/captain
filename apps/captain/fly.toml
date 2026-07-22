@@ -1,4 +1,4 @@
-app = "opemipo-flight-agent"
+app = "dr-captain"
 primary_region = "lhr"
 
 [build]
@@ -10,8 +10,8 @@ primary_region = "lhr"
 [env]
   AI_MODEL = "openai/gpt-oss-20b"
   PORT = "8080"
-  CAPTAIN_PUBLIC_URL = "https://opemipo-flight-agent.fly.dev"
-  PILOT_BASE_URL = "https://opemipo-captain.fly.dev"
+  CAPTAIN_PUBLIC_URL = "https://dr-captain.fly.dev"
+  PILOT_BASE_URL = "https://dr-pilot.fly.dev"
   CAPTAIN_BASIC_USERNAME = "captain"
   CAPTAIN_OWNER_AUTH_ENABLED = "true"
   DUFFEL_BASE_URL = "https://api.duffel.com"

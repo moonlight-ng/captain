@@ -28,7 +28,7 @@ booking, payment, or passenger-document collection.
 
 Pilot uses Captain’s signed internal Trip API. Each app now has matching
 product, deployment, configuration, logging, and runtime identifiers:
-`opemipo-pilot`/`PILOT_*` and `opemipo-captain`/`CAPTAIN_*`.
+`dr-pilot`/`PILOT_*` and `dr-captain`/`CAPTAIN_*`.
 
 ## Commands
 

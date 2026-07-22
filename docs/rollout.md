@@ -23,30 +23,30 @@ not. The `.env` files are ignored by Git.
 In production, install the same values as Fly secrets on their owning apps:
 
 ```sh
-fly secrets set -a opemipo-pilot \
+fly secrets set -a dr-pilot \
   PILOT_EVE_BASIC_PASSWORD='…' PILOT_CONCIERGE_EVENT_SECRET='…' \
   PILOT_NOTES_SEARCH_SECRET='…' PILOT_TO_CAPTAIN_SECRET='…' \
   CAPTAIN_TO_PILOT_SECRET='…'
 
-fly secrets set -a opemipo-captain \
+fly secrets set -a dr-captain \
   TELEGRAM_BOT_TOKEN='…' TELEGRAM_WEBHOOK_SECRET_TOKEN='…' \
   DATABASE_URL='postgresql://…' WORKFLOW_POSTGRES_URL='postgresql://…' \
   CAPTAIN_SESSION_SECRET='…' PILOT_TO_CAPTAIN_SECRET='…' \
   CAPTAIN_TO_PILOT_SECRET='…'
 
-fly secrets set -a opemipo-flight-worker \
+fly secrets set -a dr-flight-worker \
   TELEGRAM_BOT_TOKEN='…' DATABASE_URL='postgresql://…' \
   DUFFEL_ACCESS_TOKEN='…'
 ```
 
 Do not put the token or database password in `fly.toml`, a committed file, or
 this repository's GitHub settings as plain text. Pilot credentials belong only
-to `opemipo-pilot`; Captain and the worker never receive them.
+to `dr-pilot`; Captain and the worker never receive them.
 
 ## Sequence
 
-1. Provision the distinct `opemipo-pilot`, `opemipo-captain`, and
-   `opemipo-flight-worker` apps and their separately owned secrets.
+1. Provision the distinct `dr-pilot`, `dr-captain`, and
+   `dr-flight-worker` apps and their separately owned secrets.
 2. Point Captain and the flight worker at Captain’s separate production
    database. Run `pnpm --filter @agents/captain db:migrate`; stop if migration
    reconciliation reports different legacy Trip or price-observation counts.

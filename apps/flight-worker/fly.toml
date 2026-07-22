@@ -1,4 +1,4 @@
-app = "opemipo-flight-worker"
+app = "dr-flight-worker"
 primary_region = "lhr"
 
 [build]

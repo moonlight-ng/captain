@@ -50,10 +50,9 @@ for (const app of apps) {
   }
 }
 
-// Product identities are Pilot and Captain, while the original Fly app names
-// stay stable during migration to preserve DNS, webhooks, volumes, and rollback.
-await checkDeploymentIdentity("pilot", "opemipo-captain");
-await checkDeploymentIdentity("captain", "opemipo-flight-agent");
+// Product identities use Dancing Robots-namespaced Fly deployment identities.
+await checkDeploymentIdentity("pilot", "dr-pilot");
+await checkDeploymentIdentity("captain", "dr-captain");
 await checkEnvironmentOwnership("pilot", new Set([
   "CAPTAIN_BASE_URL",
   "CAPTAIN_TO_PILOT_SECRET"

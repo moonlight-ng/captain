@@ -77,6 +77,6 @@ preserving explicitly suspended accounts.
 - Quiet hours from 22:00 to 07:00 in the traveller’s timezone for non-critical
   notifications.
 
-Captain deploys as `opemipo-captain` and uses only `CAPTAIN_*` settings for its
+Captain deploys as `dr-captain` and uses only `CAPTAIN_*` settings for its
 own runtime. `PILOT_BASE_URL`, `PILOT_TO_CAPTAIN_SECRET`, and
 `CAPTAIN_TO_PILOT_SECRET` describe the explicit bridge to Pilot.
