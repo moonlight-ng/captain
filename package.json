@@ -1,0 +1,17 @@
+{
+  "name": "@agents/workspace",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.6.0",
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "check": "pnpm test && pnpm typecheck && pnpm build",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck"
+  }
+}
+
