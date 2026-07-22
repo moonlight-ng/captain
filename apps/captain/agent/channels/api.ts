@@ -13,7 +13,7 @@ import {
   updateTripSchema
 } from "@agents/flight-domain";
 
-import { getFlightAgentServices } from "../../services/app/services.js";
+import { getCaptainServices } from "../../services/app/services.js";
 import {
   BridgeReplayGuard,
   requestHash,
@@ -41,9 +41,9 @@ const internalDeleteSchema = z.object({
 const PILOT_USER_ID = "00000000-0000-4000-8000-000000000001";
 
 export default defineChannel({
-  kindHint: "flight-agent-api",
+  kindHint: "captain-api",
   cors: {
-    origin: ["http://127.0.0.1:4178", "https://opemipo-flight-agent.fly.dev"],
+    origin: ["http://127.0.0.1:4178", "https://opemipo-captain.fly.dev"],
     methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type", "Idempotency-Key"],
     maxAge: 86_400
@@ -92,7 +92,7 @@ type TravellerHandler = (request: Request, context: RouteContext, userId: string
 
 function traveller(handler: TravellerHandler): Handler {
   return async (request, context) => {
-    const services = await getFlightAgentServices();
+    const services = await getCaptainServices();
     const secret = services.env.captainSessionSecret;
     const authorization = request.headers.get("authorization");
     const userId = secret && authorization?.startsWith("Bearer ")
@@ -107,7 +107,7 @@ function traveller(handler: TravellerHandler): Handler {
 
 function owner(handler: Handler): Handler {
   return async (request, context) => {
-    const services = await getFlightAgentServices();
+    const services = await getCaptainServices();
     if (services.env.mode === "production" && services.env.ownerAuthEnabled && !isOwnerRequest(
       request,
       services.env.basicUsername,
@@ -115,7 +115,7 @@ function owner(handler: Handler): Handler {
     )) {
       return new Response("Authentication required", {
         status: 401,
-        headers: { "www-authenticate": 'Basic realm="Flight Agent"' }
+        headers: { "www-authenticate": 'Basic realm="Captain"' }
       });
     }
     return safely(() => handler(request, context));
@@ -124,8 +124,8 @@ function owner(handler: Handler): Handler {
 
 function internal(handler: Handler): Handler {
   return async (request, context) => {
-    const services = await getFlightAgentServices();
-    const secret = services.env.captainToFlightAgentSecret;
+    const services = await getCaptainServices();
+    const secret = services.env.pilotToCaptainSecret;
     const body = request.method === "GET" ? "" : await limitedText(request);
     const timestamp = request.headers.get("x-bridge-timestamp");
     const signature = request.headers.get("x-bridge-signature");
@@ -155,7 +155,7 @@ function internal(handler: Handler): Handler {
 
 async function readiness(): Promise<Response> {
   try {
-    const services = await getFlightAgentServices();
+    const services = await getCaptainServices();
     await services.agents.list({ limit: 1 });
     return Response.json({ status: "ready", storage: services.env.databaseUrl ? "postgres" : "memory" });
   } catch (error) {
@@ -165,7 +165,7 @@ async function readiness(): Promise<Response> {
 }
 
 async function listTrips(_request: Request, _context: RouteContext, userId: string): Promise<Response> {
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   return Response.json({ trips: await services.trips.list(userId) }, { headers: noStore() });
 }
 
@@ -190,7 +190,7 @@ async function listTripOffers(_request: Request, context: RouteContext, userId: 
 }
 
 async function listInternalTrips(): Promise<Response> {
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   return Response.json({ trips: await services.trips.list(PILOT_USER_ID) }, { headers: noStore() });
 }
 
@@ -200,7 +200,7 @@ async function createInternalTrip(request: Request): Promise<Response> {
 
 async function getInternalTrip(_request: Request, context: RouteContext): Promise<Response> {
   const tripReference = requiredParam(context, "tripId");
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const trip = await resolvePilotTrip(tripReference);
   if (!trip) throw new TripNotFoundError();
   return Response.json({
@@ -229,14 +229,14 @@ async function listInternalTripOffers(_request: Request, context: RouteContext):
 }
 
 async function resolvePilotTrip(reference: string) {
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   return await services.trips.get(PILOT_USER_ID, reference)
     ?? await services.platformStore.getTripByLegacyKey(PILOT_USER_ID, reference);
 }
 
 async function createTripForUser(request: Request, userId: string, scope: string): Promise<Response> {
   const text = await limitedText(request);
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const cached = await idempotentResponse(request, scope, text, services.store);
   if (cached) return cached;
   const result = await services.trips.create(userId, createTripSchema.parse(parseJson(text)));
@@ -244,7 +244,7 @@ async function createTripForUser(request: Request, userId: string, scope: string
 }
 
 async function getTripForUser(userId: string, tripId: string): Promise<Response> {
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const trip = await services.trips.get(userId, tripId);
   if (!trip) throw new TripNotFoundError();
   return Response.json({ trip }, { headers: noStore() });
@@ -252,7 +252,7 @@ async function getTripForUser(userId: string, tripId: string): Promise<Response>
 
 async function updateTripForUser(request: Request, userId: string, tripId: string): Promise<Response> {
   const text = await limitedText(request);
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const scope = `trip:update:${userId}:${tripId}`;
   const cached = await idempotentResponse(request, scope, text, services.store);
   if (cached) return cached;
@@ -262,7 +262,7 @@ async function updateTripForUser(request: Request, userId: string, tripId: strin
 
 async function tripActionForUser(request: Request, userId: string, tripId: string): Promise<Response> {
   const text = await limitedText(request);
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const scope = `trip:action:${userId}:${tripId}`;
   const cached = await idempotentResponse(request, scope, text, services.store);
   if (cached) return cached;
@@ -271,14 +271,14 @@ async function tripActionForUser(request: Request, userId: string, tripId: strin
 }
 
 async function offersForUser(userId: string, tripId: string): Promise<Response> {
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   if (!await services.trips.get(userId, tripId)) throw new TripNotFoundError();
   return Response.json({ offers: await services.trips.offers(userId, tripId) }, { headers: noStore() });
 }
 
 async function createAgent(request: Request): Promise<Response> {
   const text = await limitedText(request);
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const cached = await idempotentResponse(request, "create", text, services.store);
   if (cached) return cached;
   const input = createFlightAgentSchema.parse(parseJson(text));
@@ -291,13 +291,13 @@ async function createAgent(request: Request): Promise<Response> {
 
 async function listAgents(request: Request): Promise<Response> {
   const url = new URL(request.url);
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const result = await services.agents.list(listOptions(url));
   return Response.json(result, { headers: noStore() });
 }
 
 async function getAgent(_request: Request, context: RouteContext): Promise<Response> {
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const workspace = await services.agents.get(requiredParam(context, "agentKey"));
   if (!workspace) throw new NotFoundError("Flight agent not found");
   return Response.json({ workspace }, { headers: noStore() });
@@ -305,7 +305,7 @@ async function getAgent(_request: Request, context: RouteContext): Promise<Respo
 
 async function createInternalAgent(request: Request): Promise<Response> {
   const text = await limitedText(request);
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const cached = await idempotentResponse(request, "internal:create", text, services.store);
   if (cached) return cached;
   const input = createFlightAgentSchema.parse(parseJson(text));
@@ -318,7 +318,7 @@ async function createInternalAgent(request: Request): Promise<Response> {
 }
 
 async function getInternalAgent(_request: Request, context: RouteContext): Promise<Response> {
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const workspace = await services.agents.get(requiredParam(context, "agentKey"));
   if (!workspace) throw new NotFoundError("Flight agent not found");
   return Response.json({
@@ -328,7 +328,7 @@ async function getInternalAgent(_request: Request, context: RouteContext): Promi
 
 async function listInternalAgents(request: Request): Promise<Response> {
   const url = new URL(request.url);
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const page = await services.agents.list(listOptions(url));
   const agents = (await Promise.all(page.agents.map((agent) => services.agents.get(agent.key))))
     .filter((workspace): workspace is FlightAgentWorkspace => workspace !== null)
@@ -342,7 +342,7 @@ async function createInternalCheck(request: Request, context: RouteContext): Pro
   if (!request.headers.get("idempotency-key")?.trim()) {
     return Response.json({ error: "idempotency_key_required" }, { status: 400 });
   }
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const scope = `internal:check:${key}`;
   const cached = await idempotentResponse(request, scope, text, services.store);
   if (cached) return cached;
@@ -362,7 +362,7 @@ async function internalAgentAction(request: Request, context: RouteContext): Pro
   if (!request.headers.get("idempotency-key")?.trim()) {
     return Response.json({ error: "idempotency_key_required" }, { status: 400 });
   }
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const scope = `internal:action:${key}`;
   const cached = await idempotentResponse(request, scope, text, services.store);
   if (cached) return cached;
@@ -381,7 +381,7 @@ async function deleteInternalAgent(request: Request, context: RouteContext): Pro
   if (!request.headers.get("idempotency-key")?.trim()) {
     return Response.json({ error: "idempotency_key_required" }, { status: 400 });
   }
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const { createIdempotencyKey } = internalDeleteSchema.parse(parseJson(text));
   const deleted = await services.agents.delete(key, createIdempotencyKey);
   if (!deleted) throw new NotFoundError("Flight agent not found");
@@ -391,7 +391,7 @@ async function deleteInternalAgent(request: Request, context: RouteContext): Pro
 async function agentAction(request: Request, context: RouteContext): Promise<Response> {
   const key = requiredParam(context, "agentKey");
   const text = await limitedText(request);
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const cached = await idempotentResponse(request, `action:${key}`, text, services.store);
   if (cached) return cached;
   const action = agentActionSchema.parse(parseJson(text));
@@ -400,7 +400,7 @@ async function agentAction(request: Request, context: RouteContext): Promise<Res
 }
 
 async function listFlights(request: Request, context: RouteContext): Promise<Response> {
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const workspace = await services.agents.get(requiredParam(context, "agentKey"));
   if (!workspace) throw new NotFoundError("Flight agent not found");
   const scope = new URL(request.url).searchParams.get("scope");
@@ -410,7 +410,7 @@ async function listFlights(request: Request, context: RouteContext): Promise<Res
 }
 
 async function getFlight(_request: Request, context: RouteContext): Promise<Response> {
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const details = await services.agents.getFlight(
     requiredParam(context, "agentKey"),
     requiredParam(context, "flightId")
@@ -422,7 +422,7 @@ async function getFlight(_request: Request, context: RouteContext): Promise<Resp
 async function createFolder(request: Request, context: RouteContext): Promise<Response> {
   const key = requiredParam(context, "agentKey");
   const text = await limitedText(request);
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const cached = await idempotentResponse(request, `folder:create:${key}`, text, services.store);
   if (cached) return cached;
   const body = parseJson(text) as { name?: unknown };
@@ -435,7 +435,7 @@ async function renameFolder(request: Request, context: RouteContext): Promise<Re
   const key = requiredParam(context, "agentKey");
   const folderId = requiredParam(context, "folderId");
   const text = await limitedText(request);
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const scope = `folder:rename:${key}:${folderId}`;
   const cached = await idempotentResponse(request, scope, text, services.store);
   if (cached) return cached;
@@ -453,7 +453,7 @@ async function renameFolder(request: Request, context: RouteContext): Promise<Re
 async function deleteFolder(request: Request, context: RouteContext): Promise<Response> {
   const key = requiredParam(context, "agentKey");
   const folderId = requiredParam(context, "folderId");
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const scope = `folder:delete:${key}:${folderId}`;
   const cached = await idempotentResponse(request, scope, "", services.store);
   if (cached) return cached;
@@ -466,7 +466,7 @@ async function setFolderMembership(request: Request, context: RouteContext): Pro
   const key = requiredParam(context, "agentKey");
   const folderId = requiredParam(context, "folderId");
   const text = await limitedText(request);
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const scope = `folder:membership:${key}:${folderId}`;
   const cached = await idempotentResponse(request, scope, text, services.store);
   if (cached) return cached;
@@ -479,7 +479,7 @@ async function setFolderMembership(request: Request, context: RouteContext): Pro
 }
 
 async function serveIndex(request: Request): Promise<Response> {
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   if (services.env.mode === "production" && services.env.ownerAuthEnabled && !isOwnerRequest(
     request,
     services.env.basicUsername,
@@ -487,7 +487,7 @@ async function serveIndex(request: Request): Promise<Response> {
   )) {
     return new Response("Authentication required", {
       status: 401,
-      headers: { "www-authenticate": 'Basic realm="Flight Agent"' }
+      headers: { "www-authenticate": 'Basic realm="Captain"' }
     });
   }
   try {
@@ -495,7 +495,7 @@ async function serveIndex(request: Request): Promise<Response> {
       headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" }
     });
   } catch {
-    return new Response("Flight Agent UI has not been built", { status: 503 });
+    return new Response("Captain UI has not been built", { status: 503 });
   }
 }
 
@@ -507,7 +507,7 @@ async function redirectLegacyAgent(request: Request, context: RouteContext): Pro
 async function serveTrip(_request: Request, context: RouteContext): Promise<Response> {
   const trip = await resolvePilotTrip(requiredParam(context, "tripId"));
   if (!trip) throw new TripNotFoundError();
-  const services = await getFlightAgentServices();
+  const services = await getCaptainServices();
   const offers = await services.trips.offers(PILOT_USER_ID, trip.id);
   const offerRows = offers.slice(0, 20).map((offer) => {
     const summary = typeof offer.snapshot.route === "string" ? offer.snapshot.route : offer.itineraryKey;
@@ -575,8 +575,8 @@ async function safely(run: () => Promise<Response>): Promise<Response> {
 
 function logApiError(event: string, error: unknown): void {
   console.error(JSON.stringify({
-    service: "flight-agent",
-    agent_id: "flight-agent",
+    service: "captain",
+    agent_id: "captain",
     event,
     run_id: crypto.randomUUID(),
     status: "failed",

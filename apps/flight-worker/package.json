@@ -6,7 +6,7 @@
   "engines": { "node": ">=24" },
   "scripts": {
     "build": "tsc --noEmit",
-    "start": "node --env-file-if-exists=.env --experimental-strip-types src/index.ts",
+    "start": "node --env-file-if-exists=.env --import tsx src/index.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -14,7 +14,8 @@
     "@agents/flight-domain": "workspace:*",
     "@agents/flight-store": "workspace:*",
     "@agents/observability": "workspace:*",
-    "@agents/provider-duffel": "workspace:*"
+    "@agents/provider-duffel": "workspace:*",
+    "tsx": "4.22.4"
   },
   "devDependencies": {
     "@types/node": "24.10.1",

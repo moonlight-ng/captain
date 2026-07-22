@@ -1,4 +1,4 @@
-import type { CaptainResearchClient } from "../bridge/captain-client.js";
+import type { PilotResearchClient } from "../bridge/pilot-client.js";
 import { marketingAirlineCode, offerMatchesAirlines } from "../flights/airlines.js";
 import { FlightProviderError, type FlightSearchClient } from "../flights/provider.js";
 import type { FlightOffer } from "../flights/types.js";
@@ -28,14 +28,14 @@ export type StartedFlightCheck = {
 export class FlightAgentRunner {
   readonly #store: FlightAgentStore;
   readonly #flights: FlightSearchClient | null;
-  readonly #research: CaptainResearchClient;
+  readonly #research: PilotResearchClient;
   readonly #now: () => Date;
   readonly #running = new Set<string>();
 
   constructor(options: {
     store: FlightAgentStore;
     flights: FlightSearchClient | null;
-    research: CaptainResearchClient;
+    research: PilotResearchClient;
     now?: () => Date;
   }) {
     this.#store = options.store;
@@ -94,9 +94,9 @@ export class FlightAgentRunner {
         searchLimit
       );
       console.info(JSON.stringify({
-        service: "flight-agent",
-        agent_id: "flight-agent",
-        event: "flight_agent.check_started",
+        service: "captain",
+        agent_id: "captain",
+        event: "captain.check_started",
         run_id: claimed.check.id,
         status: "running",
         duration_ms: 0,
@@ -190,9 +190,9 @@ export class FlightAgentRunner {
           })).toISOString()
         }, completedAt);
         console.info(JSON.stringify({
-          service: "flight-agent",
-          agent_id: "flight-agent",
-          event: "flight_agent.check_completed",
+          service: "captain",
+          agent_id: "captain",
+          event: "captain.check_completed",
           run_id: claimed.check.id,
           status: duffelError || research?.status === "failed" ? "partial" : "success",
           duration_ms: Math.max(0, Date.now() - startedAt),
@@ -209,9 +209,9 @@ export class FlightAgentRunner {
       }
     } catch (error) {
       console.error(JSON.stringify({
-        service: "flight-agent",
-        agent_id: "flight-agent",
-        event: "flight_agent.check_crashed",
+        service: "captain",
+        agent_id: "captain",
+        event: "captain.check_crashed",
         run_id: claimed.check.id,
         status: "failed",
         duration_ms: Math.max(0, Date.now() - startedAt),
@@ -248,9 +248,9 @@ export class FlightAgentRunner {
       nextCheckAt
     }, now);
     console.error(JSON.stringify({
-      service: "flight-agent",
-      agent_id: "flight-agent",
-      event: "flight_agent.check_failed",
+      service: "captain",
+      agent_id: "captain",
+      event: "captain.check_failed",
       run_id: checkId,
       status: "failed",
       duration_ms: Math.max(0, now.getTime() - (workspace?.agent.latestCheck?.startedAt ? Date.parse(workspace.agent.latestCheck.startedAt) : now.getTime())),
@@ -452,8 +452,8 @@ function recommendationScore(brief: FlightAgentBrief, flight: FlightSnapshot): n
 }
 
 async function safeResearch(
-  client: CaptainResearchClient,
-  input: Parameters<CaptainResearchClient["research"]>[0]
+  client: PilotResearchClient,
+  input: Parameters<PilotResearchClient["research"]>[0]
 ): Promise<ResearchResult> {
   try {
     return await client.research(input);

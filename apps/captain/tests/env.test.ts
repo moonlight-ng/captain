@@ -7,15 +7,15 @@ describe("owner authentication environment", () => {
 
   it("requires an owner password by default in production", () => {
     stubProductionEnv();
-    vi.stubEnv("FLIGHT_AGENT_BASIC_PASSWORD", "");
+    vi.stubEnv("CAPTAIN_BASIC_PASSWORD", "");
 
-    expect(() => loadEnv()).toThrow("FLIGHT_AGENT_BASIC_PASSWORD");
+    expect(() => loadEnv()).toThrow("CAPTAIN_BASIC_PASSWORD");
   });
 
   it("allows the owner UI and API to be public when explicitly disabled", () => {
     stubProductionEnv();
-    vi.stubEnv("FLIGHT_AGENT_BASIC_PASSWORD", "");
-    vi.stubEnv("FLIGHT_AGENT_OWNER_AUTH_ENABLED", "false");
+    vi.stubEnv("CAPTAIN_BASIC_PASSWORD", "");
+    vi.stubEnv("CAPTAIN_OWNER_AUTH_ENABLED", "false");
 
     expect(loadEnv().ownerAuthEnabled).toBe(false);
   });
@@ -24,12 +24,12 @@ describe("owner authentication environment", () => {
 function stubProductionEnv(): void {
   vi.stubEnv("NODE_ENV", "production");
   vi.stubEnv("DATABASE_URL", "postgresql://flight-agent.invalid/db");
-  vi.stubEnv("CAPTAIN_BASE_URL", "https://captain.invalid");
-  vi.stubEnv("CAPTAIN_TO_FLIGHT_AGENT_SECRET", "captain-to-flight-agent");
-  vi.stubEnv("FLIGHT_AGENT_TO_CAPTAIN_SECRET", "flight-agent-to-captain");
+  vi.stubEnv("PILOT_BASE_URL", "https://pilot.invalid");
+  vi.stubEnv("PILOT_TO_CAPTAIN_SECRET", "pilot-to-captain");
+  vi.stubEnv("CAPTAIN_TO_PILOT_SECRET", "captain-to-pilot");
   vi.stubEnv("DUFFEL_ACCESS_TOKEN", "duffel-token");
   vi.stubEnv("TELEGRAM_BOT_TOKEN", "telegram-token");
   vi.stubEnv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "telegram-webhook-secret");
   vi.stubEnv("CAPTAIN_SESSION_SECRET", "captain-session-secret");
-  vi.stubEnv("FLIGHT_AGENT_OWNER_AUTH_ENABLED", "");
+  vi.stubEnv("CAPTAIN_OWNER_AUTH_ENABLED", "");
 }

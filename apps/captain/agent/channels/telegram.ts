@@ -7,7 +7,7 @@ import {
 import { NoTranscriptGeneratedError, transcribe } from "ai";
 import { telegramMessageUpdateKey } from "@agents/telegram-core";
 
-import { getFlightAgentServices } from "../../services/app/services.js";
+import { getCaptainServices } from "../../services/app/services.js";
 
 const MAX_VOICE_BYTES = 20 * 1024 * 1024;
 const credentials = {
@@ -26,7 +26,7 @@ export default telegramChannel({
     const messageId = safeId(message.messageId);
     if (telegramUserId === null || telegramChatId === null || messageId === null) return null;
 
-    const services = await getFlightAgentServices();
+    const services = await getCaptainServices();
     const user = await services.platformStore.ensureTelegramUser({
       telegramUserId,
       telegramChatId,
@@ -101,7 +101,7 @@ export default telegramChannel({
       if (data.finishReason === "tool-calls" || !data.message) return;
       const userId = authUserId(ctx.session.auth.current?.attributes.captain_user_id);
       if (userId) {
-        const services = await getFlightAgentServices();
+        const services = await getCaptainServices();
         await services.platformStore.appendMessage(userId, "assistant", data.message, new Date());
       }
       await channel.telegram.post(data.message);

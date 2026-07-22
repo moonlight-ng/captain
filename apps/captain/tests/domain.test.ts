@@ -7,7 +7,7 @@ import {
 import { MemoryFlightAgentStore } from "../services/store/memory-store.js";
 import { defaultTestBrief } from "./support.js";
 
-describe("Flight Agent domain", () => {
+describe("Captain flight domain", () => {
   it("validates critical brief fields and the 31-day window", () => {
     expect(flightAgentBriefSchema.safeParse(defaultTestBrief()).success).toBe(true);
     expect(flightAgentBriefSchema.safeParse(defaultTestBrief({

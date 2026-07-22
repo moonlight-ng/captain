@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  HttpCaptainResearchClient,
+  HttpPilotResearchClient,
   buildResearchRequest
-} from "../services/bridge/captain-client.js";
+} from "../services/bridge/pilot-client.js";
 import type { FlightSnapshot } from "../services/domain/types.js";
 import { defaultTestBrief } from "./support.js";
 
-describe("Captain research bridge", () => {
+describe("Pilot research bridge", () => {
   it("sends only public itinerary facts, constraints, and fare movements", () => {
     const flight: FlightSnapshot = {
       provider: "duffel",
@@ -89,7 +89,7 @@ describe("Captain research bridge", () => {
         durationMs: 25
       }
     })) as unknown as typeof fetch;
-    const client = new HttpCaptainResearchClient({
+    const client = new HttpPilotResearchClient({
       baseUrl: "https://captain.example",
       secret: "secret",
       fetch: fetchMock

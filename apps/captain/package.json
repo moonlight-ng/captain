@@ -10,7 +10,7 @@
   "scripts": {
     "build": "pnpm build:web && eve build",
     "build:web": "tsc -b && vite build",
-    "db:migrate": "node --env-file-if-exists=.env --experimental-strip-types scripts/migrate.ts",
+    "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "db:import-captain": "node --env-file-if-exists=.env --import tsx scripts/import-captain-flights.ts",
     "dev": "vite --host 127.0.0.1",
     "dev:api": "tsx scripts/local-api.ts",

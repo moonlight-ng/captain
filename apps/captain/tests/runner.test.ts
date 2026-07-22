@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { CaptainResearchClient } from "../services/bridge/captain-client.js";
+import type { PilotResearchClient } from "../services/bridge/pilot-client.js";
 import { FlightAgentRunner } from "../services/domain/runner.js";
 import { InvalidStateError, type ResearchResult } from "../services/domain/types.js";
 import { FlightProviderError, type FlightSearchClient } from "../services/flights/provider.js";
@@ -27,7 +27,7 @@ describe("FlightAgentRunner", () => {
         };
       }
     };
-    const research: CaptainResearchClient = {
+    const research: PilotResearchClient = {
       research: vi.fn(async (): Promise<ResearchResult> => {
         return { status: "completed", searchedAt: new Date().toISOString(), overview: "No material disruptions.", results: [], offers: [], gaps: [], error: null, metadata: { model: "test", inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, reasoningOutputTokens: 0, durationMs: 1 } };
       })

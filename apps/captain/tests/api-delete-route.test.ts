@@ -3,10 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signBridgeRequest } from "../services/bridge/signature.js";
 import { MemoryFlightAgentStore } from "../services/store/memory-store.js";
 
-const mocks = vi.hoisted(() => ({ getFlightAgentServices: vi.fn() }));
+const mocks = vi.hoisted(() => ({ getCaptainServices: vi.fn() }));
 
 vi.mock("../services/app/services.js", () => ({
-  getFlightAgentServices: mocks.getFlightAgentServices
+  getCaptainServices: mocks.getCaptainServices
 }));
 
 import apiChannel from "../agent/channels/api.js";
@@ -21,15 +21,15 @@ const handler = apiChannel.routes.find((route) =>
 ) => Promise<Response>;
 
 describe("internal exact agent cleanup bridge", () => {
-  const secret = "captain-to-flight-agent";
+  const secret = "pilot-to-captain";
   let store: MemoryFlightAgentStore;
   let remove: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     store = new MemoryFlightAgentStore();
     remove = vi.fn().mockResolvedValue(true);
-    mocks.getFlightAgentServices.mockResolvedValue({
-      env: { captainToFlightAgentSecret: secret },
+    mocks.getCaptainServices.mockResolvedValue({
+      env: { pilotToCaptainSecret: secret },
       store,
       agents: { delete: remove }
     });

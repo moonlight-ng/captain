@@ -26,9 +26,9 @@ booking, payment, or passenger-document collection.
 5. Captain queues a deduplicated Telegram alert for first results, a price drop,
    a newly stronger itinerary, or a terminal Watch failure.
 
-Pilot uses Captain’s signed internal Trip API. Infrastructure identifiers for
-the former private Captain and Flight Agent remain unchanged during migration;
-only their product-facing identities become Pilot and Captain.
+Pilot uses Captain’s signed internal Trip API. Each app now has matching
+product, deployment, configuration, logging, and runtime identifiers:
+`opemipo-pilot`/`PILOT_*` and `opemipo-captain`/`CAPTAIN_*`.
 
 ## Commands
 

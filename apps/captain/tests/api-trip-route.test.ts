@@ -6,8 +6,8 @@ import { TripService } from "../services/trips/service.js";
 import { MemoryFlightAgentStore } from "../services/store/memory-store.js";
 import { defaultTestBrief } from "./support.js";
 
-const mocks = vi.hoisted(() => ({ getFlightAgentServices: vi.fn() }));
-vi.mock("../services/app/services.js", () => ({ getFlightAgentServices: mocks.getFlightAgentServices }));
+const mocks = vi.hoisted(() => ({ getCaptainServices: vi.fn() }));
+vi.mock("../services/app/services.js", () => ({ getCaptainServices: mocks.getCaptainServices }));
 
 import apiChannel from "../agent/channels/api.js";
 
@@ -26,7 +26,7 @@ describe("tenant-scoped Trip API", () => {
     platform = new MemoryCaptainPlatformStore();
     ownerId = (await platform.ensureTelegramUser({ telegramUserId: 1, telegramChatId: 1, username: null, firstName: "Ada", lastName: null }, now)).id;
     otherId = (await platform.ensureTelegramUser({ telegramUserId: 2, telegramChatId: 2, username: null, firstName: "Grace", lastName: null }, now)).id;
-    mocks.getFlightAgentServices.mockResolvedValue({
+    mocks.getCaptainServices.mockResolvedValue({
       env: { captainSessionSecret: secret },
       store: new MemoryFlightAgentStore(),
       platformStore: platform,

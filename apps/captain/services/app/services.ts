@@ -1,7 +1,7 @@
 import {
-  DisabledCaptainResearchClient,
-  HttpCaptainResearchClient
-} from "../bridge/captain-client.js";
+  DisabledPilotResearchClient,
+  HttpPilotResearchClient
+} from "../bridge/pilot-client.js";
 import { MemoryCaptainPlatformStore, PostgresCaptainPlatformStore, type CaptainPlatformStore } from "@agents/flight-store";
 import { FlightAgentRunner } from "../domain/runner.js";
 import { FlightAgentService } from "../domain/service.js";
@@ -9,28 +9,28 @@ import { DuffelClient } from "../flights/duffel-client.js";
 import { MemoryFlightAgentStore } from "../store/memory-store.js";
 import { PostgresFlightAgentStore } from "../store/postgres-store.js";
 import type { FlightAgentStore } from "../store/contracts.js";
-import { loadEnv, type FlightAgentEnv } from "./env.js";
+import { loadEnv, type CaptainEnv } from "./env.js";
 import { TripService } from "../trips/service.js";
 
-export type FlightAgentServices = {
-  env: FlightAgentEnv;
+export type CaptainServices = {
+  env: CaptainEnv;
   store: FlightAgentStore;
   agents: FlightAgentService;
   platformStore: CaptainPlatformStore;
   trips: TripService;
 };
 
-let servicesPromise: Promise<FlightAgentServices> | undefined;
+let servicesPromise: Promise<CaptainServices> | undefined;
 
-export function getFlightAgentServices(): Promise<FlightAgentServices> {
-  servicesPromise ??= createFlightAgentServices().catch((error) => {
+export function getCaptainServices(): Promise<CaptainServices> {
+  servicesPromise ??= createCaptainServices().catch((error) => {
     servicesPromise = undefined;
     throw error;
   });
   return servicesPromise;
 }
 
-export async function createFlightAgentServices(): Promise<FlightAgentServices> {
+export async function createCaptainServices(): Promise<CaptainServices> {
   const env = loadEnv();
   const store: FlightAgentStore = env.databaseUrl
     ? await PostgresFlightAgentStore.connect(env.databaseUrl)
@@ -43,12 +43,12 @@ export async function createFlightAgentServices(): Promise<FlightAgentServices> 
         supplierTimeoutMs: env.duffelSupplierTimeoutMs
       })
     : null;
-  const research = env.captainBaseUrl && env.flightAgentToCaptainSecret
-    ? new HttpCaptainResearchClient({
-        baseUrl: env.captainBaseUrl,
-        secret: env.flightAgentToCaptainSecret
+  const research = env.pilotBaseUrl && env.captainToPilotSecret
+    ? new HttpPilotResearchClient({
+        baseUrl: env.pilotBaseUrl,
+        secret: env.captainToPilotSecret
       })
-    : new DisabledCaptainResearchClient();
+    : new DisabledPilotResearchClient();
   const runner = new FlightAgentRunner({ store, flights, research });
   const platformStore: CaptainPlatformStore = env.databaseUrl
     ? PostgresCaptainPlatformStore.connect(env.databaseUrl, 8)

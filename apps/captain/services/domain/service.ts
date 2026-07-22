@@ -108,9 +108,9 @@ function logBackgroundError(
   runId: string = crypto.randomUUID()
 ): void {
   console.error(JSON.stringify({
-    service: "flight-agent",
-    agent_id: "flight-agent",
-    event: "flight_agent.background_run_failed",
+    service: "captain",
+    agent_id: "captain",
+    event: "captain.background_run_failed",
     run_id: runId,
     status: "failed",
     duration_ms: 0,

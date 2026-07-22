@@ -77,5 +77,6 @@ preserving explicitly suspended accounts.
 - Quiet hours from 22:00 to 07:00 in the traveller’s timezone for non-critical
   notifications.
 
-The existing Fly app name `opemipo-flight-agent` is retained during migration
-to avoid a risky production identity change. The product name is Captain.
+Captain deploys as `opemipo-captain` and uses only `CAPTAIN_*` settings for its
+own runtime. `PILOT_BASE_URL`, `PILOT_TO_CAPTAIN_SECRET`, and
+`CAPTAIN_TO_PILOT_SECRET` describe the explicit bridge to Pilot.

@@ -1,7 +1,7 @@
 import { createTripSchema } from "@agents/flight-domain";
 import { defineTool } from "eve/tools";
 
-import { getFlightAgentServices } from "../../services/app/services.js";
+import { getCaptainServices } from "../../services/app/services.js";
 import { requireCaptainUser } from "../lib/principal.js";
 
 export default defineTool({
@@ -9,7 +9,7 @@ export default defineTool({
   inputSchema: createTripSchema,
   async execute(input, ctx) {
     const userId = requireCaptainUser(ctx);
-    const services = await getFlightAgentServices();
+    const services = await getCaptainServices();
     const result = await services.trips.create(userId, input);
     return {
       ...result,
