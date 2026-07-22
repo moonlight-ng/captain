@@ -1,0 +1,9 @@
+.git
+node_modules
+.pnpm-store
+.output
+dist
+coverage
+tests
+plans
+*.log
