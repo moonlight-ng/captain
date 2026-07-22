@@ -1,0 +1,45 @@
+{
+  "name": "flight-agent",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.6.0",
+  "scripts": {
+    "build": "pnpm build:web && eve build",
+    "build:web": "tsc -b && vite build",
+    "db:migrate": "node --experimental-strip-types scripts/migrate.ts",
+    "db:import-captain": "tsx scripts/import-captain-flights.ts",
+    "dev": "vite --host 127.0.0.1",
+    "dev:api": "tsx scripts/local-api.ts",
+    "dev:agent": "eve dev --no-ui",
+    "eval": "eve eval",
+    "eve:info": "eve info",
+    "preview": "vite preview --host 127.0.0.1",
+    "start": "eve start --host 0.0.0.0 --port 8080",
+    "test": "vitest run",
+    "typecheck": "tsc -b --pretty false && tsc -p tsconfig.service.json --noEmit --pretty false"
+  },
+  "dependencies": {
+    "@fontsource/libre-franklin": "^5.2.8",
+    "@workflow/world-postgres": "5.0.0-beta.24",
+    "eve": "0.23.0",
+    "liveline": "0.0.7",
+    "postgres": "3.4.7",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "tsx": "4.22.4",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "typescript": "6.0.3",
+    "vite": "8.1.5",
+    "vitest": "4.1.9"
+  }
+}

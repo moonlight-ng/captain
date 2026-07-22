@@ -1,0 +1,42 @@
+app = "opemipo-flight-agent"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  release_command = "node --experimental-strip-types scripts/migrate.ts"
+
+[env]
+  AI_MODEL = "openai/gpt-oss-20b"
+  PORT = "8080"
+  FLIGHT_AGENT_PUBLIC_URL = "https://opemipo-flight-agent.fly.dev"
+  CAPTAIN_BASE_URL = "https://opemipo-captain.fly.dev"
+  FLIGHT_AGENT_BASIC_USERNAME = "flight-agent"
+  FLIGHT_AGENT_OWNER_AUTH_ENABLED = "false"
+  DUFFEL_BASE_URL = "https://api.duffel.com"
+  DUFFEL_SUPPLIER_TIMEOUT_MS = "20000"
+  FLIGHT_SEARCH_TIMEOUT_MS = "120000"
+  WORKFLOW_POSTGRES_JOB_PREFIX = "flight_agent_eve"
+  GRAPHILE_WORKER_SCHEMA = "flight_agent_worker"
+  WORKFLOW_POSTGRES_WORKER_CONCURRENCY = "4"
+  WORKFLOW_POSTGRES_MAX_POOL_SIZE = "8"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "12s"
+    interval = "30s"
+    method = "GET"
+    path = "/ready"
+    timeout = "6s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+  cpus = 1
