@@ -44,7 +44,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     }));
   }
 
-  async ensureTelegramUser(input: TelegramUserInput, autoAllowlist: boolean, now: Date): Promise<CaptainUser> {
+  async ensureTelegramUser(input: TelegramUserInput, now: Date): Promise<CaptainUser> {
     return this.#sql.begin(async (tx) => {
       const existing = await tx<Array<UserRow & TelegramRow>>`
         select users.id, users.status, users.timezone,
@@ -56,10 +56,6 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         for update
       `;
       if (existing[0]) {
-        const status = autoAllowlist && existing[0].status !== "suspended" ? "active" : existing[0].status;
-        if (status !== existing[0].status) {
-          await tx`update captain.users set status = ${status}, updated_at = ${now} where id = ${existing[0].id}`;
-        }
         await tx`
           update captain.telegram_accounts set
             chat_id = ${input.telegramChatId}, username = ${input.username},
@@ -67,14 +63,13 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
             last_seen_at = ${now}
           where telegram_user_id = ${input.telegramUserId}
         `;
-        return toUser({ ...existing[0], status, chat_id: input.telegramChatId, username: input.username, first_name: input.firstName, last_name: input.lastName });
+        return toUser({ ...existing[0], chat_id: input.telegramChatId, username: input.username, first_name: input.firstName, last_name: input.lastName });
       }
       const userId = randomUUID();
       const conversationId = randomUUID();
-      const status = autoAllowlist ? "active" : "pending";
       await tx`
         insert into captain.users (id, status, timezone, created_at, updated_at)
-        values (${userId}, ${status}, 'UTC', ${now}, ${now})
+        values (${userId}, 'active', 'UTC', ${now}, ${now})
       `;
       await tx`
         insert into captain.telegram_accounts (
@@ -90,7 +85,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         values (${conversationId}, ${userId}, '', ${now}, ${now})
       `;
       return {
-        id: userId, status, timezone: "UTC",
+        id: userId, status: "active", timezone: "UTC",
         telegramUserId: input.telegramUserId, telegramChatId: input.telegramChatId,
         displayName: displayName(input)
       };

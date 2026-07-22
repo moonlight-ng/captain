@@ -16,7 +16,7 @@ booking, payment, or passenger-document collection.
 
 ## System shape
 
-1. Captain receives an allowlisted private Telegram message and resolves one
+1. Captain receives a private Telegram message and resolves one
    durable traveller conversation.
 2. Captain creates or updates a tenant-scoped Trip and its individual Watch.
 3. The flight worker wakes due Watches, collapses matching provider requests

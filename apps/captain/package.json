@@ -10,8 +10,8 @@
   "scripts": {
     "build": "pnpm build:web && eve build",
     "build:web": "tsc -b && vite build",
-    "db:migrate": "node --experimental-strip-types scripts/migrate.ts",
-    "db:import-captain": "tsx scripts/import-captain-flights.ts",
+    "db:migrate": "node --env-file-if-exists=.env --experimental-strip-types scripts/migrate.ts",
+    "db:import-captain": "node --env-file-if-exists=.env --import tsx scripts/import-captain-flights.ts",
     "dev": "vite --host 127.0.0.1",
     "dev:api": "tsx scripts/local-api.ts",
     "dev:agent": "eve dev --no-ui",
@@ -19,6 +19,7 @@
     "eve:info": "eve info",
     "preview": "vite preview --host 127.0.0.1",
     "start": "eve start --host 0.0.0.0 --port 8080",
+    "telegram:webhook": "node --env-file-if-exists=.env --experimental-strip-types scripts/configure-telegram-webhook.ts",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.service.json --noEmit --pretty false"
   },

@@ -24,8 +24,8 @@ describe("tenant-scoped Trip API", () => {
   beforeEach(async () => {
     const now = new Date("2026-08-01T12:00:00Z");
     platform = new MemoryCaptainPlatformStore();
-    ownerId = (await platform.ensureTelegramUser({ telegramUserId: 1, telegramChatId: 1, username: null, firstName: "Ada", lastName: null }, true, now)).id;
-    otherId = (await platform.ensureTelegramUser({ telegramUserId: 2, telegramChatId: 2, username: null, firstName: "Grace", lastName: null }, true, now)).id;
+    ownerId = (await platform.ensureTelegramUser({ telegramUserId: 1, telegramChatId: 1, username: null, firstName: "Ada", lastName: null }, now)).id;
+    otherId = (await platform.ensureTelegramUser({ telegramUserId: 2, telegramChatId: 2, username: null, firstName: "Grace", lastName: null }, now)).id;
     mocks.getFlightAgentServices.mockResolvedValue({
       env: { captainSessionSecret: secret },
       store: new MemoryFlightAgentStore(),

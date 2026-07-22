@@ -9,12 +9,16 @@ if (!databaseUrl) throw new Error("DATABASE_URL is required for migrations");
 
 const sql = postgres(databaseUrl, { max: 1 });
 try {
-  const [migrationTable] = await sql<{ table_name: string | null }[]>`
-    select to_regclass('flight_agent.schema_migrations')::text as table_name
+  // Bootstrap the migration ledger so a brand-new Captain database can be
+  // provisioned with this command alone. Migration 001 repeats these DDL
+  // statements idempotently for legacy installations.
+  await sql`create schema if not exists flight_agent`;
+  await sql`
+    create table if not exists flight_agent.schema_migrations (
+      version text primary key,
+      applied_at timestamptz not null default now()
+    )
   `;
-  if (!migrationTable?.table_name) {
-    throw new Error("flight_agent.schema_migrations is not provisioned; apply the base schema with an administrator connection first");
-  }
   const migrationDirectory = resolve("migrations");
   const files = (await readdir(migrationDirectory))
     .filter((file) => file.endsWith(".sql"))

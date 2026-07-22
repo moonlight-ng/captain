@@ -3,8 +3,9 @@
 ## Deployment and data boundaries
 
 `apps/pilot`, `apps/captain`, and `apps/flight-worker` are independently
-deployable. Pilot keeps its existing private Supabase project, Markdown memory
-volume, secrets, prompt, tools, Telegram webhook, and `opemipo-captain` Fly app.
+deployable. Pilot keeps its existing private Supabase project, secrets, prompt,
+tools, Telegram webhook, and `opemipo-captain` Fly app. Its Markdown state uses
+the `pilot_data` volume mounted at `/data`, with memory under `/data/pilot`.
 Captain and the worker share Captain’s PostgreSQL database and public Telegram
 bot token, but run as separate processes. No app imports another app.
 
@@ -15,8 +16,9 @@ Captain and the worker share the full flight domain and store contracts.
 ## Conversation and Trip flow
 
 Captain validates Telegram’s webhook secret, resolves the Telegram user ID to
-a Captain user, enforces beta allowlist status, and claims a durable message
-idempotency key. The model receives only that user’s recent messages, active
+an active Captain user, and claims a durable message idempotency key. New users
+are active by default; explicitly suspended users cannot continue. The model
+receives only that user’s recent messages, active
 Trip, and Trip list. Trip tools derive the user from signed session attributes,
 never from model or client input.
 

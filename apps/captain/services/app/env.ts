@@ -14,8 +14,6 @@ export type FlightAgentEnv = {
   duffelSupplierTimeoutMs: number;
   telegramBotToken: string | null;
   telegramWebhookSecretToken: string | null;
-  allowlistTelegramUserIds: readonly number[];
-  autoAllowlist: boolean;
   captainSessionSecret: string | null;
   duffelLiveMode: boolean;
 };
@@ -38,8 +36,6 @@ export function loadEnv(): FlightAgentEnv {
     duffelSupplierTimeoutMs: positiveInteger("DUFFEL_SUPPLIER_TIMEOUT_MS", 20_000),
     telegramBotToken: optional("TELEGRAM_BOT_TOKEN"),
     telegramWebhookSecretToken: optional("TELEGRAM_WEBHOOK_SECRET_TOKEN"),
-    allowlistTelegramUserIds: integerList("CAPTAIN_ALLOWLIST_TELEGRAM_USER_IDS"),
-    autoAllowlist: booleanValue("CAPTAIN_AUTO_ALLOWLIST", mode !== "production"),
     captainSessionSecret: optional("CAPTAIN_SESSION_SECRET"),
     duffelLiveMode: booleanValue("DUFFEL_LIVE_MODE", false)
   };
@@ -77,10 +73,4 @@ function booleanValue(name: string, fallback: boolean): boolean {
   if (value === "true") return true;
   if (value === "false") return false;
   return fallback;
-}
-
-function integerList(name: string): number[] {
-  const value = process.env[name]?.trim();
-  if (!value) return [];
-  return value.split(",").map((item) => Number(item.trim())).filter(Number.isSafeInteger);
 }

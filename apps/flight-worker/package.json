@@ -6,7 +6,7 @@
   "engines": { "node": ">=24" },
   "scripts": {
     "build": "tsc --noEmit",
-    "start": "node --experimental-strip-types src/index.ts",
+    "start": "node --env-file-if-exists=.env --experimental-strip-types src/index.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

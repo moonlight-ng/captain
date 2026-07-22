@@ -3,7 +3,7 @@ create schema if not exists captain;
 
 create table if not exists captain.users (
   id uuid primary key,
-  status text not null check (status in ('pending', 'allowlisted', 'active', 'suspended')),
+  status text not null check (status in ('active', 'suspended')),
   timezone text not null default 'UTC',
   created_at timestamptz not null,
   updated_at timestamptz not null

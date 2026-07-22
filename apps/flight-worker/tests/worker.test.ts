@@ -11,7 +11,7 @@ describe("flight worker orchestration", () => {
     const store = new MemoryCaptainPlatformStore();
     const user = await store.ensureTelegramUser({
       telegramUserId: 1, telegramChatId: 1, username: null, firstName: "Ada", lastName: null
-    }, true, new Date("2026-08-01T12:00:00Z"));
+    }, new Date("2026-08-01T12:00:00Z"));
     const input: CreateTripInput = {
       title: "Berlin", cadenceHours: 6,
       brief: {
