@@ -17,4 +17,4 @@ minimumReleaseAgeExclude:
   - eve@0.23.0
 
 patchedDependencies:
-  liveline@0.0.7: apps/captain/patches/liveline@0.0.7.patch
+  liveline@0.0.7: patches/liveline@0.0.7.patch

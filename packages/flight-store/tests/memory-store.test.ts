@@ -19,10 +19,15 @@ async function user(store: MemoryCaptainPlatformStore, telegramUserId: number) {
   return store.ensureTelegramUser({
     telegramUserId, telegramChatId: telegramUserId, username: null,
     firstName: `User ${telegramUserId}`, lastName: null
-  }, true, new Date("2026-08-01T12:00:00Z"));
+  }, new Date("2026-08-01T12:00:00Z"));
 }
 
 describe("Captain platform store", () => {
+  it("activates every new Telegram user", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    await expect(user(store, 1)).resolves.toMatchObject({ status: "active", telegramUserId: 1 });
+  });
+
   it("keeps Trips tenant-scoped", async () => {
     const store = new MemoryCaptainPlatformStore();
     const ada = await user(store, 1);

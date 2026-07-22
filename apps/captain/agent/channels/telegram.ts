@@ -7,7 +7,7 @@ import {
 import { NoTranscriptGeneratedError, transcribe } from "ai";
 import { telegramMessageUpdateKey } from "@agents/telegram-core";
 
-import { getFlightAgentServices } from "../../services/app/services.js";
+import { getCaptainServices } from "../../services/app/services.js";
 
 const MAX_VOICE_BYTES = 20 * 1024 * 1024;
 const credentials = {
@@ -26,19 +26,18 @@ export default telegramChannel({
     const messageId = safeId(message.messageId);
     if (telegramUserId === null || telegramChatId === null || messageId === null) return null;
 
-    const services = await getFlightAgentServices();
-    const allowlisted = services.env.autoAllowlist || services.env.allowlistTelegramUserIds.includes(telegramUserId);
+    const services = await getCaptainServices();
     const user = await services.platformStore.ensureTelegramUser({
       telegramUserId,
       telegramChatId,
       username: message.from?.username ?? null,
       firstName: message.from?.firstName ?? null,
       lastName: message.from?.lastName ?? null
-    }, allowlisted, new Date());
+    }, new Date());
     const updateKey = telegramMessageUpdateKey("captain", telegramChatId, messageId);
     if (!await services.platformStore.claimTelegramUpdate(updateKey, user.id, new Date())) return null;
     if (user.status !== "active") {
-      await ctx.telegram.post("Captain is in a small private beta right now. You’re on the waitlist; I’ll let you know when access opens.");
+      await ctx.telegram.post("Your Captain access is currently suspended. Please contact support if you think this is a mistake.");
       return null;
     }
 
@@ -102,7 +101,7 @@ export default telegramChannel({
       if (data.finishReason === "tool-calls" || !data.message) return;
       const userId = authUserId(ctx.session.auth.current?.attributes.captain_user_id);
       if (userId) {
-        const services = await getFlightAgentServices();
+        const services = await getCaptainServices();
         await services.platformStore.appendMessage(userId, "assistant", data.message, new Date());
       }
       await channel.telegram.post(data.message);

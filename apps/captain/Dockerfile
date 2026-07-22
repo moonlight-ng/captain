@@ -5,10 +5,8 @@ ENV CI=true
 RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
-COPY apps/pilot/package.json ./apps/pilot/package.json
 COPY apps/captain/package.json ./apps/captain/package.json
-COPY apps/flight-worker/package.json ./apps/flight-worker/package.json
-COPY apps/captain/patches ./apps/captain/patches
+COPY patches ./patches
 COPY packages/conversation-core/package.json ./packages/conversation-core/package.json
 COPY packages/flight-domain/package.json ./packages/flight-domain/package.json
 COPY packages/flight-store/package.json ./packages/flight-store/package.json

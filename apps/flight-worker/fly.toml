@@ -2,7 +2,7 @@ app = "opemipo-flight-worker"
 primary_region = "lhr"
 
 [build]
-  dockerfile = "apps/flight-worker/Dockerfile"
+  dockerfile = "Dockerfile"
 
 [env]
   PORT = "8080"

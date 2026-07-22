@@ -1,6 +1,6 @@
 import { defineDynamic, defineInstructions } from "eve/instructions";
 
-import { getFlightAgentServices } from "../../services/app/services.js";
+import { getCaptainServices } from "../../services/app/services.js";
 import { captainUserId } from "../lib/principal.js";
 
 export default defineDynamic({
@@ -10,7 +10,7 @@ export default defineDynamic({
       if (!userId) {
         return defineInstructions({ markdown: "The current caller is not an authenticated Captain traveller. Do not invoke Trip tools or reveal any traveller data." });
       }
-      const services = await getFlightAgentServices();
+      const services = await getCaptainServices();
       const [conversation, trips] = await Promise.all([
         services.platformStore.getConversation(userId, 16),
         services.trips.list(userId)

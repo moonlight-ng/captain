@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 
 import { ZodError } from "zod";
 
-import { getFlightAgentServices } from "../services/app/services.js";
+import { getCaptainServices } from "../services/app/services.js";
 import {
   InvalidStateError,
   NotFoundError,
@@ -17,7 +17,7 @@ const server = createServer(async (request, response) => {
   setCors(response);
   if (request.method === "OPTIONS") return send(response, 204);
   try {
-    const services = await getFlightAgentServices();
+    const services = await getCaptainServices();
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
     if (request.method === "GET" && url.pathname === "/health") return json(response, 200, { status: "ok" });
     if (request.method === "GET" && url.pathname === "/ready") return json(response, 200, { status: "ready", storage: services.env.databaseUrl ? "postgres" : "memory" });
@@ -93,7 +93,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.info(`Flight Agent local API listening on http://127.0.0.1:${port}`);
+  console.info(`Captain local API listening on http://127.0.0.1:${port}`);
 });
 
 async function body(request: IncomingMessage): Promise<unknown> {

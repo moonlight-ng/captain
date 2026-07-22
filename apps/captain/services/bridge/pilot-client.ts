@@ -1,7 +1,7 @@
 import type { FlightAgentBrief, FlightSnapshot, ResearchResult } from "../domain/types.js";
 import { signBridgeRequest } from "./signature.js";
 
-export type CaptainResearchInput = {
+export type PilotResearchInput = {
   agentKey: string;
   checkId: string;
   brief: FlightAgentBrief;
@@ -17,11 +17,11 @@ export type CaptainResearchInput = {
   }>;
 };
 
-export type CaptainResearchClient = {
-  research(input: CaptainResearchInput): Promise<ResearchResult>;
+export type PilotResearchClient = {
+  research(input: PilotResearchInput): Promise<ResearchResult>;
 };
 
-export class HttpCaptainResearchClient implements CaptainResearchClient {
+export class HttpPilotResearchClient implements PilotResearchClient {
   readonly #baseUrl: string;
   readonly #secret: string;
   readonly #fetch: typeof fetch;
@@ -39,7 +39,7 @@ export class HttpCaptainResearchClient implements CaptainResearchClient {
     this.#timeoutMs = options.timeoutMs ?? 660_000;
   }
 
-  async research(input: CaptainResearchInput): Promise<ResearchResult> {
+  async research(input: PilotResearchInput): Promise<ResearchResult> {
     const startedAt = Date.now();
     const path = "/internal/v1/codex/research";
     const body = JSON.stringify(buildResearchRequest(input));
@@ -57,7 +57,7 @@ export class HttpCaptainResearchClient implements CaptainResearchClient {
         signal: AbortSignal.timeout(this.#timeoutMs)
       });
       if (!response.ok) {
-        throw new CaptainResearchError(response.status);
+        throw new PilotResearchError(response.status);
       }
       const payload = await response.json() as {
         result: {
@@ -85,7 +85,7 @@ export class HttpCaptainResearchClient implements CaptainResearchClient {
         input,
         "failed",
         Date.now() - startedAt,
-        error instanceof CaptainResearchError
+        error instanceof PilotResearchError
           ? `HTTP_${error.status}`
           : error instanceof Error
             ? error.name
@@ -96,23 +96,23 @@ export class HttpCaptainResearchClient implements CaptainResearchClient {
   }
 }
 
-class CaptainResearchError extends Error {
+class PilotResearchError extends Error {
   constructor(readonly status: number) {
-    super(`Captain research failed with HTTP ${status}`);
-    this.name = "CaptainResearchError";
+    super(`Pilot research failed with HTTP ${status}`);
+    this.name = "PilotResearchError";
   }
 }
 
 function logResearchBridge(
-  input: CaptainResearchInput,
+  input: PilotResearchInput,
   status: "success" | "failed",
   durationMs: number,
   errorCode?: string
 ): void {
   console.info(JSON.stringify({
-    service: "flight-agent",
-    agent_id: "flight-agent",
-    event: "captain.codex_research",
+    service: "captain",
+    agent_id: "captain",
+    event: "captain.pilot_codex_research",
     run_id: input.checkId,
     status,
     duration_ms: durationMs,
@@ -121,7 +121,7 @@ function logResearchBridge(
   }));
 }
 
-export class DisabledCaptainResearchClient implements CaptainResearchClient {
+export class DisabledPilotResearchClient implements PilotResearchClient {
   async research(): Promise<ResearchResult> {
     return {
       status: "failed",
@@ -130,13 +130,13 @@ export class DisabledCaptainResearchClient implements CaptainResearchClient {
       results: [],
       offers: [],
       gaps: [],
-      error: "Captain Codex bridge is not configured",
+      error: "Pilot Codex bridge is not configured",
       metadata: null
     };
   }
 }
 
-export function buildResearchRequest(input: CaptainResearchInput) {
+export function buildResearchRequest(input: PilotResearchInput) {
   const partySize = input.brief.travellers.adults + input.brief.travellers.childrenAges.length + input.brief.travellers.infants;
   const routes = input.brief.originAirports.flatMap((origin) =>
     input.brief.destinationAirports.map((destination) => `${origin}-${destination}`)

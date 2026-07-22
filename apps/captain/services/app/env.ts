@@ -1,54 +1,50 @@
-export type FlightAgentEnv = {
+export type CaptainEnv = {
   mode: "development" | "production";
   publicUrl: string;
   databaseUrl: string | null;
   basicUsername: string;
   basicPassword: string | null;
   ownerAuthEnabled: boolean;
-  captainBaseUrl: string | null;
-  captainToFlightAgentSecret: string | null;
-  flightAgentToCaptainSecret: string | null;
+  pilotBaseUrl: string | null;
+  pilotToCaptainSecret: string | null;
+  captainToPilotSecret: string | null;
   duffelAccessToken: string | null;
   duffelBaseUrl: string;
   duffelTimeoutMs: number;
   duffelSupplierTimeoutMs: number;
   telegramBotToken: string | null;
   telegramWebhookSecretToken: string | null;
-  allowlistTelegramUserIds: readonly number[];
-  autoAllowlist: boolean;
   captainSessionSecret: string | null;
   duffelLiveMode: boolean;
 };
 
-export function loadEnv(): FlightAgentEnv {
+export function loadEnv(): CaptainEnv {
   const mode = process.env.NODE_ENV === "production" ? "production" : "development";
-  const env: FlightAgentEnv = {
+  const env: CaptainEnv = {
     mode,
-    publicUrl: (process.env.CAPTAIN_PUBLIC_URL?.trim() || process.env.FLIGHT_AGENT_PUBLIC_URL?.trim() || "http://127.0.0.1:4178").replace(/\/$/, ""),
+    publicUrl: (process.env.CAPTAIN_PUBLIC_URL?.trim() || "http://127.0.0.1:4178").replace(/\/$/, ""),
     databaseUrl: optional("DATABASE_URL"),
-    basicUsername: process.env.FLIGHT_AGENT_BASIC_USERNAME?.trim() || "flight-agent",
-    basicPassword: optional("FLIGHT_AGENT_BASIC_PASSWORD"),
-    ownerAuthEnabled: booleanValue("FLIGHT_AGENT_OWNER_AUTH_ENABLED", mode === "production"),
-    captainBaseUrl: optional("CAPTAIN_BASE_URL"),
-    captainToFlightAgentSecret: optional("CAPTAIN_TO_FLIGHT_AGENT_SECRET"),
-    flightAgentToCaptainSecret: optional("FLIGHT_AGENT_TO_CAPTAIN_SECRET"),
+    basicUsername: process.env.CAPTAIN_BASIC_USERNAME?.trim() || "captain",
+    basicPassword: optional("CAPTAIN_BASIC_PASSWORD"),
+    ownerAuthEnabled: booleanValue("CAPTAIN_OWNER_AUTH_ENABLED", mode === "production"),
+    pilotBaseUrl: optional("PILOT_BASE_URL"),
+    pilotToCaptainSecret: optional("PILOT_TO_CAPTAIN_SECRET"),
+    captainToPilotSecret: optional("CAPTAIN_TO_PILOT_SECRET"),
     duffelAccessToken: optional("DUFFEL_ACCESS_TOKEN"),
     duffelBaseUrl: (process.env.DUFFEL_BASE_URL?.trim() || "https://api.duffel.com").replace(/\/$/, ""),
     duffelTimeoutMs: positiveInteger("FLIGHT_SEARCH_TIMEOUT_MS", 120_000),
     duffelSupplierTimeoutMs: positiveInteger("DUFFEL_SUPPLIER_TIMEOUT_MS", 20_000),
     telegramBotToken: optional("TELEGRAM_BOT_TOKEN"),
     telegramWebhookSecretToken: optional("TELEGRAM_WEBHOOK_SECRET_TOKEN"),
-    allowlistTelegramUserIds: integerList("CAPTAIN_ALLOWLIST_TELEGRAM_USER_IDS"),
-    autoAllowlist: booleanValue("CAPTAIN_AUTO_ALLOWLIST", mode !== "production"),
     captainSessionSecret: optional("CAPTAIN_SESSION_SECRET"),
     duffelLiveMode: booleanValue("DUFFEL_LIVE_MODE", false)
   };
   if (mode === "production") {
     for (const [name, value] of [
       ["DATABASE_URL", env.databaseUrl],
-      ["CAPTAIN_BASE_URL", env.captainBaseUrl],
-      ["CAPTAIN_TO_FLIGHT_AGENT_SECRET", env.captainToFlightAgentSecret],
-      ["FLIGHT_AGENT_TO_CAPTAIN_SECRET", env.flightAgentToCaptainSecret],
+      ["PILOT_BASE_URL", env.pilotBaseUrl],
+      ["PILOT_TO_CAPTAIN_SECRET", env.pilotToCaptainSecret],
+      ["CAPTAIN_TO_PILOT_SECRET", env.captainToPilotSecret],
       ["DUFFEL_ACCESS_TOKEN", env.duffelAccessToken],
       ["TELEGRAM_BOT_TOKEN", env.telegramBotToken],
       ["TELEGRAM_WEBHOOK_SECRET_TOKEN", env.telegramWebhookSecretToken],
@@ -57,7 +53,7 @@ export function loadEnv(): FlightAgentEnv {
       if (!value) throw new Error(`Missing required production environment variable: ${name}`);
     }
     if (env.ownerAuthEnabled && !env.basicPassword) {
-      throw new Error("Missing required production environment variable: FLIGHT_AGENT_BASIC_PASSWORD");
+      throw new Error("Missing required production environment variable: CAPTAIN_BASIC_PASSWORD");
     }
   }
   return env;
@@ -77,10 +73,4 @@ function booleanValue(name: string, fallback: boolean): boolean {
   if (value === "true") return true;
   if (value === "false") return false;
   return fallback;
-}
-
-function integerList(name: string): number[] {
-  const value = process.env[name]?.trim();
-  if (!value) return [];
-  return value.split(",").map((item) => Number(item.trim())).filter(Number.isSafeInteger);
 }

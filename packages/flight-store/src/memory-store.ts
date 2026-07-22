@@ -49,12 +49,11 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   readonly #recommendations = new Map<string, TripRecommendation>();
   readonly #notifications = new Map<string, StoredNotification>();
 
-  async ensureTelegramUser(input: TelegramUserInput, autoAllowlist: boolean, now: Date): Promise<CaptainUser> {
+  async ensureTelegramUser(input: TelegramUserInput, now: Date): Promise<CaptainUser> {
     const existing = this.#usersByTelegram.get(input.telegramUserId);
     if (existing) {
       const updated = {
         ...existing,
-        ...(autoAllowlist && existing.status !== "suspended" ? { status: "active" as const } : {}),
         telegramChatId: input.telegramChatId,
         displayName: displayName(input)
       };
@@ -63,7 +62,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     }
     const user: CaptainUser = {
       id: randomUUID(),
-      status: autoAllowlist ? "active" : "pending",
+      status: "active",
       timezone: "UTC",
       telegramUserId: input.telegramUserId,
       telegramChatId: input.telegramChatId,

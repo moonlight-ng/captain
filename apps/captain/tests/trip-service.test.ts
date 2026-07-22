@@ -9,8 +9,8 @@ describe("Trip service", () => {
   it("creates, updates, and pauses only the owning traveller's Trip", async () => {
     const now = new Date("2026-08-01T12:00:00Z");
     const store = new MemoryCaptainPlatformStore();
-    const owner = await store.ensureTelegramUser({ telegramUserId: 1, telegramChatId: 1, username: null, firstName: "Ada", lastName: null }, true, now);
-    const other = await store.ensureTelegramUser({ telegramUserId: 2, telegramChatId: 2, username: null, firstName: "Grace", lastName: null }, true, now);
+    const owner = await store.ensureTelegramUser({ telegramUserId: 1, telegramChatId: 1, username: null, firstName: "Ada", lastName: null }, now);
+    const other = await store.ensureTelegramUser({ telegramUserId: 2, telegramChatId: 2, username: null, firstName: "Grace", lastName: null }, now);
     const service = new TripService({ store, liveMode: false, now: () => now });
     const created = await service.create(owner.id, { title: "New York", brief: defaultTestBrief(), cadenceHours: 6 });
     expect(created.searchCombinations).toBe(3);

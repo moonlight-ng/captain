@@ -16,7 +16,7 @@ booking, payment, or passenger-document collection.
 
 ## System shape
 
-1. Captain receives an allowlisted private Telegram message and resolves one
+1. Captain receives a private Telegram message and resolves one
    durable traveller conversation.
 2. Captain creates or updates a tenant-scoped Trip and its individual Watch.
 3. The flight worker wakes due Watches, collapses matching provider requests
@@ -26,9 +26,9 @@ booking, payment, or passenger-document collection.
 5. Captain queues a deduplicated Telegram alert for first results, a price drop,
    a newly stronger itinerary, or a terminal Watch failure.
 
-Pilot uses Captain’s signed internal Trip API. Infrastructure identifiers for
-the former private Captain and Flight Agent remain unchanged during migration;
-only their product-facing identities become Pilot and Captain.
+Pilot uses Captain’s signed internal Trip API. Each app now has matching
+product, deployment, configuration, logging, and runtime identifiers:
+`opemipo-pilot`/`PILOT_*` and `opemipo-captain`/`CAPTAIN_*`.
 
 ## Commands
 

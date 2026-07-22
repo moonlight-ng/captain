@@ -9,7 +9,7 @@ import type {
   Watch
 } from "@agents/flight-domain";
 
-export type CaptainUserStatus = "pending" | "allowlisted" | "active" | "suspended";
+export type CaptainUserStatus = "active" | "suspended";
 
 export type CaptainUser = {
   id: string;
@@ -67,7 +67,7 @@ export type CaptainNotification = {
 };
 
 export interface CaptainPlatformStore {
-  ensureTelegramUser(input: TelegramUserInput, autoAllowlist: boolean, now: Date): Promise<CaptainUser>;
+  ensureTelegramUser(input: TelegramUserInput, now: Date): Promise<CaptainUser>;
   getUser(userId: string): Promise<CaptainUser | null>;
   claimTelegramUpdate(updateKey: string, userId: string, now: Date): Promise<boolean>;
   getConversation(userId: string, limit?: number): Promise<ConversationContext>;

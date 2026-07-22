@@ -4,11 +4,11 @@ import { signBridgeRequest } from "../services/bridge/signature.js";
 import { MemoryFlightAgentStore } from "../services/store/memory-store.js";
 
 const mocks = vi.hoisted(() => ({
-  getFlightAgentServices: vi.fn()
+  getCaptainServices: vi.fn()
 }));
 
 vi.mock("../services/app/services.js", () => ({
-  getFlightAgentServices: mocks.getFlightAgentServices
+  getCaptainServices: mocks.getCaptainServices
 }));
 
 import apiChannel from "../agent/channels/api.js";
@@ -32,16 +32,16 @@ describe("internal check bridge", () => {
   it("exposes a signed internal action route for Captain edits", () => {
     expect(actionRoute).toBeDefined();
   });
-  const secret = "captain-to-flight-agent";
+  const secret = "pilot-to-captain";
   let store: MemoryFlightAgentStore;
   let requestCheck: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     store = new MemoryFlightAgentStore();
     requestCheck = vi.fn().mockResolvedValue("00000000-0000-4000-8000-000000000123");
-    mocks.getFlightAgentServices.mockResolvedValue({
+    mocks.getCaptainServices.mockResolvedValue({
       env: {
-        captainToFlightAgentSecret: secret,
+        pilotToCaptainSecret: secret,
         publicUrl: "https://flight.example"
       },
       store,
