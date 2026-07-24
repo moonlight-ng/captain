@@ -5,6 +5,7 @@ import type {
   FlightAgent,
   FlightAgentBrief,
   FlightDetails,
+  TripDashboardPayload,
   TrackingWindowDays,
   Workspace
 } from "./domain";
@@ -33,6 +34,18 @@ export async function createAgent(brief: FlightAgentBrief): Promise<FlightAgent>
 export async function getWorkspace(key: string): Promise<Workspace> {
   const result = await api<{ workspace: Workspace }>(`/v1/agents/${encodeURIComponent(key)}`);
   return result.workspace;
+}
+
+export async function getTripDashboard(tripId: string, token: string): Promise<TripDashboardPayload> {
+  return api<TripDashboardPayload>(`/v1/dashboard/trips/${encodeURIComponent(tripId)}`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+}
+
+export async function getCompactTripDashboard(token: string): Promise<TripDashboardPayload> {
+  return api<TripDashboardPayload>("/v1/dashboard", {
+    headers: { authorization: `Bearer ${token}` }
+  });
 }
 
 export async function getFlightDetails(agentKey: string, flightId: string): Promise<FlightDetails> {

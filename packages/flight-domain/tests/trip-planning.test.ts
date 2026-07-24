@@ -5,6 +5,7 @@ import {
   daysBetween,
   formatCalendarDate,
   parseIsoDate,
+  tripPlanPartialSchema,
   weekdayName
 } from "../src/trip-planning.js";
 
@@ -23,5 +24,22 @@ describe("trip planning calendar", () => {
   it("rejects invalid calendar dates and formats weekdays from the date", () => {
     expect(() => parseIsoDate("2026-02-29")).toThrow("Invalid date");
     expect(formatCalendarDate("2026-08-17")).toContain("Monday");
+  });
+
+  it("loads drafts saved before multi-city legs were introduced", () => {
+    expect(tripPlanPartialSchema.parse({
+      originAirports: ["LOS"],
+      destinationAirports: ["NYC"],
+      tripType: "round_trip",
+      departureDate: null,
+      returnDate: "2026-08-16",
+      travellers: null,
+      cabin: "economy",
+      maxStops: 1,
+      currency: "NGN",
+      maximumPrice: null,
+      preferredAirlines: [],
+      excludedAirlines: []
+    }).legs).toEqual([]);
   });
 });

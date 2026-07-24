@@ -45,6 +45,7 @@ export class TripPlanningService {
   readonly #extract: TripFactExtractor;
   readonly #liveMode: boolean;
   readonly #now: () => Date;
+  readonly #dashboardUrlForTrip: (userId: string, tripId: string) => string;
 
   constructor(options: {
     store: CaptainPlatformStore;
@@ -54,6 +55,7 @@ export class TripPlanningService {
     model?: string;
     apiKey?: string | null;
     now?: () => Date;
+    dashboardUrlForTrip?: (userId: string, tripId: string) => string;
   }) {
     this.#store = options.store;
     this.#trips = options.trips;
@@ -63,6 +65,8 @@ export class TripPlanningService {
       model: options.model ?? "openai/gpt-5.6-terra"
     });
     this.#now = options.now ?? (() => new Date());
+    this.#dashboardUrlForTrip = options.dashboardUrlForTrip
+      ?? ((_userId, tripId) => `http://127.0.0.1/trips/${encodeURIComponent(tripId)}`);
   }
 
   async prepare(
@@ -181,7 +185,12 @@ export class TripPlanningService {
       throw error;
     }
     if (!confirmed) throw new Error("Trip draft is stale; review the latest confirmation");
-    const receipt = buildReceipt(confirmed.draft, confirmed.result.trip, confirmed.result.created);
+    const receipt = buildReceipt(
+      confirmed.draft,
+      confirmed.result.trip,
+      confirmed.result.created,
+      this.dashboardUrlForTrip(userId, confirmed.result.trip.id)
+    );
     console.info(JSON.stringify({
       event: "captain.trip_plan_confirmed",
       draft_id: confirmed.draft.id,
@@ -223,6 +232,10 @@ export class TripPlanningService {
     return this.#store.findOpenTripPlanDraft(userId, this.#now());
   }
 
+  dashboardUrlForTrip(userId: string, tripId: string): string {
+    return this.#dashboardUrlForTrip(userId, tripId);
+  }
+
   async activeTripLocation(userId: string): Promise<string | null> {
     const conversation = await this.#store.getConversation(userId, 0);
     if (!conversation.activeTripId) return null;
@@ -231,7 +244,8 @@ export class TripPlanningService {
       title: trip.title,
       tripId: trip.id,
       originAirports: trip.brief.originAirports,
-      destinationAirports: trip.brief.destinationAirports
+      destinationAirports: trip.brief.destinationAirports,
+      dashboardUrl: this.dashboardUrlForTrip(userId, trip.id)
     }) : null;
   }
 
@@ -245,7 +259,13 @@ export class TripPlanningService {
       ? addIsoDays(departureDate, trip.brief.stayNights.preferred)
       : null;
     const validMessages = [true, false].map((created) =>
-      formatTripCreationReceipt(buildReceiptFromTrip(trip, created, departureDate, returnDate))
+      formatTripCreationReceipt(buildReceiptFromTrip(
+        trip,
+        created,
+        departureDate,
+        returnDate,
+        this.dashboardUrlForTrip(userId, trip.id)
+      ))
     );
     return validMessages.includes(message.trim()) ? message : UNGROUNDED_CREATION_MESSAGE;
   }
@@ -309,6 +329,8 @@ function inferDefaults(
   previous: Record<string, string>
 ): Record<string, string> {
   const inferred = { ...previous };
+  if (facts.travellers) delete inferred.travellers;
+  else if (!partial.travellers) inferred.travellers = "default — one adult";
   if (facts.cabin) delete inferred.cabin;
   else if (!partial.cabin) inferred.cabin = "default — economy";
   if (facts.maxStops !== null) delete inferred.maxStops;
@@ -325,6 +347,7 @@ function inferDefaults(
 }
 
 function applyDefaults(partial: TripPlanPartial): void {
+  partial.travellers ??= { adults: 1, childrenAges: [], infants: 0 };
   partial.cabin ??= "economy";
   partial.maxStops ??= 1;
   partial.currency ??= localCurrency(partial.originAirports[0] ?? null);
@@ -469,14 +492,16 @@ function localCurrency(origin: string | null): string | null {
 function buildReceipt(
   draft: TripPlanDraft,
   trip: Trip,
-  created: boolean
+  created: boolean,
+  dashboardUrl: string
 ): TripCreationReceipt {
   if (!draft.plan) throw new Error("Started Trip is missing its persisted plan");
   return buildReceiptFromTrip(
     trip,
     created,
     draft.plan.departureDate,
-    draft.plan.returnDate
+    draft.plan.returnDate,
+    dashboardUrl
   );
 }
 
@@ -484,7 +509,8 @@ function buildReceiptFromTrip(
   trip: Trip,
   created: boolean,
   departureDate: string,
-  returnDate: string | null
+  returnDate: string | null,
+  dashboardUrl: string
 ): TripCreationReceipt {
   return {
     tripId: trip.id,
@@ -505,6 +531,7 @@ function buildReceiptFromTrip(
     cabin: trip.brief.cabin,
     maxStops: trip.brief.maxStops,
     currency: trip.brief.currency,
+    dashboardUrl,
     accessHint: "Send /trips to view your saved Trips."
   };
 }

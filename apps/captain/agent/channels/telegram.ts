@@ -25,6 +25,10 @@ import type { TripPlanResult } from "@agents/flight-domain";
 
 import { getCaptainServices } from "../../services/app/services.js";
 import { TripPlanningService } from "../../services/trip-planning/service.js";
+import {
+  formatTripList,
+  telegramDashboardMessage
+} from "../../services/trip-planning/format.js";
 
 const MAX_VOICE_BYTES = 20 * 1024 * 1024;
 const credentials = {
@@ -32,6 +36,10 @@ const credentials = {
   webhookSecretToken: () => required("TELEGRAM_WEBHOOK_SECRET_TOKEN")
 };
 const pendingSessionRotations = new Map<string, PendingSessionRotation>();
+const agentProgressMessages = new Map<string, { chatId: string; messageId: string }>();
+const PLANNING_PROGRESS_TEXT = "Working through the route and dates…";
+const AGENT_PROGRESS_TEXT = "Working on it…";
+const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. Your saved Trips are unchanged—please try again.";
 
 export default telegramChannel({
   route: "/eve/v1/telegram",
@@ -81,9 +89,12 @@ export default telegramChannel({
       const trips = await services.trips.list(user.id);
       const response = trips.length === 0
         ? "You don’t have any Trips yet. Tell me where and when you want to go."
-        : trips.map((trip) => `• ${trip.title} — ${trip.status} (${trip.brief.originAirports.join("/")} → ${trip.brief.destinationAirports.join("/")})`).join("\n");
+        : formatTripList(
+            trips,
+            (tripId) => services.tripPlanning.dashboardUrlForTrip(user.id, tripId)
+          );
       await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
-      await ctx.telegram.post(response);
+      await postTelegramDashboardMessage(ctx, response);
       return null;
     }
     if (!content) {
@@ -104,26 +115,47 @@ export default telegramChannel({
       return null;
     }
 
-    const openDraftResult = await services.tripPlanning.handleOpenDraftText(
-      user.id,
-      content,
-      sourceMessageId
-    );
-    if (openDraftResult) {
-      await postTripPlanResult(ctx, user.id, openDraftResult);
-      return null;
-    }
-    if (TripPlanningService.isWhereQuestion(content)) {
-      const location = await services.tripPlanning.activeTripLocation(user.id);
-      if (location) {
-        await services.platformStore.appendMessage(user.id, "assistant", location, new Date());
-        await ctx.telegram.post(location);
+    try {
+      const handled = await withPlanningProgress(ctx, async () => {
+        const openDraftResult = await services.tripPlanning.handleOpenDraftText(
+          user.id,
+          content,
+          sourceMessageId
+        );
+        if (openDraftResult) {
+          await postTripPlanResult(ctx, user.id, openDraftResult);
+          return true;
+        }
+        if (TripPlanningService.isWhereQuestion(content)) {
+          const location = await services.tripPlanning.activeTripLocation(user.id);
+          if (location) {
+            await services.platformStore.appendMessage(user.id, "assistant", location, new Date());
+            await postTelegramDashboardMessage(ctx, location);
+            return true;
+          }
+        }
+        if (TripPlanningService.isTripPlanningRequest(content)) {
+          const planned = await services.tripPlanning.prepare(user.id, content, sourceMessageId);
+          await postTripPlanResult(ctx, user.id, planned);
+          return true;
+        }
+        return false;
+      });
+      if (handled) {
         return null;
       }
-    }
-    if (TripPlanningService.isTripPlanningRequest(content)) {
-      const planned = await services.tripPlanning.prepare(user.id, content, sourceMessageId);
-      await postTripPlanResult(ctx, user.id, planned);
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "captain.telegram_message_processing_failed",
+        error: error instanceof Error ? error.name : "UnknownError"
+      }));
+      await services.platformStore.appendMessage(
+        user.id,
+        "assistant",
+        PROCESSING_FAILURE_TEXT,
+        new Date()
+      );
+      await ctx.telegram.post(PROCESSING_FAILURE_TEXT);
       return null;
     }
 
@@ -217,8 +249,22 @@ export default telegramChannel({
     }
   },
   events: {
-    async "turn.started"(_data, channel) {
+    async "turn.started"(_data, channel, ctx) {
       await channel.telegram.startTyping();
+      try {
+        const posted = await channel.telegram.post(AGENT_PROGRESS_TEXT);
+        if (posted.id) {
+          agentProgressMessages.set(ctx.session.id, {
+            chatId: channel.telegram.chatId,
+            messageId: posted.id
+          });
+        }
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "captain.telegram_progress_start_failed",
+          error: error instanceof Error ? error.name : "UnknownError"
+        }));
+      }
     },
     async "input.requested"(data, channel, ctx) {
       const requests = Array.isArray(data.requests)
@@ -284,6 +330,7 @@ export default telegramChannel({
     },
     async "message.completed"(data, channel, ctx) {
       if (data.finishReason === "tool-calls" || !data.message) return;
+      await clearAgentProgress(channel, ctx.session.id);
       const userId = authUserId(ctx.session.auth.current?.attributes.captain_user_id);
       let message = data.message;
       if (userId) {
@@ -292,6 +339,13 @@ export default telegramChannel({
         await services.platformStore.appendMessage(userId, "assistant", message, new Date());
       }
       await channel.telegram.post(message);
+    },
+    async "turn.completed"(_data, channel, ctx) {
+      await clearAgentProgress(channel, ctx.session.id);
+    },
+    async "turn.failed"(_data, channel, ctx) {
+      await clearAgentProgress(channel, ctx.session.id);
+      await channel.telegram.post(PROCESSING_FAILURE_TEXT);
     }
   }
 });
@@ -388,7 +442,95 @@ async function postTripPlanResult(
     });
     return;
   }
+  if (result.status === "started") {
+    await postTelegramDashboardMessage(ctx, message);
+    return;
+  }
   await ctx.telegram.post(message);
+}
+
+async function postTelegramDashboardMessage(
+  ctx: TelegramContext,
+  message: string
+): Promise<void> {
+  const rendered = telegramDashboardMessage(message);
+  if (rendered.links.length === 0) {
+    await ctx.telegram.post(message);
+    return;
+  }
+  await ctx.telegram.post({
+    text: rendered.text,
+    link_preview_options: { is_disabled: true },
+    reply_markup: {
+      inline_keyboard: rendered.links.map((link) => [{
+        text: link.text,
+        url: link.url
+      }])
+    }
+  });
+}
+
+async function withPlanningProgress<T>(
+  ctx: TelegramContext,
+  operation: () => Promise<T>
+): Promise<T> {
+  let statusMessageId: string | null = null;
+  let posting: Promise<void> | null = null;
+  const timer = setTimeout(() => {
+    posting = (async () => {
+      await ctx.telegram.startTyping();
+      const posted = await ctx.telegram.post(PLANNING_PROGRESS_TEXT);
+      statusMessageId = posted.id ?? null;
+    })().catch((error) => {
+      console.error(JSON.stringify({
+        event: "captain.telegram_planning_progress_failed",
+        error: error instanceof Error ? error.name : "UnknownError"
+      }));
+    });
+  }, 750);
+  try {
+    return await operation();
+  } finally {
+    clearTimeout(timer);
+    await posting;
+    if (statusMessageId) {
+      try {
+        await ctx.telegram.request("deleteMessage", {
+          chat_id: ctx.telegram.chatId,
+          message_id: Number(statusMessageId)
+        });
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "captain.telegram_planning_progress_clear_failed",
+          error: error instanceof Error ? error.name : "UnknownError"
+        }));
+      }
+    }
+  }
+}
+
+async function clearAgentProgress(
+  channel: {
+    telegram: {
+      request(method: string, body?: Record<string, unknown>): Promise<unknown>;
+    };
+  },
+  sessionId: string
+): Promise<void> {
+  const progress = agentProgressMessages.get(sessionId);
+  if (!progress) return;
+  agentProgressMessages.delete(sessionId);
+  try {
+    await channel.telegram.request("deleteMessage", {
+      chat_id: progress.chatId,
+      message_id: Number(progress.messageId)
+    });
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "captain.telegram_progress_clear_failed",
+      error: error instanceof Error ? error.name : "UnknownError"
+    }));
+  }
 }
 
 export function parseTripPlanCallback(data: string | undefined): {

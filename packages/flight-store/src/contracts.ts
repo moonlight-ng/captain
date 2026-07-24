@@ -60,6 +60,13 @@ export type TripRecommendation = {
   observedAt: string;
 };
 
+export type TripFlightSelection = {
+  tripId: string;
+  itineraryKey: string;
+  selectedBy: "agent" | "person";
+  selectedAt: string;
+};
+
 export type CaptainNotification = {
   id: string;
   userId: string;
@@ -79,12 +86,21 @@ export interface CaptainPlatformStore {
   setActiveTrip(userId: string, tripId: string | null, now: Date): Promise<void>;
   listTrips(userId: string): Promise<Trip[]>;
   getTrip(userId: string, tripId: string): Promise<Trip | null>;
+  getTripById(tripId: string): Promise<Trip | null>;
   getWatch(userId: string, tripId: string): Promise<Watch | null>;
   getTripByLegacyKey(userId: string, legacyAgentKey: string): Promise<Trip | null>;
   createTrip(userId: string, input: CreateTripInput, specs: SearchSpec[], now: Date): Promise<TripCreationResult>;
   updateTrip(userId: string, tripId: string, input: UpdateTripInput, specs: SearchSpec[] | null, now: Date): Promise<Trip>;
   applyTripAction(userId: string, tripId: string, action: TripAction, now: Date): Promise<Trip>;
   listTripOffers(userId: string, tripId: string, now: Date): Promise<OfferSnapshot[]>;
+  listTripFlightSelections(userId: string, tripId: string): Promise<TripFlightSelection[]>;
+  setTripFlightSelection(
+    userId: string,
+    tripId: string,
+    itineraryKey: string,
+    selected: boolean,
+    now: Date
+  ): Promise<void>;
   createTripPlanDraft(userId: string, request: string, sourceMessageId: string | null, now: Date): Promise<TripPlanDraft>;
   getTripPlanDraft(userId: string, draftId: string, now: Date): Promise<TripPlanDraft | null>;
   findOpenTripPlanDraft(userId: string, now: Date): Promise<TripPlanDraft | null>;

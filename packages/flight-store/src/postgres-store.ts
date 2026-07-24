@@ -30,6 +30,7 @@ import type {
   CompletedProviderOffer,
   ConversationContext,
   TelegramUserInput,
+  TripFlightSelection,
   TripRecommendation
 } from "./contracts.js";
 import { offerScore, recommendationSummary } from "./ranking.js";
@@ -182,6 +183,13 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
   async getTrip(userId: string, tripId: string): Promise<Trip | null> {
     const rows = await this.#sql<TripRow[]>`
       select * from captain.trips where id = ${tripId} and user_id = ${userId}
+    `;
+    return rows[0] ? toTrip(rows[0]) : null;
+  }
+
+  async getTripById(tripId: string): Promise<Trip | null> {
+    const rows = await this.#sql<TripRow[]>`
+      select * from captain.trips where id = ${tripId}
     `;
     return rows[0] ? toTrip(rows[0]) : null;
   }
@@ -468,6 +476,84 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       order by offer.itinerary_key, offer.observed_at desc, offer.price asc
     `;
     return rows.map(toOffer).sort((left, right) => left.price - right.price);
+  }
+
+  async listTripFlightSelections(userId: string, tripId: string): Promise<TripFlightSelection[]> {
+    const rows = await this.#sql<Array<{
+      trip_id: string;
+      itinerary_key: string;
+      selected_by: TripFlightSelection["selectedBy"];
+      selected_at: Date;
+    }>>`
+      select recommendation.trip_id, recommendation.itinerary_key,
+        'agent'::text as selected_by, recommendation.observed_at as selected_at
+      from captain.trip_recommendations recommendation
+      join captain.trips trip on trip.id = recommendation.trip_id
+      where recommendation.trip_id = ${tripId} and trip.user_id = ${userId}
+      union all
+      select selection.trip_id, selection.itinerary_key,
+        selection.selected_by, selection.selected_at
+      from captain.trip_flight_selections selection
+      join captain.trips trip on trip.id = selection.trip_id
+      where selection.trip_id = ${tripId} and trip.user_id = ${userId}
+      order by selected_at desc
+    `;
+    return rows.map((row) => ({
+      tripId: row.trip_id,
+      itineraryKey: row.itinerary_key,
+      selectedBy: row.selected_by,
+      selectedAt: iso(row.selected_at)
+    }));
+  }
+
+  async setTripFlightSelection(
+    userId: string,
+    tripId: string,
+    itineraryKey: string,
+    selected: boolean,
+    now: Date
+  ): Promise<void> {
+    await this.#sql.begin(async (tx) => {
+      const trips = await tx<Array<{ id: string }>>`
+        select id from captain.trips where id = ${tripId} and user_id = ${userId}
+        for update
+      `;
+      if (!trips[0]) throw new TripNotFoundError();
+      if (selected) {
+        const offers = await tx<Array<{ exists: boolean }>>`
+          select exists(
+            select 1 from captain.offers offer
+            join captain.watch_search_specs link on link.search_spec_id = offer.search_spec_id
+            join captain.watches watch on watch.id = link.watch_id
+            where watch.trip_id = ${tripId}
+              and offer.itinerary_key = ${itineraryKey}
+              and (offer.expires_at is null or offer.expires_at > ${now})
+          ) as exists
+        `;
+        if (!offers[0]?.exists) throw new Error("Flight offer not found");
+        await tx`
+          insert into captain.trip_flight_selections (
+            trip_id, itinerary_key, selected_by, selected_at
+          ) values (${tripId}, ${itineraryKey}, 'person', ${now})
+          on conflict (trip_id, itinerary_key, selected_by)
+          do update set selected_at = excluded.selected_at
+        `;
+      } else {
+        await tx`
+          delete from captain.trip_flight_selections
+          where trip_id = ${tripId} and itinerary_key = ${itineraryKey}
+            and selected_by = 'person'
+        `;
+      }
+      await tx`
+        insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
+        values (
+          ${randomUUID()}, ${tripId}, ${userId},
+          ${selected ? "flight_selected" : "flight_unselected"},
+          ${tx.json(json({ itineraryKey, selectedBy: "person" }))}, ${now}
+        )
+      `;
+    });
   }
 
   async scheduleDueSearchRuns(now: Date, freshnessMs: number, limit: number): Promise<number> {

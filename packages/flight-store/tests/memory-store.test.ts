@@ -96,6 +96,25 @@ describe("Captain platform store", () => {
       snapshot: { route: "LHR → BER", airlineCodes: ["BA"], stops: 0, durationSeconds: 7_200, segments: [] }
     }], new Date("2026-08-01T12:00:01Z"));
     expect(await store.evaluateTripsForSearchSpec(run.searchSpecId, new Date("2026-08-01T12:00:02Z"))).toBe(1);
+    const trip = (await store.listTrips(ada.id))[0]!;
+    const [offer] = await store.listTripOffers(ada.id, trip.id, new Date("2026-08-01T12:00:03Z"));
+    await store.setTripFlightSelection(
+      ada.id,
+      trip.id,
+      offer!.itineraryKey,
+      true,
+      new Date("2026-08-01T12:00:04Z")
+    );
+    expect(await store.listTripFlightSelections(ada.id, trip.id)).toEqual([
+      expect.objectContaining({
+        itineraryKey: offer!.itineraryKey,
+        selectedBy: "agent"
+      }),
+      expect.objectContaining({
+        itineraryKey: offer!.itineraryKey,
+        selectedBy: "person"
+      })
+    ]);
     const notifications = await store.listPendingNotifications(new Date("2026-08-01T12:00:03Z"), 10);
     expect(notifications).toHaveLength(1);
     expect(notifications[0]).toMatchObject({ kind: "initial_results", telegramChatId: 1 });

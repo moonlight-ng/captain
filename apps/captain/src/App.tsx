@@ -4,7 +4,9 @@ import { Liveline, type LivelinePoint } from "liveline";
 import {
   agentAction,
   createAgent,
+  getCompactTripDashboard,
   getFlightDetails,
+  getTripDashboard,
   getWorkspace,
   listAgents
 } from "./api";
@@ -17,8 +19,10 @@ import {
   formatDuration,
   formatProcessingTime,
   formatTimestamp,
+  flightDetailsFromDashboardFlight,
   sortAndFilterFlights,
   validateBrief,
+  workspaceFromTripDashboard,
   type AgentSummary,
   type BrowsePreferences,
   type CadenceHours,
@@ -29,7 +33,7 @@ import {
   type Workspace
 } from "./domain";
 
-type Screen = "loading" | "home" | "brief" | "review" | "starting" | "workspace" | "settings" | "detail";
+type Screen = "loading" | "home" | "brief" | "review" | "starting" | "workspace" | "settings" | "detail" | "dashboard-error";
 type WorkspaceTab = "Flights" | "Browse";
 type SettingsPanel = "menu" | "brief" | "activity";
 type TrackingNoticeState = { readonly message: string; readonly open: boolean } | null;
@@ -62,6 +66,11 @@ export function App() {
   const [screen, setScreen] = useState<Screen>("loading");
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [dashboardAccess, setDashboardAccess] = useState<{
+    readonly tripId: string;
+    readonly token: string;
+    readonly compact: boolean;
+  } | null>(null);
   const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("Flights");
   const [draftBrief, setDraftBrief] = useState<FlightAgentBrief>(() => defaultBrief());
   const [briefEditing, setBriefEditing] = useState(false);
@@ -91,21 +100,27 @@ export function App() {
       void refreshWorkspace(workspace.agent.key, false);
     }, workspace.agent.latestCheck?.status === "running" || workspace.agent.status === "queued" ? 2_500 : 15_000);
     return () => window.clearInterval(interval);
-  }, [workspace?.agent.key, workspace?.agent.latestCheck?.status, workspace?.agent.status, screen, filterOpen]);
+  }, [workspace?.agent.key, workspace?.agent.latestCheck?.status, workspace?.agent.status, screen, filterOpen, dashboardAccess?.token]);
 
   async function initialize() {
     setError(null);
     try {
       const routeKey = agentKeyFromPath();
-      if (routeKey) {
-        await openAgent(routeKey, false);
+      const dashboardToken = dashboardTokenFromLocation();
+      if (isCompactDashboardPath() && dashboardToken) {
+        await openCompactTripDashboard(dashboardToken);
+      } else if (routeKey) {
+        if (dashboardToken) await openTripDashboard(routeKey, dashboardToken);
+        else await openAgent(routeKey, false);
+      } else if (isCompactDashboardPath()) {
+        setScreen("dashboard-error");
       } else {
         setAgents(await listAgents());
         setScreen("home");
       }
     } catch (cause) {
       setError(errorMessage(cause));
-      setScreen("home");
+      setScreen(dashboardTokenFromLocation() ? "dashboard-error" : "home");
     }
   }
 
@@ -118,6 +133,7 @@ export function App() {
   }
 
   async function openAgent(key: string, navigate = true) {
+    setDashboardAccess(null);
     setBusy(true);
     setError(null);
     try {
@@ -153,10 +169,47 @@ export function App() {
     }
   }
 
+  async function openTripDashboard(tripId: string, token: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = workspaceFromTripDashboard(await getTripDashboard(tripId, token));
+      setDashboardAccess({ tripId, token, compact: false });
+      setWorkspace(next);
+      setDraftPreferences(next.agent.browsePreferences);
+      setWorkspaceTab("Flights");
+      setScreen("workspace");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openCompactTripDashboard(token: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = workspaceFromTripDashboard(await getCompactTripDashboard(token));
+      setDashboardAccess({ tripId: next.agent.key, token, compact: true });
+      setWorkspace(next);
+      setDraftPreferences(next.agent.browsePreferences);
+      setWorkspaceTab("Flights");
+      setScreen("workspace");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function refreshWorkspace(key = workspace?.agent.key, showError = true) {
     if (!key) return;
     try {
-      const next = await getWorkspace(key);
+      const loaded = dashboardAccess?.tripId === key
+        ? workspaceFromTripDashboard(dashboardAccess.compact
+            ? await getCompactTripDashboard(dashboardAccess.token)
+            : await getTripDashboard(key, dashboardAccess.token))
+        : await getWorkspace(key);
+      const next = dashboardAccess?.tripId === key && workspace
+        ? { ...loaded, agent: { ...loaded.agent, browsePreferences: workspace.agent.browsePreferences } }
+        : loaded;
       setWorkspace(next);
       if (!filterOpen) setDraftPreferences(next.agent.browsePreferences);
     } catch (cause) {
@@ -220,6 +273,11 @@ export function App() {
 
   async function openFlight(flight: FlightItem) {
     if (!workspace) return;
+    if (dashboardAccess) {
+      setSelectedFlight(flightDetailsFromDashboardFlight(flight));
+      setScreen("detail");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -235,6 +293,7 @@ export function App() {
   async function leaveWorkspace() {
     window.history.pushState({}, "", "/");
     setWorkspace(null);
+    setDashboardAccess(null);
     setSelectedFlight(null);
     setScreen("home");
     await refreshAgents();
@@ -260,6 +319,7 @@ export function App() {
         {error && <ErrorNotice message={error} onClose={() => setError(null)} />}
         {trackingNotice && <TrackingNotice message={trackingNotice.message} open={trackingNotice.open} />}
         {screen === "loading" && <LoadingScreen />}
+        {screen === "dashboard-error" && <DashboardErrorScreen />}
         {screen === "home" && (
           <HomeScreen agents={agents} busy={busy} onStart={startBrief} onOpen={(key) => void openAgent(key)} />
         )}
@@ -306,10 +366,20 @@ export function App() {
               setDraftPreferences(workspace.agent.browsePreferences);
               setFilterOpen(true);
             }}
-            onClearFilters={() => void performAction({
-              type: "set_browse_preferences",
-              preferences: EMPTY_PREFERENCES
-            })}
+            onClearFilters={() => {
+              if (dashboardAccess) {
+                setWorkspace((current) => current ? {
+                  ...current,
+                  agent: { ...current.agent, browsePreferences: EMPTY_PREFERENCES }
+                } : current);
+              } else {
+                void performAction({
+                  type: "set_browse_preferences",
+                  preferences: EMPTY_PREFERENCES
+                });
+              }
+            }}
+            readOnly={Boolean(dashboardAccess)}
           />
         )}
         {screen === "settings" && workspace && (
@@ -345,6 +415,7 @@ export function App() {
                 ? `${selectedFlight.flight.marketingAirline} is no longer being tracked`
                 : `${selectedFlight.flight.marketingAirline} was dismissed`);
             })}
+            readOnly={Boolean(dashboardAccess)}
           />
         )}
         {workspace && (
@@ -354,10 +425,20 @@ export function App() {
             flights={workspace.browseFlights}
             onPreferences={setDraftPreferences}
             onClose={() => setFilterOpen(false)}
-            onApply={() => void performAction(
-              { type: "set_browse_preferences", preferences: draftPreferences },
-              () => setFilterOpen(false)
-            )}
+            onApply={() => {
+              if (dashboardAccess) {
+                setWorkspace((current) => current ? {
+                  ...current,
+                  agent: { ...current.agent, browsePreferences: draftPreferences }
+                } : current);
+                setFilterOpen(false);
+              } else {
+                void performAction(
+                  { type: "set_browse_preferences", preferences: draftPreferences },
+                  () => setFilterOpen(false)
+                );
+              }
+            }}
           />
         )}
       </AppViewport>
@@ -680,22 +761,24 @@ function WorkspaceScreen(props: {
   readonly onDismiss: (flight: FlightItem) => void;
   readonly onFilters: () => void;
   readonly onClearFilters: () => void;
+  readonly readOnly?: boolean;
 }) {
   const { workspace } = props;
   const flights = sortAndFilterFlights(workspace.browseFlights, workspace.agent.browsePreferences);
   const activeFilters = countFilters(workspace.agent.browsePreferences);
+  const browseView = props.tab === "Browse";
   return (
     <section className="screen column-screen workspace-screen" data-screen="workspace">
       <div className="workspace-atmosphere" aria-hidden="true" />
-      <header className="workspace-header"><IconButton label="Back home" onClick={props.onHome}><ChevronLeftIcon /></IconButton><div><strong>{workspaceTitle(workspace.agent.brief)}</strong></div><button className="settings-button" aria-label="Open settings" onClick={props.onSettings}><SettingsIcon /></button></header>
-      <nav className="workspace-menu" aria-label="Flight workspace">{(["Flights", "Browse"] as const).map((tab) => <button className={props.tab === tab ? "active" : ""} key={tab} onClick={() => props.onTab(tab)}>{tab}</button>)}</nav>
+      <header className="workspace-header">{props.readOnly ? <span className="icon-button" aria-hidden="true" /> : <IconButton label="Back home" onClick={props.onHome}><ChevronLeftIcon /></IconButton>}<div><strong>{workspaceTitle(workspace.agent.brief)}</strong></div>{props.readOnly ? <span className="settings-button" aria-hidden="true" /> : <button className="settings-button" aria-label="Open settings" onClick={props.onSettings}><SettingsIcon /></button>}</header>
+      <nav className="workspace-menu" aria-label="Flight workspace">{(["Flights", "Browse"] as const).map((tab) => <button className={props.tab === tab ? "active" : ""} aria-pressed={props.tab === tab} key={tab} onClick={() => props.onTab(tab)}>{tab}</button>)}</nav>
       <div className="scroll-content workspace-content">
-        {props.tab === "Flights" ? (
+        {!browseView ? (
           <section className="saved-view">
             {workspace.reviewFlights.length === 0 ? (
-              <div className="empty-state"><div className="empty-mark" aria-hidden="true"><PlaneIcon /></div><h2>No tracked flights yet</h2><p>Captain will add flights here for review.</p><button className="primary-pill" onClick={props.onBrowse}>Browse flights</button></div>
+              <div className="empty-state"><div className="empty-mark" aria-hidden="true"><PlaneIcon /></div><h2>No selected flights yet</h2><p>Flights selected by Captain or you will appear here.</p><button className="primary-pill" onClick={props.onBrowse}>Browse flights</button></div>
             ) : (
-              <div className="flight-list">{workspace.reviewFlights.map((flight) => <FlightCard key={flight.id} flight={flight} onOpen={() => props.onOpenFlight(flight)} action={<button className="card-icon-action" aria-label="Remove from review" disabled={props.busy} onClick={(event) => { event.stopPropagation(); props.onDismiss(flight); }}><CloseIcon /></button>} />)}</div>
+              <div className="flight-list">{workspace.reviewFlights.map((flight) => <FlightCard key={flight.id} flight={flight} onOpen={() => props.onOpenFlight(flight)} action={props.readOnly ? <SelectionBadge flight={flight} /> : <button className="card-icon-action" aria-label="Remove from review" disabled={props.busy} onClick={(event) => { event.stopPropagation(); props.onDismiss(flight); }}><CloseIcon /></button>} />)}</div>
             )}
           </section>
         ) : (
@@ -705,13 +788,25 @@ function WorkspaceScreen(props: {
             {flights.length === 0 ? (
               <div className="empty-state compact"><div className="empty-mark" aria-hidden="true"><SearchIcon /></div><h2>{workspace.agent.latestCheck?.status === "failed" ? "Fares unavailable" : workspace.browseFlights.length === 0 ? "Search in progress" : "No matches"}</h2><p>{workspace.agent.latestCheck?.status === "failed" ? "Captain will retry automatically." : workspace.browseFlights.length === 0 ? "Captain is building the first set of options." : "Adjust the current filters to see more flights."}</p></div>
             ) : (
-              <div className="flight-list">{flights.map((flight) => <FlightCard key={flight.id} flight={flight} onOpen={() => props.onOpenFlight(flight)} action={flight.reviewState === "promoted" || flight.reviewState === "retained" ? <span className="review-badge"><i />Tracking</span> : <button className="card-icon-action" aria-label={`Track ${flight.marketingAirline} flight`} disabled={props.busy} onClick={(event) => { event.stopPropagation(); props.onRetain(flight); }}><TrackIcon /></button>} />)}</div>
+              <div className="flight-list">{flights.map((flight) => {
+                const selected = flight.reviewState === "promoted" || flight.reviewState === "retained";
+                const action = selected
+                  ? <SelectionBadge flight={flight} />
+                  : props.readOnly
+                    ? null
+                    : <button className="card-icon-action" aria-label={`Track ${flight.marketingAirline} flight`} disabled={props.busy} onClick={(event) => { event.stopPropagation(); props.onRetain(flight); }}><TrackIcon /></button>;
+                return <FlightCard key={flight.id} flight={flight} onOpen={() => props.onOpenFlight(flight)} action={action} />;
+              })}</div>
             )}
           </section>
         )}
       </div>
     </section>
   );
+}
+
+function SelectionBadge({ flight }: { readonly flight: FlightItem }) {
+  return <span className="review-badge"><i />{flight.reviewState === "retained" ? "Selected" : "Captain pick"}</span>;
 }
 
 function FlightCard(props: { readonly flight: FlightItem; readonly onOpen: () => void; readonly action: React.ReactNode }) {
@@ -784,13 +879,13 @@ function ActivitySettings({ workspace }: { readonly workspace: Workspace }) {
   return <div className="settings-section"><SectionLabel>Recorded events</SectionLabel><div className="activity-list">{workspace.activity.map((item) => <article key={item.id}><i className={item.kind.includes("failed") ? "error" : ""} /><span><strong>{item.message}</strong><small>{formatTimestamp(item.createdAt)}</small></span></article>)}</div>{workspace.activity.length === 0 && <p className="quiet-copy">Activity appears here as Captain works.</p>}</div>;
 }
 
-function FlightDetailScreen(props: { readonly details: FlightDetails; readonly busy: boolean; readonly onBack: () => void; readonly onRetain: () => void; readonly onDismiss: () => void }) {
+function FlightDetailScreen(props: { readonly details: FlightDetails; readonly busy: boolean; readonly onBack: () => void; readonly onRetain: () => void; readonly onDismiss: () => void; readonly readOnly?: boolean }) {
   const { flight } = props.details;
   const observedPrices = props.details.observations.map((observation) => observation.price);
   const minimum = observedPrices.length ? Math.min(...observedPrices) : flight.latest.price;
   const maximum = observedPrices.length ? Math.max(...observedPrices) : flight.latest.price;
   const tracking = flight.reviewState === "retained" || flight.reviewState === "promoted";
-  return <section className="screen column-screen flight-detail-screen" data-screen="flight-detail"><header className="simple-header"><IconButton label="Back to flights" onClick={props.onBack}><ChevronLeftIcon /></IconButton><strong>Flight details</strong></header><div className="scroll-content flight-detail-content"><div className="flight-detail-hero"><div className="detail-airline"><span className="airline-monogram large">{flight.marketingAirlineCode}</span><span><strong>{flight.marketingAirline}</strong><small>{flight.latest.flightNumber}</small></span>{tracking && <em><i />Tracking</em>}</div><h2>{flight.latest.origin} <span>→</span> {flight.destination}</h2><p>{formatDate(flight.travelDate)} · {time(flight.latest.departure)}–{time(flight.latest.arrival)} · {flight.latest.stops === 0 ? "Direct" : `${flight.latest.stops} stop${flight.latest.stops === 1 ? "" : "s"}`}</p><div className="detail-price"><strong>{currency(flight.latest.price, flight.latest.currency)}</strong>{flight.changePercent !== null && Math.abs(flight.changePercent) >= 0.1 && <small className={flight.changePercent < 0 ? "price-down" : "price-up"}>{flight.changePercent > 0 ? "+" : ""}{flight.changePercent.toFixed(1)}%</small>}</div>{flight.promotionReason && <span className="detail-signal">{flight.promotionReason}</span>}</div><section className="detail-section"><SectionLabel>Price history</SectionLabel><PriceTimeline observations={props.details.observations} minimum={minimum} maximum={maximum} /></section><details className="detail-disclosure"><summary>Flight information <ChevronRightIcon /></summary><div className="brief-detail-card"><DetailRow label="Route" value={flight.latest.route} /><DetailRow label="Source" value={flightSourceName(flight.latest)} /><DetailRow label="Duration" value={formatDuration(flight.latest.durationSeconds)} /><DetailRow label="Cabin" value={cabinLabel(flight.latest.cabin)} /><DetailRow label="Observed" value={`${flight.observationCount} time${flight.observationCount === 1 ? "" : "s"}`} /></div></details>{props.details.research[0] && <details className="detail-disclosure"><summary>Route context <ChevronRightIcon /></summary><div className="research-card"><p>{props.details.research[0].overview ?? props.details.research[0].error}</p>{props.details.research[0].results.slice(0, 3).map((result) => <a href={result.sourceUrl} target="_blank" rel="noreferrer" key={result.sourceUrl}><strong>{result.title}</strong><span>{result.finding}</span><small>{result.sourceName}</small></a>)}</div></details>}</div><footer className="detail-actions"><button disabled={props.busy} onClick={props.onDismiss}>{tracking ? "Stop tracking" : "Dismiss"}</button><button className="primary-action" disabled={props.busy || tracking} onClick={props.onRetain}>{tracking ? trackingButtonLabel(flight) : "Track flight"}</button></footer></section>;
+  return <section className="screen column-screen flight-detail-screen" data-screen="flight-detail"><header className="simple-header"><IconButton label="Back to flights" onClick={props.onBack}><ChevronLeftIcon /></IconButton><strong>Flight details</strong></header><div className="scroll-content flight-detail-content"><div className="flight-detail-hero"><div className="detail-airline"><span className="airline-monogram large">{flight.marketingAirlineCode}</span><span><strong>{flight.marketingAirline}</strong><small>{flight.latest.flightNumber}</small></span>{tracking && <em><i />Tracking</em>}</div><h2>{flight.latest.origin} <span>→</span> {flight.destination}</h2><p>{formatDate(flight.travelDate)} · {time(flight.latest.departure)}–{time(flight.latest.arrival)} · {flight.latest.stops === 0 ? "Direct" : `${flight.latest.stops} stop${flight.latest.stops === 1 ? "" : "s"}`}</p><div className="detail-price"><strong>{currency(flight.latest.price, flight.latest.currency)}</strong>{flight.changePercent !== null && Math.abs(flight.changePercent) >= 0.1 && <small className={flight.changePercent < 0 ? "price-down" : "price-up"}>{flight.changePercent > 0 ? "+" : ""}{flight.changePercent.toFixed(1)}%</small>}</div>{flight.promotionReason && <span className="detail-signal">{flight.promotionReason}</span>}</div><section className="detail-section"><SectionLabel>Price history</SectionLabel><PriceTimeline observations={props.details.observations} minimum={minimum} maximum={maximum} /></section><details className="detail-disclosure"><summary>Flight information <ChevronRightIcon /></summary><div className="brief-detail-card"><DetailRow label="Route" value={flight.latest.route} /><DetailRow label="Source" value={flightSourceName(flight.latest)} /><DetailRow label="Duration" value={formatDuration(flight.latest.durationSeconds)} /><DetailRow label="Cabin" value={cabinLabel(flight.latest.cabin)} /><DetailRow label="Observed" value={`${flight.observationCount} time${flight.observationCount === 1 ? "" : "s"}`} /></div></details>{props.details.research[0] && <details className="detail-disclosure"><summary>Route context <ChevronRightIcon /></summary><div className="research-card"><p>{props.details.research[0].overview ?? props.details.research[0].error}</p>{props.details.research[0].results.slice(0, 3).map((result) => <a href={result.sourceUrl} target="_blank" rel="noreferrer" key={result.sourceUrl}><strong>{result.title}</strong><span>{result.finding}</span><small>{result.sourceName}</small></a>)}</div></details>}</div>{!props.readOnly && <footer className="detail-actions"><button disabled={props.busy} onClick={props.onDismiss}>{tracking ? "Stop tracking" : "Dismiss"}</button><button className="primary-action" disabled={props.busy || tracking} onClick={props.onRetain}>{tracking ? trackingButtonLabel(flight) : "Track flight"}</button></footer>}</section>;
 }
 
 function PriceTimeline(props: { readonly observations: FlightDetails["observations"]; readonly minimum: number; readonly maximum: number }) {
@@ -838,6 +933,7 @@ function FilterSheet(props: { readonly open: boolean; readonly preferences: Brow
 }
 
 function LoadingScreen() { return <section className="screen starting-screen"><div className="agent-orbit small" aria-hidden="true"><span /><i /></div><div className="starting-copy"><p>Captain</p><h2>Opening Trip</h2></div></section>; }
+function DashboardErrorScreen() { return <section className="screen starting-screen"><div className="empty-mark" aria-hidden="true"><PlaneIcon /></div><div className="starting-copy"><p>Captain</p><h2>This dashboard link is invalid or has expired</h2><small>Send /trips in Telegram to get a fresh link.</small></div></section>; }
 function ErrorNotice(props: { readonly message: string; readonly onClose: () => void }) {
   const [open, setOpen] = useState(true);
   useEffect(() => setOpen(true), [props.message]);
@@ -886,11 +982,32 @@ function tokenList(value: string): string[] { return [...new Set(value.toUpperCa
 function toggle<T>(values: readonly T[], value: T): T[] { return values.includes(value) ? values.filter((item) => item !== value) : [...values, value]; }
 function percentChange(previous: number, current: number): number { return previous === 0 ? 0 : ((current - previous) / previous) * 100; }
 function homeTripDates(brief: FlightAgentBrief): string { return brief.departureWindow.start === brief.departureWindow.end ? formatDate(brief.departureWindow.start) : `${formatDate(brief.departureWindow.start)}–${formatDate(brief.departureWindow.end)}`; }
-function workspaceTitle(brief: FlightAgentBrief): string { return `${brief.originAirports.join("/")} → ${brief.destinationAirports.join("/")} · ${formatCompactDateRange(brief.departureWindow.start, brief.departureWindow.end)}`; }
+function workspaceTitle(brief: FlightAgentBrief): string {
+  const legs = brief.legs ?? [];
+  if (brief.tripType === "multi_city" && legs.length > 0) {
+    const route = [legs[0]!.originAirports.join("/"), ...legs.map((leg) => leg.destinationAirports.join("/"))].join(" → ");
+    return `${route} · ${formatCompactDateRange(legs[0]!.departureWindow.start, legs.at(-1)!.departureWindow.start)}`;
+  }
+  const end = brief.tripType === "round_trip" && brief.stayNights
+    ? addIsoDays(brief.departureWindow.start, brief.stayNights.preferred)
+    : brief.departureWindow.end;
+  return `${brief.originAirports.join("/")} → ${brief.destinationAirports.join("/")} · ${formatCompactDateRange(brief.departureWindow.start, end)}`;
+}
 function latestActivitySummary(workspace: Workspace): string { const latest = workspace.activity[0]; return latest ? `${latest.message} · ${formatTimestamp(latest.createdAt)}` : "No activity yet"; }
 function trackingButtonLabel(flight: FlightItem): string { return flight.trackedUntilAt ? `Tracking until ${formatDate(flight.trackedUntilAt)}` : "Tracking"; }
 function errorMessage(cause: unknown): string { return cause instanceof Error ? cause.message : "Something went wrong"; }
 function agentKeyFromPath(): string | null { const match = /^\/(?:trips|agents)\/([^/]+)$/.exec(window.location.pathname); return match?.[1] ? decodeURIComponent(match[1]) : null; }
+function dashboardTokenFromLocation(): string | null {
+  const fragment = window.location.hash.replace(/^#/u, "");
+  return new URLSearchParams(fragment).get("access_token")
+    ?? (isCompactDashboardPath() && fragment ? fragment : null);
+}
+function isCompactDashboardPath(): boolean { return window.location.pathname === "/t"; }
+function addIsoDays(value: string, days: number): string {
+  const date = new Date(`${value}T12:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
 function settingsTargetFromLocation(): SettingsPanel | null {
   const value = new URLSearchParams(window.location.search).get("settings");
   if (value === null) return null;

@@ -38,7 +38,8 @@ export function loadEnv(): CaptainEnv {
     duffelSupplierTimeoutMs: positiveInteger("DUFFEL_SUPPLIER_TIMEOUT_MS", 20_000),
     telegramBotToken: optional("TELEGRAM_BOT_TOKEN"),
     telegramWebhookSecretToken: optional("TELEGRAM_WEBHOOK_SECRET_TOKEN"),
-    captainSessionSecret: optional("CAPTAIN_SESSION_SECRET"),
+    captainSessionSecret: optional("CAPTAIN_SESSION_SECRET")
+      ?? (mode === "development" ? "captain-local-development-session-secret" : null),
     duffelLiveMode: booleanValue("DUFFEL_LIVE_MODE", false),
     aiModel: process.env.AI_MODEL?.trim() || "openai/gpt-5.6-terra",
     aiGatewayApiKey: optional("AI_GATEWAY_API_KEY")

@@ -26,6 +26,7 @@ import type {
   CompletedProviderOffer,
   ConversationContext,
   TelegramUserInput,
+  TripFlightSelection,
   TripRecommendation
 } from "./contracts.js";
 import { offerScore, recommendationSummary } from "./ranking.js";
@@ -58,6 +59,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   readonly #runs = new Map<string, MemoryRun>();
   readonly #offers = new Map<string, OfferSnapshot>();
   readonly #recommendations = new Map<string, TripRecommendation>();
+  readonly #personSelections = new Map<string, Map<string, string>>();
   readonly #notifications = new Map<string, StoredNotification>();
   readonly #tripPlanDrafts = new Map<string, TripPlanDraft>();
   readonly #tripPlanConfirmations = new Map<
@@ -140,6 +142,10 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   async getTrip(userId: string, tripId: string): Promise<Trip | null> {
     const trip = this.#trips.get(tripId);
     return trip?.userId === userId ? clone(trip) : null;
+  }
+
+  async getTripById(tripId: string): Promise<Trip | null> {
+    return clone(this.#trips.get(tripId) ?? null);
   }
 
   async getWatch(userId: string, tripId: string): Promise<Watch | null> {
@@ -378,6 +384,46 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       .filter((offer) => specIds.has(offer.searchSpecId) && (!offer.expiresAt || offer.expiresAt > now.toISOString()))
       .sort((a, b) => a.price - b.price)
       .map(clone);
+  }
+
+  async listTripFlightSelections(userId: string, tripId: string): Promise<TripFlightSelection[]> {
+    this.#requiredTrip(userId, tripId);
+    const recommendation = this.#recommendations.get(tripId);
+    const agentSelections: TripFlightSelection[] = recommendation ? [{
+      tripId,
+      itineraryKey: recommendation.itineraryKey,
+      selectedBy: "agent",
+      selectedAt: recommendation.observedAt
+    }] : [];
+    const personSelections = [...(this.#personSelections.get(tripId) ?? new Map<string, string>())]
+      .map(([itineraryKey, selectedAt]): TripFlightSelection => ({
+        tripId,
+        itineraryKey,
+        selectedBy: "person",
+        selectedAt
+      }));
+    return clone([...agentSelections, ...personSelections]);
+  }
+
+  async setTripFlightSelection(
+    userId: string,
+    tripId: string,
+    itineraryKey: string,
+    selected: boolean,
+    now: Date
+  ): Promise<void> {
+    this.#requiredTrip(userId, tripId);
+    if (selected) {
+      const offers = await this.listTripOffers(userId, tripId, now);
+      if (!offers.some((offer) => offer.itineraryKey === itineraryKey)) {
+        throw new Error("Flight offer not found");
+      }
+    }
+    const selections = this.#personSelections.get(tripId) ?? new Map<string, string>();
+    if (selected) selections.set(itineraryKey, now.toISOString());
+    else selections.delete(itineraryKey);
+    if (selections.size > 0) this.#personSelections.set(tripId, selections);
+    else this.#personSelections.delete(tripId);
   }
 
   async scheduleDueSearchRuns(now: Date, freshnessMs: number, limit: number): Promise<number> {
