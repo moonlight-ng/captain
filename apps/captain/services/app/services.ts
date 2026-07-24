@@ -12,6 +12,7 @@ import type { FlightAgentStore } from "../store/contracts.js";
 import { loadEnv, type CaptainEnv } from "./env.js";
 import { TripService } from "../trips/service.js";
 import { TripPlanningService } from "../trip-planning/service.js";
+import { tripDashboardUrl } from "../auth/trip-dashboard-token.js";
 
 export type CaptainServices = {
   env: CaptainEnv;
@@ -56,6 +57,12 @@ export async function createCaptainServices(): Promise<CaptainServices> {
     ? PostgresCaptainPlatformStore.connect(env.databaseUrl, 8)
     : new MemoryCaptainPlatformStore();
   const trips = new TripService({ store: platformStore, liveMode: env.duffelLiveMode });
+  const dashboardUrlForTrip = (userId: string, tripId: string) => tripDashboardUrl({
+    publicUrl: env.publicUrl,
+    secret: env.captainSessionSecret!,
+    userId,
+    tripId
+  });
   return {
     env,
     store,
@@ -67,7 +74,8 @@ export async function createCaptainServices(): Promise<CaptainServices> {
       trips,
       liveMode: env.duffelLiveMode,
       model: env.aiModel,
-      apiKey: env.aiGatewayApiKey
+      apiKey: env.aiGatewayApiKey,
+      dashboardUrlForTrip
     })
   };
 }

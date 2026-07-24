@@ -48,4 +48,19 @@ export class TripService {
   offers(userId: string, tripId: string) {
     return this.#store.listTripOffers(userId, tripId, this.#now());
   }
+
+  selections(userId: string, tripId: string) {
+    return this.#store.listTripFlightSelections(userId, tripId);
+  }
+
+  async selectFlight(userId: string, tripId: string, itineraryKey: string, selected = true) {
+    const trip = await this.#store.getTrip(userId, tripId);
+    if (!trip) return null;
+    await this.#store.setTripFlightSelection(userId, tripId, itineraryKey.trim(), selected, this.#now());
+    return {
+      tripId,
+      itineraryKey: itineraryKey.trim(),
+      selected
+    };
+  }
 }

@@ -29,7 +29,7 @@ export const tripPlanPartialSchema = z.object({
     originAirports: z.array(z.string().regex(/^[A-Z]{3}$/u)).min(1).max(4),
     destinationAirports: z.array(z.string().regex(/^[A-Z]{3}$/u)).min(1).max(6),
     departureDate: isoDateSchema.nullable()
-  }).strict()).max(6),
+  }).strict()).max(6).default([]),
   departureDate: isoDateSchema.nullable(),
   returnDate: isoDateSchema.nullable(),
   travellers: z.object({
@@ -100,6 +100,7 @@ export const tripCreationReceiptSchema = z.object({
   cabin: z.enum(["economy", "premium_economy", "business", "first"]),
   maxStops: z.number().int().min(0).max(2),
   currency: z.string().regex(/^[A-Z]{3}$/u),
+  dashboardUrl: z.url(),
   accessHint: z.literal("Send /trips to view your saved Trips.")
 }).strict();
 export type TripCreationReceipt = z.infer<typeof tripCreationReceiptSchema>;

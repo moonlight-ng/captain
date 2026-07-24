@@ -7,6 +7,10 @@ import {
   parseTripPlanCallback
 } from "../agent/channels/telegram.js";
 import { TripPlanningService } from "../services/trip-planning/service.js";
+import {
+  formatTripList,
+  telegramDashboardMessage
+} from "../services/trip-planning/format.js";
 import { TripService } from "../services/trips/service.js";
 import { defaultTestBrief } from "./support.js";
 
@@ -27,7 +31,9 @@ async function setup() {
     trips,
     liveMode: false,
     apiKey: null,
-    now: () => now
+    now: () => now,
+    dashboardUrlForTrip: (_userId, tripId) =>
+      `https://captain.example/t#test-${tripId}`
   });
   return { store, user, trips, planning };
 }
@@ -58,7 +64,8 @@ describe("Captain Trip planning", () => {
     );
     expect(first.status).toBe("needs_input");
     if (first.status !== "needs_input") throw new Error("Expected a clarification");
-    expect(first.missingFields).toEqual(expect.arrayContaining(["originAirports", "travellers"]));
+    expect(first.missingFields).toContain("originAirports");
+    expect(first.missingFields).not.toContain("travellers");
     expect(first.prompt).toContain("Where are you flying from");
 
     const second = await planning.prepare(user.id, "Lagos just me", null, first.draft.id);
@@ -90,6 +97,7 @@ describe("Captain Trip planning", () => {
       stayNights: 7
     });
     expect(started.message).toContain("Send /trips");
+    expect(started.message).toContain(`Open dashboard: https://captain.example/t#test-${started.receipt.tripId}`);
     await expect(planning.groundAssistantMessage(user.id, started.message))
       .resolves.toBe(started.message);
     await expect(planning.groundAssistantMessage(
@@ -120,7 +128,7 @@ describe("Captain Trip planning", () => {
     )).toBe(true);
     const ready = await planning.prepare(
       user.id,
-      "Find the best flights from Lagos to New York and back to London from Aug 16 - 23 for one adult."
+      "Find the best flights from Lagos to New York and back to London from Aug 16 - 23."
     );
 
     expect(ready.status).toBe("awaiting_confirmation");
@@ -147,13 +155,31 @@ describe("Captain Trip planning", () => {
       }
     });
     expect(ready.confirmation).toContain("LOS → NYC → LON");
+    expect(ready.confirmation).toContain("Travellers: 1 (default)");
 
     const started = await planning.confirm(user.id, ready.draft.id, ready.draft.revision);
     expect(started.status).toBe("started");
     if (started.status !== "started") throw new Error("Expected started Trip");
     expect(started.receipt.legs).toHaveLength(2);
     expect(started.message).toContain("LOS → NYC → LON");
-    expect((await trips.list(user.id))[0]?.brief.tripType).toBe("multi_city");
+    const saved = await trips.list(user.id);
+    expect(saved[0]?.brief.tripType).toBe("multi_city");
+    expect(formatTripList(
+      saved,
+      (tripId) => `https://captain.example/t#fresh-${tripId}`
+    )).toBe(
+      `• LOS → NYC → LON · 16–23 Aug 2025\n  https://captain.example/t#fresh-${started.receipt.tripId}`
+    );
+    expect(telegramDashboardMessage(formatTripList(
+      saved,
+      (tripId) => `https://captain.example/t#fresh-${tripId}`
+    ))).toEqual({
+      text: "• LOS → NYC → LON · 16–23 Aug 2025",
+      links: [{
+        text: "Open LOS → NYC → LON",
+        url: `https://captain.example/t#fresh-${started.receipt.tripId}`
+      }]
+    });
   });
 
   it("coalesces concurrent confirmations into one created and one reused receipt", async () => {
@@ -270,7 +296,9 @@ describe("Captain Trip planning", () => {
       trips,
       liveMode: false,
       apiKey: null,
-      now: () => now
+      now: () => now,
+      dashboardUrlForTrip: (_userId, tripId) =>
+        `https://captain.example/t#resumed-${tripId}`
     });
     const ready = await resumed.prepare(user.id, "Lagos just me", null, first.draft.id);
     expect(ready.status).toBe("awaiting_confirmation");

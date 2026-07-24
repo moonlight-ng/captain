@@ -22,7 +22,7 @@ export interface ItinerarySegment {
 export interface FlightAgentBrief {
   readonly originAirports: string[];
   readonly destinationAirports: string[];
-  readonly tripType: "one_way" | "round_trip";
+  readonly tripType: "one_way" | "round_trip" | "multi_city";
   readonly departureWindow: { readonly start: string; readonly end: string };
   readonly stayNights: {
     readonly minimum: number;
@@ -41,6 +41,11 @@ export interface FlightAgentBrief {
   readonly preferredAirlines: string[];
   readonly excludedAirlines: string[];
   readonly context: string;
+  readonly legs?: Array<{
+    readonly originAirports: string[];
+    readonly destinationAirports: string[];
+    readonly departureWindow: { readonly start: string; readonly end: string };
+  }>;
 }
 
 export interface BrowsePreferences {
@@ -248,6 +253,42 @@ export interface FlightDetails {
   readonly research: ResearchResult[];
 }
 
+export interface TripDashboardPayload {
+  readonly trip: {
+    readonly id: string;
+    readonly title: string;
+    readonly status: "draft" | "tracking" | "recommended" | "paused" | "cancelled" | "completed";
+    readonly version: number;
+    readonly brief: FlightAgentBrief;
+    readonly createdAt: string;
+    readonly updatedAt: string;
+  };
+  readonly watch: {
+    readonly status: "active" | "paused" | "completed";
+    readonly cadenceHours: number;
+    readonly nextCheckAt: string | null;
+    readonly lastCheckAt: string | null;
+  } | null;
+  readonly offers: Array<{
+    readonly id: string;
+    readonly searchRunId: string;
+    readonly itineraryKey: string;
+    readonly providerOfferId: string;
+    readonly providerSearchId: string;
+    readonly price: number;
+    readonly currency: string;
+    readonly expiresAt: string | null;
+    readonly observedAt: string;
+    readonly snapshot: Record<string, unknown>;
+  }>;
+  readonly selections: Array<{
+    readonly tripId: string;
+    readonly itineraryKey: string;
+    readonly selectedBy: "agent" | "person";
+    readonly selectedAt: string;
+  }>;
+}
+
 export const EMPTY_PREFERENCES: BrowsePreferences = {
   sort: "recommended",
   stops: [],
@@ -257,6 +298,182 @@ export const EMPTY_PREFERENCES: BrowsePreferences = {
   maximumPrice: null,
   departurePeriods: []
 };
+
+export function workspaceFromTripDashboard(payload: TripDashboardPayload): Workspace {
+  const selections = new Map<string, Set<"agent" | "person">>();
+  for (const selection of payload.selections) {
+    const selectedBy = selections.get(selection.itineraryKey) ?? new Set<"agent" | "person">();
+    selectedBy.add(selection.selectedBy);
+    selections.set(selection.itineraryKey, selectedBy);
+  }
+  const flights = payload.offers.map((offer, index) => flightFromTripOffer(
+    payload,
+    offer,
+    index,
+    selections.get(offer.itineraryKey)
+  ));
+  const watchStatus = payload.watch?.status;
+  const status: AgentStatus = watchStatus === "paused"
+    ? "paused"
+    : watchStatus === "active" && flights.length === 0
+      ? "queued"
+      : payload.trip.status === "cancelled" || payload.trip.status === "completed"
+        ? "needs_attention"
+        : "active";
+  return {
+    version: 1,
+    agent: {
+      key: payload.trip.id,
+      status,
+      version: payload.trip.version,
+      brief: payload.trip.brief,
+      cadenceHours: cadence(payload.watch?.cadenceHours),
+      trackingWindowDays: null,
+      searchCursor: 0,
+      browsePreferences: EMPTY_PREFERENCES,
+      createdAt: payload.trip.createdAt,
+      processingStartedAt: null,
+      accumulatedProcessingMs: 0,
+      lastCheckAt: payload.watch?.lastCheckAt ?? null,
+      nextCheckAt: payload.watch?.nextCheckAt ?? null,
+      latestCheck: null
+    },
+    reviewFlights: flights.filter((flight) =>
+      flight.reviewState === "promoted" || flight.reviewState === "retained"
+    ),
+    browseFlights: flights,
+    recentChecks: [],
+    activity: [],
+    folders: []
+  };
+}
+
+export function flightDetailsFromDashboardFlight(flight: FlightItem): FlightDetails {
+  return {
+    flight,
+    observations: [{ ...flight.latest, id: `${flight.id}:latest`, checkId: flight.latest.providerSearchId }],
+    relatedChecks: [],
+    research: []
+  };
+}
+
+function flightFromTripOffer(
+  payload: TripDashboardPayload,
+  offer: TripDashboardPayload["offers"][number],
+  rank: number,
+  selectedBy: ReadonlySet<"agent" | "person"> | undefined
+): FlightItem {
+  const rawSegments = Array.isArray(offer.snapshot.segments) ? offer.snapshot.segments : [];
+  const segments = rawSegments.flatMap((candidate): ItinerarySegment[] => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const segment = candidate as Record<string, unknown>;
+    return [{
+      airlineCode: stringValue(segment.airlineCode),
+      airline: stringValue(segment.airline) || stringValue(segment.airlineCode) || "Airline",
+      flightNumber: stringValue(segment.flightNumber),
+      origin: stringValue(segment.origin),
+      destination: stringValue(segment.destination),
+      departure: stringValue(segment.departure),
+      arrival: stringValue(segment.arrival)
+    }];
+  });
+  const first = segments[0];
+  const last = segments.at(-1);
+  const departureDate = first?.departure.slice(0, 10)
+    || payload.trip.brief.legs?.[0]?.departureWindow.start
+    || payload.trip.brief.departureWindow.start;
+  const fallbackInstant = `${departureDate}T12:00:00.000Z`;
+  const airlineCodes = stringArrayValue(offer.snapshot.airlineCodes);
+  const flightNumbers = stringArrayValue(offer.snapshot.flightNumbers);
+  const marketingAirlineCode = first?.airlineCode || airlineCodes[0] || "FL";
+  const selectedByPerson = selectedBy?.has("person") ?? false;
+  const selectedByAgent = selectedBy?.has("agent") ?? false;
+  const snapshot: FlightSnapshot = {
+    provider: "duffel",
+    sourceName: "Duffel",
+    sourceUrl: null,
+    bookingUrl: null,
+    evidence: "direct",
+    providerOfferId: offer.providerOfferId,
+    providerSearchId: offer.providerSearchId,
+    observedAt: offer.observedAt,
+    origin: first?.origin || payload.trip.brief.originAirports[0] || "",
+    destination: last?.destination || payload.trip.brief.destinationAirports[0] || "",
+    travelDate: departureDate,
+    returnDate: dashboardReturnDate(payload.trip.brief),
+    marketingAirlineCode,
+    marketingAirline: first?.airline || marketingAirlineCode,
+    flightNumber: flightNumbers.join(", ") || segments.map((segment) => segment.flightNumber).filter(Boolean).join(", "),
+    route: stringValue(offer.snapshot.route)
+      || [first?.origin, ...segments.map((segment) => segment.destination)].filter(Boolean).join(" → "),
+    departure: first?.departure || fallbackInstant,
+    arrival: last?.arrival || fallbackInstant,
+    durationSeconds: numberValue(offer.snapshot.durationSeconds),
+    stops: numberValue(offer.snapshot.stops),
+    cabin: payload.trip.brief.cabin,
+    price: offer.price,
+    currency: offer.currency,
+    rank: rank + 1,
+    passengerCount: payload.trip.brief.travellers.adults
+      + payload.trip.brief.travellers.childrenAges.length
+      + payload.trip.brief.travellers.infants,
+    segments,
+    conditions: stringRecordValue(offer.snapshot.conditions)
+  };
+  return {
+    id: offer.id,
+    itineraryKey: offer.itineraryKey,
+    destination: payload.trip.brief.destinationAirports.at(-1) ?? snapshot.destination,
+    travelDate: departureDate,
+    marketingAirlineCode,
+    marketingAirline: snapshot.marketingAirline,
+    reviewState: selectedByPerson ? "retained" : selectedByAgent ? "promoted" : "discovered",
+    promotionReason: selectedByPerson
+      ? "Selected by you"
+      : selectedByAgent
+        ? "Recommended by Captain"
+        : null,
+    firstSeenAt: offer.observedAt,
+    lastSeenAt: offer.observedAt,
+    latest: snapshot,
+    previousPrice: null,
+    changePercent: null,
+    observationCount: 1,
+    trackedUntilAt: null,
+    folderIds: []
+  };
+}
+
+function cadence(value: number | undefined): CadenceHours {
+  return value === 1 || value === 6 || value === 12 || value === 24 ? value : 6;
+}
+
+function dashboardReturnDate(brief: FlightAgentBrief): string | null {
+  if (brief.tripType !== "round_trip" || !brief.stayNights) return null;
+  const date = new Date(`${brief.departureWindow.start}T12:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + brief.stayNights.preferred);
+  return date.toISOString().slice(0, 10);
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function stringArrayValue(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function numberValue(value: unknown): number {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, number) : 0;
+}
+
+function stringRecordValue(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string")
+  );
+}
 
 export function defaultBrief(now = new Date()): FlightAgentBrief {
   const start = addDays(now, 30);

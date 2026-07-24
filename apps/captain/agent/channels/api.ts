@@ -31,6 +31,10 @@ import {
 } from "../../services/domain/types.js";
 import type { FlightAgentStore } from "../../services/store/contracts.js";
 import { verifyCaptainSessionToken } from "../lib/session-token.js";
+import {
+  verifyCompactTripDashboardToken,
+  verifyTripDashboardToken
+} from "../../services/auth/trip-dashboard-token.js";
 
 const MAX_BODY_BYTES = 512 * 1024;
 const bridgeReplayGuard = new BridgeReplayGuard();
@@ -52,8 +56,9 @@ export default defineChannel({
     GET("/health", async () => Response.json({ status: "ok" })),
     GET("/ready", readiness),
     GET("/", serveIndex),
+    GET("/t", serveTrip),
     GET("/agents/:agentKey", redirectLegacyAgent),
-    GET("/trips/:tripId", owner(serveTrip)),
+    GET("/trips/:tripId", serveTrip),
     GET("/assets/:asset", serveAsset),
     GET("/v1/agents", owner(listAgents)),
     POST("/v1/agents", owner(createAgent)),
@@ -71,6 +76,8 @@ export default defineChannel({
     PATCH("/v1/trips/:tripId", traveller(updateTrip)),
     POST("/v1/trips/:tripId/actions", traveller(tripAction)),
     GET("/v1/trips/:tripId/offers", traveller(listTripOffers)),
+    GET("/v1/dashboard", compactTripDashboard(getTripDashboard)),
+    GET("/v1/dashboard/trips/:tripId", tripDashboard(getTripDashboard)),
     GET("/internal/v1/trips", internal(listInternalTrips)),
     POST("/internal/v1/trips", internal(createInternalTrip)),
     GET("/internal/v1/trips/:tripId", internal(getInternalTrip)),
@@ -119,6 +126,47 @@ function owner(handler: Handler): Handler {
       });
     }
     return safely(() => handler(request, context));
+  };
+}
+
+function tripDashboard(handler: TravellerHandler): Handler {
+  return async (request, context) => {
+    const services = await getCaptainServices();
+    const secret = services.env.captainSessionSecret;
+    const authorization = request.headers.get("authorization");
+    const principal = secret && authorization?.startsWith("Bearer ")
+      ? verifyTripDashboardToken(authorization.slice(7), secret)
+      : null;
+    const tripId = context.params.tripId;
+    if (!principal || !tripId || principal.tripId !== tripId) {
+      return Response.json({ error: "unauthorized" }, { status: 401 });
+    }
+    const user = await services.platformStore.getUser(principal.userId);
+    if (!user || user.status !== "active") {
+      return Response.json({ error: "unauthorized" }, { status: 401 });
+    }
+    return safely(() => handler(request, context, principal.userId));
+  };
+}
+
+function compactTripDashboard(handler: TravellerHandler): Handler {
+  return async (request, context) => {
+    const services = await getCaptainServices();
+    const secret = services.env.captainSessionSecret;
+    const authorization = request.headers.get("authorization");
+    const principal = secret && authorization?.startsWith("Bearer ")
+      ? verifyCompactTripDashboardToken(authorization.slice(7), secret)
+      : null;
+    if (!principal) return Response.json({ error: "unauthorized" }, { status: 401 });
+    const trip = await services.platformStore.getTripById(principal.tripId);
+    if (!trip) return Response.json({ error: "not_found" }, { status: 404 });
+    const user = await services.platformStore.getUser(trip.userId);
+    if (!user || user.status !== "active") {
+      return Response.json({ error: "unauthorized" }, { status: 401 });
+    }
+    return safely(() => handler(request, {
+      params: { ...context.params, tripId: trip.id }
+    }, trip.userId));
   };
 }
 
@@ -187,6 +235,28 @@ async function tripAction(request: Request, context: RouteContext, userId: strin
 
 async function listTripOffers(_request: Request, context: RouteContext, userId: string): Promise<Response> {
   return offersForUser(userId, requiredParam(context, "tripId"));
+}
+
+async function getTripDashboard(
+  _request: Request,
+  context: RouteContext,
+  userId: string
+): Promise<Response> {
+  const tripId = requiredParam(context, "tripId");
+  const services = await getCaptainServices();
+  const trip = await services.trips.get(userId, tripId);
+  if (!trip) throw new TripNotFoundError();
+  const [watch, offers, selections] = await Promise.all([
+    services.platformStore.getWatch(userId, trip.id),
+    services.trips.offers(userId, trip.id),
+    services.trips.selections(userId, trip.id)
+  ]);
+  return Response.json({
+    trip,
+    watch,
+    offers,
+    selections
+  }, { headers: noStore() });
 }
 
 async function listInternalTrips(): Promise<Response> {
@@ -490,13 +560,7 @@ async function serveIndex(request: Request): Promise<Response> {
       headers: { "www-authenticate": 'Basic realm="Captain"' }
     });
   }
-  try {
-    return new Response(await readFile(resolve("dist/index.html")), {
-      headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" }
-    });
-  } catch {
-    return new Response("Captain UI has not been built", { status: 503 });
-  }
+  return serveIndexFile();
 }
 
 async function redirectLegacyAgent(request: Request, context: RouteContext): Promise<Response> {
@@ -504,22 +568,18 @@ async function redirectLegacyAgent(request: Request, context: RouteContext): Pro
   return Response.redirect(new URL(`/trips/${encodeURIComponent(key)}`, request.url), 308);
 }
 
-async function serveTrip(_request: Request, context: RouteContext): Promise<Response> {
-  const trip = await resolvePilotTrip(requiredParam(context, "tripId"));
-  if (!trip) throw new TripNotFoundError();
-  const services = await getCaptainServices();
-  const offers = await services.trips.offers(PILOT_USER_ID, trip.id);
-  const offerRows = offers.slice(0, 20).map((offer) => {
-    const summary = typeof offer.snapshot.route === "string" ? offer.snapshot.route : offer.itineraryKey;
-    const flights = Array.isArray(offer.snapshot.flightNumbers) ? offer.snapshot.flightNumbers.join(", ") : "";
-    return `<tr><td>${html(flights || "Flight")}</td><td>${html(summary)}</td><td>${html(`${offer.currency} ${offer.price.toFixed(2)}`)}</td><td>${html(new Date(offer.observedAt).toLocaleString("en-GB"))}</td></tr>`;
-  }).join("");
-  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${html(trip.title)} · Captain</title><style>body{font-family:system-ui,sans-serif;max-width:960px;margin:48px auto;padding:0 24px;color:#18211d;background:#f7f4ec}a{color:inherit}header{margin-bottom:32px}.eyebrow{text-transform:uppercase;letter-spacing:.12em;font-size:12px;color:#607068}h1{font-size:38px;margin:8px 0}.meta{color:#607068}table{width:100%;border-collapse:collapse;background:white;border-radius:14px;overflow:hidden}th,td{text-align:left;padding:14px;border-bottom:1px solid #e7e3da}th{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#607068}.empty{padding:28px;background:white;border-radius:14px}</style></head><body><header><p class="eyebrow">Captain Trip · ${html(trip.status)}</p><h1>${html(trip.title)}</h1><p class="meta">${html(trip.brief.originAirports.join("/"))} → ${html(trip.brief.destinationAirports.join("/"))} · ${html(trip.brief.departureWindow.start)} to ${html(trip.brief.departureWindow.end)}</p></header>${offers.length > 0 ? `<table><thead><tr><th>Flight</th><th>Route</th><th>Current price</th><th>Observed</th></tr></thead><tbody>${offerRows}</tbody></table>` : '<p class="empty">Captain is tracking this Trip. Current results will appear after the flight worker completes its first search.</p>'}</body></html>`;
-  return new Response(body, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+async function serveTrip(): Promise<Response> {
+  return serveIndexFile();
 }
 
-function html(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+async function serveIndexFile(): Promise<Response> {
+  try {
+    return new Response(await readFile(resolve("dist/index.html")), {
+      headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" }
+    });
+  } catch {
+    return new Response("Captain UI has not been built", { status: 503 });
+  }
 }
 
 async function serveAsset(
