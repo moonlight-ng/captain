@@ -911,6 +911,37 @@ textarea:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.82); outline-o
   justify-content: center;
   padding: 18px 0 26px;
 }
+.captain-intro { gap: 17px; }
+.captain-messages { display: flex; min-height: 85px; flex-direction: column; justify-content: flex-end; gap: 7px; }
+.home-intro .captain-messages h1 { margin: 0; color: var(--ink); font-size: 26px; font-weight: 620; letter-spacing: -0.045em; line-height: 1.15; }
+.captain-follow-up { max-width: 310px; margin: 0; color: rgba(255, 255, 255, 0.55); font-size: var(--type-body); line-height: 1.5; }
+.captain-composer {
+  display: flex;
+  width: 100%;
+  min-height: 52px;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 5px 5px 17px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.13);
+}
+.captain-composer:focus-within { border-color: rgba(255, 255, 255, 0.3); }
+.captain-composer input { min-width: 0; flex: 1; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: var(--type-body); }
+.captain-composer input::placeholder { color: rgba(255, 255, 255, 0.35); }
+.captain-composer input:focus-visible { outline: 0; }
+.captain-mic,
+.captain-send { display: grid; width: 41px; height: 41px; flex: none; place-items: center; padding: 0; border-radius: 50%; }
+.captain-mic { background: var(--ink); color: #0b0b0d; }
+.captain-mic.listening { background: #e0705a; color: #fff; animation: captain-listening 1.4s ease-in-out infinite; }
+.captain-send { background: rgba(255, 255, 255, 0.11); color: var(--ink); }
+.captain-mic svg { width: 18px; height: 18px; }
+.captain-send svg { width: 17px; height: 17px; }
+.captain-voice-error { margin: -8px 3px 0; color: rgba(242, 176, 163, 0.9); font-size: var(--type-body); line-height: 1.45; }
+.captain-form-link { align-self: flex-start; margin: -6px 0 0; padding: 3px 1px; background: transparent; color: rgba(255, 255, 255, 0.38); font-size: var(--type-body); }
+.home-trip-heading { margin: 5px 0 1px; color: rgba(255, 255, 255, 0.48); font-size: var(--type-body); font-weight: 650; letter-spacing: 0.01em; }
+@keyframes captain-listening { 50% { box-shadow: 0 0 0 7px rgba(224, 112, 90, 0.12); } }
 .home-intro h1 { margin-bottom: 13px; font-size: var(--type-body); }
 .home-intro > p { margin-bottom: 26px; font-size: var(--type-body); line-height: 1.55; }
 .agent-card-list { gap: 10px; padding: 0 0 26px; }

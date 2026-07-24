@@ -8,7 +8,7 @@ primary_region = "lhr"
   release_command = "/bin/sh -c 'node --import tsx scripts/migrate.ts && ./node_modules/.bin/bootstrap'"
 
 [env]
-  AI_MODEL = "openai/gpt-oss-20b"
+  AI_MODEL = "openai/gpt-5.6-terra"
   PORT = "8080"
   CAPTAIN_PUBLIC_URL = "https://dr-captain.fly.dev"
   PILOT_BASE_URL = "https://dr-pilot.fly.dev"

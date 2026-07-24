@@ -49,4 +49,62 @@ describe("shared search specifications", () => {
     }, true);
     expect(many).toHaveLength(24);
   });
+
+  it("keeps an ordered multi-city itinerary in one Duffel request", () => {
+    const [spec] = buildSearchSpecs({
+      ...brief,
+      originAirports: ["LOS"],
+      destinationAirports: ["LON"],
+      tripType: "multi_city",
+      departureWindow: { start: "2026-08-16", end: "2026-08-16" },
+      stayNights: null,
+      legs: [
+        {
+          originAirports: ["LOS"],
+          destinationAirports: ["NYC"],
+          departureWindow: { start: "2026-08-16", end: "2026-08-16" }
+        },
+        {
+          originAirports: ["NYC"],
+          destinationAirports: ["LON"],
+          departureWindow: { start: "2026-08-23", end: "2026-08-23" }
+        }
+      ]
+    }, true);
+
+    expect(spec?.request.slices).toEqual([
+      { origin: "LOS", destination: "NYC", departureDate: "2026-08-16" },
+      { origin: "NYC", destination: "LON", departureDate: "2026-08-23" }
+    ]);
+  });
+
+  it("only combines connected, chronological multi-city legs", () => {
+    const specs = buildSearchSpecs({
+      ...brief,
+      originAirports: ["LOS"],
+      destinationAirports: ["LON"],
+      tripType: "multi_city",
+      departureWindow: { start: "2026-08-16", end: "2026-08-17" },
+      stayNights: null,
+      legs: [
+        {
+          originAirports: ["LOS"],
+          destinationAirports: ["NYC", "JFK"],
+          departureWindow: { start: "2026-08-16", end: "2026-08-17" }
+        },
+        {
+          originAirports: ["NYC"],
+          destinationAirports: ["LON"],
+          departureWindow: { start: "2026-08-16", end: "2026-08-18" }
+        }
+      ]
+    }, true);
+
+    expect(specs).not.toHaveLength(0);
+    expect(specs).toHaveLength(5);
+    expect(specs.every(({ request }) =>
+      request.slices[0]!.destination === request.slices[1]!.origin
+      && request.slices[0]!.departureDate <= request.slices[1]!.departureDate
+    )).toBe(true);
+  });
 });

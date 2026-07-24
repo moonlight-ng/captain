@@ -11,6 +11,7 @@ import { PostgresFlightAgentStore } from "../store/postgres-store.js";
 import type { FlightAgentStore } from "../store/contracts.js";
 import { loadEnv, type CaptainEnv } from "./env.js";
 import { TripService } from "../trips/service.js";
+import { TripPlanningService } from "../trip-planning/service.js";
 
 export type CaptainServices = {
   env: CaptainEnv;
@@ -18,6 +19,7 @@ export type CaptainServices = {
   agents: FlightAgentService;
   platformStore: CaptainPlatformStore;
   trips: TripService;
+  tripPlanning: TripPlanningService;
 };
 
 let servicesPromise: Promise<CaptainServices> | undefined;
@@ -53,11 +55,19 @@ export async function createCaptainServices(): Promise<CaptainServices> {
   const platformStore: CaptainPlatformStore = env.databaseUrl
     ? PostgresCaptainPlatformStore.connect(env.databaseUrl, 8)
     : new MemoryCaptainPlatformStore();
+  const trips = new TripService({ store: platformStore, liveMode: env.duffelLiveMode });
   return {
     env,
     store,
     agents: new FlightAgentService({ store, runner }),
     platformStore,
-    trips: new TripService({ store: platformStore, liveMode: env.duffelLiveMode })
+    trips,
+    tripPlanning: new TripPlanningService({
+      store: platformStore,
+      trips,
+      liveMode: env.duffelLiveMode,
+      model: env.aiModel,
+      apiKey: env.aiGatewayApiKey
+    })
   };
 }

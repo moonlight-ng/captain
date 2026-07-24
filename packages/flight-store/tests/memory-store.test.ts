@@ -9,6 +9,7 @@ const tripInput: CreateTripInput = {
   brief: {
     originAirports: ["LHR"], destinationAirports: ["BER"], tripType: "one_way",
     departureWindow: { start: "2026-09-10", end: "2026-09-10" }, stayNights: null,
+    legs: [],
     travellers: { adults: 1, childrenAges: [], infants: 0 }, cabin: "economy",
     maxStops: 1, currency: "GBP", maximumPrice: null,
     preferredAirlines: [], excludedAirlines: [], context: ""
@@ -26,6 +27,27 @@ describe("Captain platform store", () => {
   it("activates every new Telegram user", async () => {
     const store = new MemoryCaptainPlatformStore();
     await expect(user(store, 1)).resolves.toMatchObject({ status: "active", telegramUserId: 1 });
+  });
+
+  it("does not return history when a caller requests structured state only", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    const ada = await user(store, 1);
+    await store.appendMessage(ada.id, "user", "Plan a Trip", new Date("2026-08-01T12:00:00Z"));
+
+    await expect(store.getConversation(ada.id, 0)).resolves.toMatchObject({
+      recentMessages: []
+    });
+  });
+
+  it("permits only one concurrently-created open Trip draft per traveller", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    const ada = await user(store, 1);
+    const [first, second] = await Promise.all([
+      store.createTripPlanDraft(ada.id, "Plan Lagos to New York", null, new Date("2026-08-01T12:00:00Z")),
+      store.createTripPlanDraft(ada.id, "Plan Lagos to London", null, new Date("2026-08-01T12:00:00Z"))
+    ]);
+
+    expect(second.id).toBe(first.id);
   });
 
   it("keeps Trips tenant-scoped", async () => {
@@ -110,5 +132,83 @@ describe("Captain platform store", () => {
     expect(await store.scheduleDueSearchRuns(new Date("2026-08-01T12:05:00Z"), 900_000, 100)).toBe(0);
     const notifications = await store.listPendingNotifications(new Date("2026-08-01T12:05:01Z"), 10);
     expect(notifications.some((notification) => notification.userId === grace.id)).toBe(true);
+  });
+
+  it("schedules a bounded discovery batch and slows a distant watch", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    const ada = await user(store, 1);
+    const input: CreateTripInput = {
+      ...tripInput,
+      cadenceHours: 1,
+      brief: {
+        ...tripInput.brief,
+        departureWindow: { start: "2026-09-10", end: "2026-09-19" }
+      }
+    };
+    const created = await store.createTrip(
+      ada.id,
+      input,
+      buildSearchSpecs(input.brief, false),
+      new Date("2026-08-01T12:00:00Z")
+    );
+
+    expect(await store.scheduleDueSearchRuns(new Date("2026-08-01T12:00:00Z"), 900_000, 100)).toBe(6);
+    expect(await store.getWatch(ada.id, created.trip.id)).toMatchObject({
+      nextCheckAt: "2026-08-02T00:00:00.000Z"
+    });
+  });
+
+  it("replaces current results, keeps only 25 compact offers, and preserves price-drop context", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    const ada = await user(store, 1);
+    const specs = buildSearchSpecs(tripInput.brief, false);
+    const created = await store.createTrip(ada.id, tripInput, specs, new Date("2026-08-01T12:00:00Z"));
+    await store.scheduleDueSearchRuns(new Date("2026-08-01T12:00:00Z"), 900_000, 100);
+    const firstRun = (await store.claimSearchRuns("worker-1", new Date("2026-08-01T12:00:00Z"), 180_000, 1))[0]!;
+    await store.completeSearchRun(
+      "worker-1",
+      firstRun.id,
+      "orq_1",
+      Array.from({ length: 40 }, (_, index) => ({
+        itineraryKey: `BA${100 + index}|LHR|BER`,
+        provider: "duffel" as const,
+        providerOfferId: `old_${index}`,
+        providerSearchId: "orq_1",
+        price: 200 + index,
+        currency: "GBP",
+        expiresAt: "2026-08-02T12:30:00Z",
+        observedAt: "2026-08-01T12:00:01Z",
+        snapshot: {
+          route: "LHR → BER", airlineCodes: ["BA"], flightNumbers: [`BA${100 + index}`],
+          stops: 0, durationSeconds: 7_200, segments: [], raw: { oversized: "x".repeat(10_000) }
+        }
+      })),
+      new Date("2026-08-01T12:00:01Z")
+    );
+    expect(await store.evaluateTripsForSearchSpec(firstRun.searchSpecId, new Date("2026-08-01T12:00:02Z"))).toBe(1);
+    const firstOffers = await store.listTripOffers(ada.id, created.trip.id, new Date("2026-08-01T12:00:03Z"));
+    expect(firstOffers).toHaveLength(25);
+    expect(firstOffers.every((offer) => !("raw" in offer.snapshot))).toBe(true);
+
+    await store.scheduleDueSearchRuns(new Date("2026-08-02T00:00:00Z"), 900_000, 100);
+    const secondRun = (await store.claimSearchRuns("worker-1", new Date("2026-08-02T00:00:00Z"), 180_000, 1))[0]!;
+    await store.completeSearchRun("worker-1", secondRun.id, "orq_2", Array.from({ length: 3 }, (_, index) => ({
+      itineraryKey: `BA${100 + index}|LHR|BER`,
+      provider: "duffel" as const,
+      providerOfferId: `new_${index}`,
+      providerSearchId: "orq_2",
+      price: 100 + index,
+      currency: "GBP",
+      expiresAt: "2026-08-02T12:30:00Z",
+      observedAt: "2026-08-02T00:00:01Z",
+      snapshot: {
+        route: "LHR → BER", airlineCodes: ["BA"], flightNumbers: [`BA${100 + index}`],
+        stops: 0, durationSeconds: 7_200, segments: []
+      }
+    })), new Date("2026-08-02T00:00:01Z"));
+
+    expect(await store.listTripOffers(ada.id, created.trip.id, new Date("2026-08-02T00:00:02Z"))).toHaveLength(3);
+    expect(await store.evaluateTripsForSearchSpec(secondRun.searchSpecId, new Date("2026-08-02T00:00:03Z"))).toBe(1);
+    expect(await store.listPendingNotifications(new Date("2026-08-02T08:00:00Z"), 10)).toHaveLength(2);
   });
 });

@@ -17,6 +17,7 @@ describe("flight worker orchestration", () => {
       brief: {
         originAirports: ["LHR"], destinationAirports: ["BER"], tripType: "one_way",
         departureWindow: { start: "2026-09-10", end: "2026-09-10" }, stayNights: null,
+        legs: [],
         travellers: { adults: 1, childrenAges: [], infants: 0 }, cabin: "economy",
         maxStops: 1, currency: "GBP", maximumPrice: null,
         preferredAirlines: [], excludedAirlines: [], context: ""

@@ -19,6 +19,14 @@ describe("owner authentication environment", () => {
 
     expect(loadEnv().ownerAuthEnabled).toBe(false);
   });
+
+  it("uses the balanced GPT-5.6 tier by default while preserving the override", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("AI_MODEL", "");
+    expect(loadEnv().aiModel).toBe("openai/gpt-5.6-terra");
+    vi.stubEnv("AI_MODEL", "openai/custom-model");
+    expect(loadEnv().aiModel).toBe("openai/custom-model");
+  });
 });
 
 function stubProductionEnv(): void {

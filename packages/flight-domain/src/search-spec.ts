@@ -37,6 +37,12 @@ export type SearchRun = {
 };
 
 export function buildSearchSpecs(brief: TripBrief, liveMode: boolean): SearchSpec[] {
+  if (brief.tripType === "multi_city") {
+    return multiCityRequests(brief, liveMode).map((request) => {
+      const key = searchSpecKey(request);
+      return { id: key, key, request };
+    });
+  }
   const dates = centerOut(dateRange(brief.departureWindow.start, brief.departureWindow.end));
   const stayLengths = brief.tripType === "round_trip" && brief.stayNights
     ? unique([brief.stayNights.preferred, brief.stayNights.minimum, brief.stayNights.maximum])
@@ -72,6 +78,48 @@ export function buildSearchSpecs(brief: TripBrief, liveMode: boolean): SearchSpe
     const key = searchSpecKey(request);
     return { id: key, key, request };
   });
+}
+
+function multiCityRequests(brief: TripBrief, liveMode: boolean): SearchSpecRequest[] {
+  const requests: SearchSpecRequest[] = [];
+  const legs = brief.legs ?? [];
+  const passengers = [
+    ...Array.from({ length: brief.travellers.adults }, () => ({ type: "adult" as const })),
+    ...brief.travellers.childrenAges.map((age) => ({ age })),
+    ...Array.from({ length: brief.travellers.infants }, () => ({ type: "infant_without_seat" as const }))
+  ];
+
+  const visit = (legIndex: number, slices: SearchSlice[]): void => {
+    if (requests.length >= MAX_SEARCH_COMBINATIONS) return;
+    if (legIndex === legs.length) {
+      requests.push({
+        provider: "duffel",
+        apiVersion: "v2",
+        liveMode,
+        slices,
+        passengers,
+        cabin: brief.cabin,
+        maxConnections: brief.maxStops,
+        fareContext: "public"
+      });
+      return;
+    }
+    const leg = legs[legIndex]!;
+    const previous = slices.at(-1);
+    for (const departureDate of centerOut(dateRange(leg.departureWindow.start, leg.departureWindow.end))) {
+      if (previous && departureDate < previous.departureDate) continue;
+      for (const destination of leg.destinationAirports) {
+        for (const origin of leg.originAirports) {
+          if (previous && previous.destination !== origin) continue;
+          visit(legIndex + 1, [...slices, { origin, destination, departureDate }]);
+          if (requests.length >= MAX_SEARCH_COMBINATIONS) return;
+        }
+      }
+    }
+  };
+
+  visit(0, []);
+  return requests;
 }
 
 export function searchSpecKey(request: SearchSpecRequest): string {

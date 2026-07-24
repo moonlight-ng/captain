@@ -5,11 +5,17 @@ import {
   TripLimitError,
   TripNotFoundError,
   TripVersionConflictError,
+  EMPTY_TRIP_PLAN_PARTIAL,
+  plannedTripSchema,
+  tripPlanPartialSchema,
   type CreateTripInput,
   type OfferSnapshot,
   type SearchSpec,
   type Trip,
   type TripAction,
+  type TripCreationResult,
+  type TripPlanDraft,
+  type TripPlanDraftRevision,
   type TripStatus,
   type UpdateTripInput,
   type Watch
@@ -27,6 +33,14 @@ import type {
   TripRecommendation
 } from "./contracts.js";
 import { offerScore, recommendationSummary } from "./ranking.js";
+import {
+  adaptiveWatchIntervalMs,
+  CURRENT_OFFER_RETENTION_MS,
+  DISCOVERY_SEARCH_SPEC_LIMIT,
+  PRICE_HISTORY_RETENTION_MS,
+  retainSearchOffers,
+  TRACKING_SEARCH_SPEC_LIMIT
+} from "./watch-policy.js";
 
 export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
   readonly #sql: Sql;
@@ -188,60 +202,202 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     return rows[0] ? toTrip(rows[0]) : null;
   }
 
-  async createTrip(userId: string, input: CreateTripInput, specs: SearchSpec[], now: Date): Promise<{ trip: Trip; watch: Watch }> {
-    const created: { trip: Trip; watch: Watch } = await this.#sql.begin(async (tx) => {
+  async createTrip(userId: string, input: CreateTripInput, specs: SearchSpec[], now: Date): Promise<TripCreationResult> {
+    const created = await this.#sql.begin(async (tx) => {
       await tx`select pg_advisory_xact_lock(hashtext(${userId}))`;
-      const counts = await tx<Array<{ count: string }>>`
-        select count(*)::text as count from captain.trips
-        where user_id = ${userId} and status not in ('cancelled', 'completed')
-      `;
-      const duplicates = await tx<TripRow[]>`
-        select * from captain.trips
-        where user_id = ${userId} and status not in ('cancelled', 'completed')
-          and brief = ${tx.json(json(input.brief))}
-        order by updated_at desc limit 1
-        for update
-      `;
-      if (duplicates[0]) {
-        const watches = await tx<WatchRow[]>`select * from captain.watches where trip_id = ${duplicates[0].id}`;
-        if (!watches[0]) throw new Error("Trip Watch not found");
-        await tx`update captain.conversations set active_trip_id = ${duplicates[0].id}, updated_at = ${now} where user_id = ${userId}`;
-        return { trip: toTrip(duplicates[0]), watch: toWatch(watches[0]) };
-      }
-      if (Number(counts[0]?.count ?? 0) >= MAX_ACTIVE_TRIPS_PER_USER) throw new TripLimitError();
-      const tripId = randomUUID();
-      const watchId = randomUUID();
-      await tx`
-        insert into captain.trips (
-          id, user_id, title, status, version, brief, created_at, updated_at
-        ) values (
-          ${tripId}, ${userId}, ${input.title}, 'tracking', 1,
-          ${tx.json(json(input.brief))}, ${now}, ${now}
-        )
-      `;
-      await tx`
-        insert into captain.watches (
-          id, trip_id, status, cadence_hours, next_check_at, created_at, updated_at
-        ) values (${watchId}, ${tripId}, 'active', ${input.cadenceHours}, ${now}, ${now}, ${now})
-      `;
-      await syncSpecs(tx, watchId, specs, now);
-      await tx`
-        insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
-        values (${randomUUID()}, ${tripId}, ${userId}, 'trip_created', ${tx.json(json(input))}, ${now})
-      `;
-      await tx`
-        update captain.conversations set active_trip_id = ${tripId}, updated_at = ${now}
-        where user_id = ${userId}
-      `;
-      return {
-        trip: { id: tripId, userId, legacyAgentKey: null, title: input.title, status: "tracking", version: 1, brief: input.brief, createdAt: now.toISOString(), updatedAt: now.toISOString() },
-        watch: { id: watchId, tripId, status: "active", cadenceHours: input.cadenceHours, nextCheckAt: now.toISOString(), lastCheckAt: null, createdAt: now.toISOString(), updatedAt: now.toISOString() }
-      };
+      return createTripInTransaction(tx, userId, input, specs, now);
     });
     for (const specId of new Set(specs.map((spec) => spec.id))) {
       await this.evaluateTripsForSearchSpec(specId, now);
     }
     return { ...created, trip: await this.getTrip(userId, created.trip.id) ?? created.trip };
+  }
+
+  async createTripPlanDraft(
+    userId: string,
+    request: string,
+    sourceMessageId: string | null,
+    now: Date
+  ): Promise<TripPlanDraft> {
+    return this.#sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${`trip-plan:${userId}`}))`;
+      await expireTripPlanDrafts(tx, userId, now);
+      const existing = await tx<TripPlanDraftRow[]>`
+        select * from captain.trip_plan_drafts
+        where user_id = ${userId}
+          and status in ('collecting', 'awaiting_confirmation', 'starting')
+        order by updated_at desc limit 1
+        for update
+      `;
+      if (existing[0]) return toTripPlanDraft(existing[0]);
+      const id = randomUUID();
+      const expiresAt = new Date(now.getTime() + 86_400_000);
+      const rows = await tx<TripPlanDraftRow[]>`
+        insert into captain.trip_plan_drafts (
+          id, user_id, status, revision, conversation, partial, plan, unresolved_fields,
+          inferred_fields, source_message_ids, trip_id, create_idempotency_key,
+          created_at, updated_at, expires_at
+        ) values (
+          ${id}, ${userId}, 'collecting', 1, ${tx.json([request.trim()])},
+          ${tx.json(json(EMPTY_TRIP_PLAN_PARTIAL))}, null,
+          ${tx.json([])}, ${tx.json({})}, ${tx.json(sourceMessageId ? [sourceMessageId] : [])},
+          null, null, ${now}, ${now}, ${expiresAt}
+        )
+        returning *
+      `;
+      return toTripPlanDraft(rows[0]!);
+    });
+  }
+
+  async getTripPlanDraft(userId: string, draftId: string, now: Date): Promise<TripPlanDraft | null> {
+    await expireTripPlanDrafts(this.#sql, userId, now);
+    const rows = await this.#sql<TripPlanDraftRow[]>`
+      select * from captain.trip_plan_drafts where id = ${draftId} and user_id = ${userId}
+    `;
+    return rows[0] ? toTripPlanDraft(rows[0]) : null;
+  }
+
+  async findOpenTripPlanDraft(userId: string, now: Date): Promise<TripPlanDraft | null> {
+    await expireTripPlanDrafts(this.#sql, userId, now);
+    const rows = await this.#sql<TripPlanDraftRow[]>`
+      select * from captain.trip_plan_drafts
+      where user_id = ${userId}
+        and status in ('collecting', 'awaiting_confirmation', 'starting')
+      order by updated_at desc limit 1
+    `;
+    return rows[0] ? toTripPlanDraft(rows[0]) : null;
+  }
+
+  async reviseTripPlanDraft(
+    userId: string,
+    draftId: string,
+    expectedRevision: number,
+    revision: TripPlanDraftRevision,
+    now: Date
+  ): Promise<TripPlanDraft | null> {
+    const rows = await this.#sql<TripPlanDraftRow[]>`
+      update captain.trip_plan_drafts set
+        status = ${revision.status},
+        revision = revision + 1,
+        conversation = ${this.#sql.json(json(revision.conversation))},
+        partial = ${this.#sql.json(json(revision.partial))},
+        plan = ${revision.plan ? this.#sql.json(json(revision.plan)) : null},
+        unresolved_fields = ${this.#sql.json(json(revision.unresolvedFields))},
+        inferred_fields = ${this.#sql.json(json(revision.inferredFields))},
+        source_message_ids = ${this.#sql.json(json(revision.sourceMessageIds))},
+        updated_at = ${now},
+        expires_at = ${new Date(now.getTime() + 86_400_000)}
+      where id = ${draftId} and user_id = ${userId}
+        and revision = ${expectedRevision}
+        and status in ('collecting', 'awaiting_confirmation')
+        and expires_at > ${now}
+      returning *
+    `;
+    return rows[0] ? toTripPlanDraft(rows[0]) : null;
+  }
+
+  async cancelTripPlanDraft(
+    userId: string,
+    draftId: string,
+    expectedRevision: number,
+    now: Date
+  ): Promise<TripPlanDraft | null> {
+    return this.#transitionTripPlanDraft(
+      userId,
+      draftId,
+      expectedRevision,
+      ["collecting", "awaiting_confirmation"],
+      "cancelled",
+      now
+    );
+  }
+
+  async reopenTripPlanDraft(
+    userId: string,
+    draftId: string,
+    expectedRevision: number,
+    now: Date
+  ): Promise<TripPlanDraft | null> {
+    return this.#transitionTripPlanDraft(
+      userId,
+      draftId,
+      expectedRevision,
+      ["awaiting_confirmation"],
+      "collecting",
+      now
+    );
+  }
+
+  async confirmTripPlanDraft(
+    userId: string,
+    draftId: string,
+    expectedRevision: number,
+    specs: SearchSpec[],
+    now: Date
+  ): Promise<{ draft: TripPlanDraft; result: TripCreationResult } | null> {
+    const confirmed = await this.#sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${`trip-plan:${userId}`}))`;
+      await expireTripPlanDrafts(tx, userId, now);
+      const rows = await tx<TripPlanDraftRow[]>`
+        select * from captain.trip_plan_drafts
+        where id = ${draftId} and user_id = ${userId}
+        for update
+      `;
+      const current = rows[0] ? toTripPlanDraft(rows[0]) : null;
+      if (!current) return null;
+      if (current.status === "started" && current.tripId) {
+        const trips = await tx<TripRow[]>`
+          select * from captain.trips where id = ${current.tripId} and user_id = ${userId}
+        `;
+        const watches = trips[0]
+          ? await tx<WatchRow[]>`select * from captain.watches where trip_id = ${current.tripId}`
+          : [];
+        return trips[0] && watches[0]
+          ? {
+              draft: current,
+              result: { trip: toTrip(trips[0]), watch: toWatch(watches[0]), created: false }
+            }
+          : null;
+      }
+      if (
+        current.status !== "awaiting_confirmation"
+        || current.revision !== expectedRevision
+        || !current.plan
+      ) {
+        return null;
+      }
+      await tx`
+        update captain.trip_plan_drafts set
+          status = 'starting',
+          revision = revision + 1,
+          create_idempotency_key = ${`trip-plan:${draftId}:${expectedRevision}`},
+          updated_at = ${now}
+        where id = ${draftId}
+      `;
+      await tx`select pg_advisory_xact_lock(hashtext(${userId}))`;
+      const result = await createTripInTransaction(tx, userId, current.plan.input, specs, now);
+      const startedRows = await tx<TripPlanDraftRow[]>`
+        update captain.trip_plan_drafts set
+          status = 'started',
+          revision = revision + 1,
+          trip_id = ${result.trip.id},
+          updated_at = ${now}
+        where id = ${draftId}
+        returning *
+      `;
+      return { draft: toTripPlanDraft(startedRows[0]!), result };
+    });
+    if (!confirmed) return null;
+    for (const specId of new Set(specs.map((spec) => spec.id))) {
+      await this.evaluateTripsForSearchSpec(specId, now);
+    }
+    return {
+      draft: confirmed.draft,
+      result: {
+        ...confirmed.result,
+        trip: await this.getTrip(userId, confirmed.result.trip.id) ?? confirmed.result.trip
+      }
+    };
   }
 
   async updateTrip(userId: string, tripId: string, input: UpdateTripInput, specs: SearchSpec[] | null, now: Date): Promise<Trip> {
@@ -316,17 +472,40 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
 
   async scheduleDueSearchRuns(now: Date, freshnessMs: number, limit: number): Promise<number> {
     return this.#sql.begin(async (tx) => {
-      const watches = await tx<Array<{ id: string; cadence_hours: number }>>`
-        select id, cadence_hours from captain.watches
-        where status = 'active' and next_check_at <= ${now}
-        order by next_check_at asc limit ${limit}
+      const watches = await tx<Array<{
+        id: string;
+        trip_id: string;
+        cadence_hours: number;
+        brief: Trip["brief"];
+      }>>`
+        select watch.id, watch.trip_id, watch.cadence_hours, trip.brief
+        from captain.watches watch
+        join captain.trips trip on trip.id = watch.trip_id
+        where watch.status = 'active' and watch.next_check_at <= ${now}
+        order by watch.next_check_at asc limit ${limit}
         for update skip locked
       `;
       let scheduled = 0;
       const claimedSpecs = new Set<string>();
       for (const watch of watches) {
+        const recommendations = await tx<Array<{ search_spec_id: string | null }>>`
+          select search_spec_id from captain.trip_recommendations where trip_id = ${watch.trip_id}
+        `;
+        const preferredSpecId = recommendations[0]?.search_spec_id ?? null;
+        const batchLimit = preferredSpecId ? TRACKING_SEARCH_SPEC_LIMIT : DISCOVERY_SEARCH_SPEC_LIMIT;
         const specs = await tx<Array<{ search_spec_id: string }>>`
-          select search_spec_id from captain.watch_search_specs where watch_id = ${watch.id}
+          select link.search_spec_id
+          from captain.watch_search_specs link
+          left join captain.search_runs run
+            on run.search_spec_id = link.search_spec_id and run.status = 'completed'
+          where link.watch_id = ${watch.id}
+          group by link.search_spec_id, link.created_at
+          order by
+            case when link.search_spec_id = ${preferredSpecId} then 0 else 1 end,
+            max(run.completed_at) asc nulls first,
+            link.created_at,
+            link.search_spec_id
+          limit ${batchLimit}
         `;
         for (const spec of specs) {
           if (claimedSpecs.has(spec.search_spec_id)) continue;
@@ -352,7 +531,11 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           scheduled += 1;
         }
         await tx`
-          update captain.watches set next_check_at = ${new Date(now.getTime() + watch.cadence_hours * 3_600_000)}, updated_at = ${now}
+          update captain.watches set next_check_at = ${new Date(now.getTime() + adaptiveWatchIntervalMs(
+            watch.cadence_hours,
+            watch.brief.departureWindow.start,
+            now
+          ))}, updated_at = ${now}
           where id = ${watch.id}
         `;
       }
@@ -401,16 +584,19 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
   }
 
   async completeSearchRun(workerId: string, runId: string, providerRequestId: string, offers: CompletedProviderOffer[], now: Date): Promise<void> {
+    const retainedOffers = retainSearchOffers(offers);
     await this.#sql.begin(async (tx) => {
       const runs = await tx<Array<{ search_spec_id: string }>>`
         update captain.search_runs set status = 'completed', completed_at = ${now},
-          provider_request_id = ${providerRequestId}, lease_expires_at = null, error = null
+          provider_request_id = ${providerRequestId}, lease_expires_at = null, error = null,
+          provider_offer_count = ${offers.length}, retained_offer_count = ${retainedOffers.length}
         where id = ${runId} and status = 'running' and claimed_by = ${workerId}
         returning search_spec_id
       `;
       const run = runs[0];
       if (!run) throw new Error("Search run lease is not owned by this worker");
-      for (const offer of offers) {
+      await tx`delete from captain.offers where search_spec_id = ${run.search_spec_id}`;
+      for (const offer of retainedOffers) {
         const offerId = randomUUID();
         const segments = Array.isArray(offer.snapshot.segments) ? offer.snapshot.segments : [];
         await tx`
@@ -436,14 +622,46 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           ) values (
             ${randomUUID()}, ${runId}, ${run.search_spec_id}, ${offer.itineraryKey}, ${offer.provider},
             ${offer.providerOfferId}, ${offer.price}, ${offer.currency}, ${offer.observedAt},
-            ${tx.json(json(offer.snapshot))}
+            ${tx.json(json({}))}
           )
         `;
       }
       await tx`
+        delete from captain.itineraries itinerary
+        where not exists (
+          select 1 from captain.offers offer where offer.itinerary_key = itinerary.itinerary_key
+        )
+      `;
+      await tx`
         update captain.watches watch set last_check_at = ${now}, updated_at = ${now}
         from captain.watch_search_specs link
         where link.watch_id = watch.id and link.search_spec_id = ${run.search_spec_id}
+      `;
+    });
+  }
+
+  async pruneWatchData(now: Date): Promise<void> {
+    const staleOfferBefore = new Date(now.getTime() - CURRENT_OFFER_RETENTION_MS);
+    const staleHistoryBefore = new Date(now.getTime() - PRICE_HISTORY_RETENTION_MS);
+    await this.#sql.begin(async (tx) => {
+      await tx`
+        delete from captain.offers
+        where (expires_at is not null and expires_at <= ${now})
+           or observed_at < ${staleOfferBefore}
+      `;
+      await tx`
+        delete from captain.price_observations where observed_at < ${staleHistoryBefore}
+      `;
+      await tx`
+        delete from captain.search_runs
+        where status in ('completed', 'failed')
+          and completed_at < ${staleOfferBefore}
+      `;
+      await tx`
+        delete from captain.itineraries itinerary
+        where not exists (
+          select 1 from captain.offers offer where offer.itinerary_key = itinerary.itinerary_key
+        )
       `;
     });
   }
@@ -493,7 +711,8 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       `;
       const previous = previousRows[0] ? toRecommendation(previousRows[0]) : null;
       const recommendation: TripRecommendation = {
-        tripId: trip.id, offerId: best.offer.id, itineraryKey: best.offer.itineraryKey,
+        tripId: trip.id, offerId: best.offer.id, searchSpecId: best.offer.searchSpecId,
+        itineraryKey: best.offer.itineraryKey,
         score: best.score, price: best.offer.price, currency: best.offer.currency,
         summary: recommendationSummary(best.offer), observedAt: best.offer.observedAt
       };
@@ -507,12 +726,13 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       await this.#sql.begin(async (tx) => {
         await tx`
           insert into captain.trip_recommendations (
-            trip_id, offer_id, itinerary_key, score, price, currency, summary, observed_at, updated_at
+            trip_id, offer_id, search_spec_id, itinerary_key, score, price, currency, summary, observed_at, updated_at
           ) values (
-            ${trip.id}, ${best.offer.id}, ${best.offer.itineraryKey}, ${best.score},
+            ${trip.id}, ${best.offer.id}, ${best.offer.searchSpecId}, ${best.offer.itineraryKey}, ${best.score},
             ${best.offer.price}, ${best.offer.currency}, ${recommendation.summary}, ${best.offer.observedAt}, ${now}
           ) on conflict (trip_id) do update set
-            offer_id = excluded.offer_id, itinerary_key = excluded.itinerary_key,
+            offer_id = excluded.offer_id, search_spec_id = excluded.search_spec_id,
+            itinerary_key = excluded.itinerary_key,
             score = excluded.score, price = excluded.price, currency = excluded.currency,
             summary = excluded.summary, observed_at = excluded.observed_at, updated_at = excluded.updated_at
         `;
@@ -599,6 +819,32 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     await this.#sql.end({ timeout: 5 });
   }
 
+  async #transitionTripPlanDraft(
+    userId: string,
+    draftId: string,
+    expectedRevision: number,
+    expectedStatuses: TripPlanDraft["status"][],
+    status: TripPlanDraft["status"],
+    now: Date
+  ): Promise<TripPlanDraft | null> {
+    const firstExpectedStatus = expectedStatuses[0];
+    if (!firstExpectedStatus) throw new Error("Expected at least one Trip draft status");
+    const secondExpectedStatus = expectedStatuses[1] ?? firstExpectedStatus;
+    const rows = await this.#sql<TripPlanDraftRow[]>`
+      update captain.trip_plan_drafts set
+        status = ${status},
+        revision = revision + 1,
+        updated_at = ${now},
+        expires_at = ${new Date(now.getTime() + 86_400_000)}
+      where id = ${draftId} and user_id = ${userId}
+        and revision = ${expectedRevision}
+        and (status = ${firstExpectedStatus} or status = ${secondExpectedStatus})
+        and expires_at > ${now}
+      returning *
+    `;
+    return rows[0] ? toTripPlanDraft(rows[0]) : null;
+  }
+
   async #enqueueAttentionForSpec(searchSpecId: string, error: string, now: Date): Promise<void> {
     const trips = await this.#sql<Array<{ id: string; user_id: string; title: string }>>`
       select distinct trip.id, trip.user_id, trip.title
@@ -642,6 +888,97 @@ async function syncSpecs(sql: Sql, watchId: string, specs: SearchSpec[], now: Da
   }
 }
 
+async function createTripInTransaction(
+  sql: Sql,
+  userId: string,
+  input: CreateTripInput,
+  specs: SearchSpec[],
+  now: Date
+): Promise<TripCreationResult> {
+  const counts = await sql<Array<{ count: string }>>`
+    select count(*)::text as count from captain.trips
+    where user_id = ${userId} and status not in ('cancelled', 'completed')
+  `;
+  const duplicates = await sql<TripRow[]>`
+    select * from captain.trips
+    where user_id = ${userId} and status not in ('cancelled', 'completed')
+      and brief = ${sql.json(json(input.brief))}
+    order by updated_at desc limit 1
+    for update
+  `;
+  if (duplicates[0]) {
+    const watches = await sql<WatchRow[]>`
+      select * from captain.watches where trip_id = ${duplicates[0].id}
+    `;
+    if (!watches[0]) throw new Error("Trip Watch not found");
+    await sql`
+      update captain.conversations set active_trip_id = ${duplicates[0].id}, updated_at = ${now}
+      where user_id = ${userId}
+    `;
+    return { trip: toTrip(duplicates[0]), watch: toWatch(watches[0]), created: false };
+  }
+  if (Number(counts[0]?.count ?? 0) >= MAX_ACTIVE_TRIPS_PER_USER) {
+    throw new TripLimitError();
+  }
+  const tripId = randomUUID();
+  const watchId = randomUUID();
+  await sql`
+    insert into captain.trips (
+      id, user_id, title, status, version, brief, created_at, updated_at
+    ) values (
+      ${tripId}, ${userId}, ${input.title}, 'tracking', 1,
+      ${sql.json(json(input.brief))}, ${now}, ${now}
+    )
+  `;
+  await sql`
+    insert into captain.watches (
+      id, trip_id, status, cadence_hours, next_check_at, created_at, updated_at
+    ) values (${watchId}, ${tripId}, 'active', ${input.cadenceHours}, ${now}, ${now}, ${now})
+  `;
+  await syncSpecs(sql, watchId, specs, now);
+  await sql`
+    insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
+    values (${randomUUID()}, ${tripId}, ${userId}, 'trip_created', ${sql.json(json(input))}, ${now})
+  `;
+  await sql`
+    update captain.conversations set active_trip_id = ${tripId}, updated_at = ${now}
+    where user_id = ${userId}
+  `;
+  return {
+    trip: {
+      id: tripId,
+      userId,
+      legacyAgentKey: null,
+      title: input.title,
+      status: "tracking",
+      version: 1,
+      brief: input.brief,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    },
+    watch: {
+      id: watchId,
+      tripId,
+      status: "active",
+      cadenceHours: input.cadenceHours,
+      nextCheckAt: now.toISOString(),
+      lastCheckAt: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    },
+    created: true
+  };
+}
+
+async function expireTripPlanDrafts(sql: Sql, userId: string, now: Date): Promise<void> {
+  await sql`
+    update captain.trip_plan_drafts set status = 'expired', updated_at = ${now}
+    where user_id = ${userId}
+      and status in ('collecting', 'awaiting_confirmation', 'starting')
+      and expires_at <= ${now}
+  `;
+}
+
 async function userDeliveryTime(sql: Sql, userId: string, now: Date): Promise<Date> {
   const rows = await sql<Array<{ timezone: string }>>`select timezone from captain.users where id = ${userId}`;
   const timezone = rows[0]?.timezone ?? "UTC";
@@ -679,8 +1016,26 @@ type WatchRow = {
   id: string; trip_id: string; status: Watch["status"]; cadence_hours: number;
   next_check_at: Date | null; last_check_at: Date | null; created_at: Date; updated_at: Date;
 };
+type TripPlanDraftRow = {
+  id: string;
+  user_id: string;
+  status: TripPlanDraft["status"];
+  revision: number;
+  conversation: string[];
+  partial: unknown;
+  plan: unknown | null;
+  unresolved_fields: string[];
+  inferred_fields: Record<string, string>;
+  source_message_ids: string[];
+  trip_id: string | null;
+  create_idempotency_key: string | null;
+  created_at: Date;
+  updated_at: Date;
+  expires_at: Date;
+};
 type RecommendationRow = {
-  trip_id: string; offer_id: string; itinerary_key: string; score: string | number;
+  trip_id: string; offer_id: string | null; search_spec_id: string | null;
+  itinerary_key: string; score: string | number;
   price: string | number; currency: string; summary: string; observed_at: Date;
 };
 type NotificationRow = {
@@ -726,9 +1081,30 @@ function toWatch(row: WatchRow): Watch {
   };
 }
 
+function toTripPlanDraft(row: TripPlanDraftRow): TripPlanDraft {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    status: row.status,
+    revision: row.revision,
+    conversation: row.conversation,
+    partial: tripPlanPartialSchema.parse(row.partial),
+    plan: row.plan ? plannedTripSchema.parse(row.plan) : null,
+    unresolvedFields: row.unresolved_fields,
+    inferredFields: row.inferred_fields,
+    sourceMessageIds: row.source_message_ids,
+    tripId: row.trip_id,
+    createIdempotencyKey: row.create_idempotency_key,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+    expiresAt: iso(row.expires_at)
+  };
+}
+
 function toRecommendation(row: RecommendationRow): TripRecommendation {
   return {
-    tripId: row.trip_id, offerId: row.offer_id, itineraryKey: row.itinerary_key,
+    tripId: row.trip_id, offerId: row.offer_id, searchSpecId: row.search_spec_id,
+    itineraryKey: row.itinerary_key,
     score: Number(row.score), price: Number(row.price), currency: row.currency,
     summary: row.summary, observedAt: iso(row.observed_at)
   };

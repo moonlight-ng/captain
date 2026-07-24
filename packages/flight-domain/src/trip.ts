@@ -7,6 +7,26 @@ export const MINIMUM_CADENCE_HOURS = 1;
 
 const iataCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/);
 const airlineCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,3}$/);
+const dateWindowSchema = z.object({
+  start: z.iso.date(),
+  end: z.iso.date()
+}).strict();
+
+export const tripLegSchema = z.object({
+  originAirports: z.array(iataCodeSchema).min(1).max(4),
+  destinationAirports: z.array(iataCodeSchema).min(1).max(6),
+  departureWindow: dateWindowSchema
+}).strict().superRefine((leg, context) => {
+  validateDateWindow(leg.departureWindow, context, ["departureWindow"]);
+  if (leg.originAirports.some((airport) => leg.destinationAirports.includes(airport))) {
+    context.addIssue({
+      code: "custom",
+      path: ["destinationAirports"],
+      message: "A leg's origin and destination airports must differ"
+    });
+  }
+});
+export type TripLeg = z.infer<typeof tripLegSchema>;
 
 export const travellersSchema = z.object({
   adults: z.number().int().min(1).max(9),
@@ -34,9 +54,11 @@ const stayNightsSchema = z.object({
 export const tripBriefSchema = z.object({
   originAirports: z.array(iataCodeSchema).min(1).max(4),
   destinationAirports: z.array(iataCodeSchema).min(1).max(6),
-  tripType: z.enum(["one_way", "round_trip"]),
-  departureWindow: z.object({ start: z.iso.date(), end: z.iso.date() }).strict(),
+  tripType: z.enum(["one_way", "round_trip", "multi_city"]),
+  departureWindow: dateWindowSchema,
   stayNights: stayNightsSchema.nullable(),
+  /** Ordered route for multi-city trips. Absent for legacy one-way and round trips. */
+  legs: z.array(tripLegSchema).max(6).optional(),
   travellers: travellersSchema,
   cabin: z.enum(["economy", "premium_economy", "business", "first"]),
   maxStops: z.number().int().min(0).max(2),
@@ -46,22 +68,21 @@ export const tripBriefSchema = z.object({
   excludedAirlines: z.array(airlineCodeSchema).max(12).default([]),
   context: z.string().trim().max(1_000).default("")
 }).strict().superRefine((brief, context) => {
-  const start = Date.parse(`${brief.departureWindow.start}T00:00:00Z`);
-  const end = Date.parse(`${brief.departureWindow.end}T00:00:00Z`);
-  if (end < start) {
-    context.addIssue({ code: "custom", path: ["departureWindow", "end"], message: "Departure window end must not precede its start" });
-  }
-  if ((end - start) / 86_400_000 > 30) {
-    context.addIssue({ code: "custom", path: ["departureWindow"], message: "Departure windows are limited to 31 days" });
-  }
+  validateDateWindow(brief.departureWindow, context, ["departureWindow"]);
   if (brief.tripType === "round_trip" && brief.stayNights === null) {
     context.addIssue({ code: "custom", path: ["stayNights"], message: "Round trips require a stay length" });
   }
-  if (brief.tripType === "one_way" && brief.stayNights !== null) {
-    context.addIssue({ code: "custom", path: ["stayNights"], message: "One-way trips cannot include a stay length" });
+  if (brief.tripType !== "round_trip" && brief.stayNights !== null) {
+    context.addIssue({ code: "custom", path: ["stayNights"], message: "Only round trips can include a stay length" });
   }
-  if (brief.originAirports.some((airport) => brief.destinationAirports.includes(airport))) {
+  if (brief.tripType !== "multi_city" && brief.originAirports.some((airport) => brief.destinationAirports.includes(airport))) {
     context.addIssue({ code: "custom", path: ["destinationAirports"], message: "Origin and destination airports must differ" });
+  }
+  if (brief.tripType !== "multi_city" && (brief.legs?.length ?? 0) > 0) {
+    context.addIssue({ code: "custom", path: ["legs"], message: "Only multi-city trips can include itinerary legs" });
+  }
+  if (brief.tripType === "multi_city") {
+    validateMultiCityBrief(brief, context);
   }
 });
 
@@ -156,4 +177,91 @@ export class TripLimitError extends Error {
     super(`A user may have at most ${MAX_ACTIVE_TRIPS_PER_USER} active Trips`);
     this.name = "TripLimitError";
   }
+}
+
+function validateDateWindow(
+  window: { start: string; end: string },
+  context: z.RefinementCtx,
+  path: PropertyKey[]
+): void {
+  const start = Date.parse(`${window.start}T00:00:00Z`);
+  const end = Date.parse(`${window.end}T00:00:00Z`);
+  if (end < start) {
+    context.addIssue({
+      code: "custom",
+      path: [...path, "end"],
+      message: "Departure window end must not precede its start"
+    });
+  }
+  if ((end - start) / 86_400_000 > 30) {
+    context.addIssue({
+      code: "custom",
+      path,
+      message: "Departure windows are limited to 31 days"
+    });
+  }
+}
+
+function validateMultiCityBrief(
+  brief: z.infer<typeof tripBriefSchema>,
+  context: z.RefinementCtx
+): void {
+  const legs = brief.legs ?? [];
+  if (legs.length < 2) {
+    context.addIssue({
+      code: "custom",
+      path: ["legs"],
+      message: "Multi-city trips require at least two legs"
+    });
+    return;
+  }
+  const first = legs[0]!;
+  const last = legs.at(-1)!;
+  if (!hasOverlap(brief.originAirports, first.originAirports)) {
+    context.addIssue({
+      code: "custom",
+      path: ["originAirports"],
+      message: "Trip origin must match the first multi-city leg"
+    });
+  }
+  if (!hasOverlap(brief.destinationAirports, last.destinationAirports)) {
+    context.addIssue({
+      code: "custom",
+      path: ["destinationAirports"],
+      message: "Trip destination must match the final multi-city leg"
+    });
+  }
+  if (
+    brief.departureWindow.start !== first.departureWindow.start
+    || brief.departureWindow.end !== first.departureWindow.end
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["departureWindow"],
+      message: "Trip departure window must match the first multi-city leg"
+    });
+  }
+  for (let index = 1; index < legs.length; index += 1) {
+    const previous = legs[index - 1]!;
+    const current = legs[index]!;
+    if (!hasOverlap(previous.destinationAirports, current.originAirports)) {
+      context.addIssue({
+        code: "custom",
+        path: ["legs", index, "originAirports"],
+        message: "Each multi-city leg must continue from the preceding destination"
+      });
+    }
+    if (current.departureWindow.end < previous.departureWindow.start) {
+      context.addIssue({
+        code: "custom",
+        path: ["legs", index, "departureWindow"],
+        message: "Multi-city legs must be in chronological order"
+      });
+    }
+  }
+}
+
+function hasOverlap(left: string[], right: string[]): boolean {
+  const values = new Set(left);
+  return right.some((value) => values.has(value));
 }

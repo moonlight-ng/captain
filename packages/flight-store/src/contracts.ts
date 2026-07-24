@@ -5,6 +5,9 @@ import type {
   SearchSpecRequest,
   Trip,
   TripAction,
+  TripCreationResult,
+  TripPlanDraft,
+  TripPlanDraftRevision,
   UpdateTripInput,
   Watch
 } from "@agents/flight-domain";
@@ -47,7 +50,8 @@ export type CompletedProviderOffer = Omit<OfferSnapshot, "id" | "searchRunId" | 
 
 export type TripRecommendation = {
   tripId: string;
-  offerId: string;
+  offerId: string | null;
+  searchSpecId: string | null;
   itineraryKey: string;
   score: number;
   price: number;
@@ -77,14 +81,22 @@ export interface CaptainPlatformStore {
   getTrip(userId: string, tripId: string): Promise<Trip | null>;
   getWatch(userId: string, tripId: string): Promise<Watch | null>;
   getTripByLegacyKey(userId: string, legacyAgentKey: string): Promise<Trip | null>;
-  createTrip(userId: string, input: CreateTripInput, specs: SearchSpec[], now: Date): Promise<{ trip: Trip; watch: Watch }>;
+  createTrip(userId: string, input: CreateTripInput, specs: SearchSpec[], now: Date): Promise<TripCreationResult>;
   updateTrip(userId: string, tripId: string, input: UpdateTripInput, specs: SearchSpec[] | null, now: Date): Promise<Trip>;
   applyTripAction(userId: string, tripId: string, action: TripAction, now: Date): Promise<Trip>;
   listTripOffers(userId: string, tripId: string, now: Date): Promise<OfferSnapshot[]>;
+  createTripPlanDraft(userId: string, request: string, sourceMessageId: string | null, now: Date): Promise<TripPlanDraft>;
+  getTripPlanDraft(userId: string, draftId: string, now: Date): Promise<TripPlanDraft | null>;
+  findOpenTripPlanDraft(userId: string, now: Date): Promise<TripPlanDraft | null>;
+  reviseTripPlanDraft(userId: string, draftId: string, expectedRevision: number, revision: TripPlanDraftRevision, now: Date): Promise<TripPlanDraft | null>;
+  cancelTripPlanDraft(userId: string, draftId: string, expectedRevision: number, now: Date): Promise<TripPlanDraft | null>;
+  reopenTripPlanDraft(userId: string, draftId: string, expectedRevision: number, now: Date): Promise<TripPlanDraft | null>;
+  confirmTripPlanDraft(userId: string, draftId: string, expectedRevision: number, specs: SearchSpec[], now: Date): Promise<{ draft: TripPlanDraft; result: TripCreationResult } | null>;
   scheduleDueSearchRuns(now: Date, freshnessMs: number, limit: number): Promise<number>;
   claimSearchRuns(workerId: string, now: Date, leaseMs: number, limit: number): Promise<ClaimedSearchRun[]>;
   completeSearchRun(workerId: string, runId: string, providerRequestId: string, offers: CompletedProviderOffer[], now: Date): Promise<void>;
   failSearchRun(workerId: string, runId: string, error: string, retryAfterMs: number | null, now: Date): Promise<void>;
+  pruneWatchData(now: Date): Promise<void>;
   evaluateTripsForSearchSpec(searchSpecId: string, now: Date): Promise<number>;
   listPendingNotifications(now: Date, limit: number): Promise<CaptainNotification[]>;
   markNotificationSent(notificationId: string, now: Date): Promise<void>;

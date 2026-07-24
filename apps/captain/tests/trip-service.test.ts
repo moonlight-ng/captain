@@ -13,7 +13,11 @@ describe("Trip service", () => {
     const other = await store.ensureTelegramUser({ telegramUserId: 2, telegramChatId: 2, username: null, firstName: "Grace", lastName: null }, now);
     const service = new TripService({ store, liveMode: false, now: () => now });
     const created = await service.create(owner.id, { title: "New York", brief: defaultTestBrief(), cadenceHours: 6 });
+    expect(created.created).toBe(true);
     expect(created.searchCombinations).toBe(3);
+    const duplicate = await service.create(owner.id, { title: "New York", brief: defaultTestBrief(), cadenceHours: 6 });
+    expect(duplicate.created).toBe(false);
+    expect(duplicate.trip.id).toBe(created.trip.id);
     expect(await service.get(other.id, created.trip.id)).toBeNull();
     await expect(service.action(other.id, created.trip.id, { type: "pause", expectedVersion: 1 })).rejects.toBeInstanceOf(TripNotFoundError);
     const paused = await service.action(owner.id, created.trip.id, { type: "pause", expectedVersion: 1 });

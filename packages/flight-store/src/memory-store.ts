@@ -5,8 +5,12 @@ import {
   TripLimitError,
   TripNotFoundError,
   TripVersionConflictError,
+  EMPTY_TRIP_PLAN_PARTIAL,
   type CreateTripInput,
   type OfferSnapshot,
+  type TripCreationResult,
+  type TripPlanDraft,
+  type TripPlanDraftRevision,
   type SearchSpec,
   type Trip,
   type TripAction,
@@ -25,6 +29,13 @@ import type {
   TripRecommendation
 } from "./contracts.js";
 import { offerScore, recommendationSummary } from "./ranking.js";
+import {
+  adaptiveWatchIntervalMs,
+  CURRENT_OFFER_RETENTION_MS,
+  DISCOVERY_SEARCH_SPEC_LIMIT,
+  retainSearchOffers,
+  TRACKING_SEARCH_SPEC_LIMIT
+} from "./watch-policy.js";
 
 type MemoryConversation = ConversationContext & { userId: string };
 type MemoryRun = ClaimedSearchRun & {
@@ -48,6 +59,11 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   readonly #offers = new Map<string, OfferSnapshot>();
   readonly #recommendations = new Map<string, TripRecommendation>();
   readonly #notifications = new Map<string, StoredNotification>();
+  readonly #tripPlanDrafts = new Map<string, TripPlanDraft>();
+  readonly #tripPlanConfirmations = new Map<
+    string,
+    Promise<{ draft: TripPlanDraft; result: TripCreationResult } | null>
+  >();
 
   async ensureTelegramUser(input: TelegramUserInput, now: Date): Promise<CaptainUser> {
     const existing = this.#usersByTelegram.get(input.telegramUserId);
@@ -95,7 +111,10 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   async getConversation(userId: string, limit = 20): Promise<ConversationContext> {
     const conversation = this.#conversations.get(userId);
     if (!conversation) throw new Error("Conversation not found");
-    return clone({ ...conversation, recentMessages: conversation.recentMessages.slice(-limit) });
+    return clone({
+      ...conversation,
+      recentMessages: limit === 0 ? [] : conversation.recentMessages.slice(-limit)
+    });
   }
 
   async appendMessage(userId: string, role: "user" | "assistant", content: string, now: Date): Promise<string> {
@@ -132,7 +151,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     return clone([...this.#trips.values()].find((trip) => trip.userId === userId && trip.legacyAgentKey === legacyAgentKey) ?? null);
   }
 
-  async createTrip(userId: string, input: CreateTripInput, specs: SearchSpec[], now: Date): Promise<{ trip: Trip; watch: Watch }> {
+  async createTrip(userId: string, input: CreateTripInput, specs: SearchSpec[], now: Date): Promise<TripCreationResult> {
     const duplicate = [...this.#trips.values()].find((trip) =>
       trip.userId === userId
       && !["cancelled", "completed"].includes(trip.status)
@@ -142,7 +161,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       const existingWatch = [...this.#watches.values()].find((watch) => watch.tripId === duplicate.id);
       if (!existingWatch) throw new Error("Trip Watch not found");
       await this.setActiveTrip(userId, duplicate.id, now);
-      return clone({ trip: duplicate, watch: existingWatch });
+      return clone({ trip: duplicate, watch: existingWatch, created: false });
     }
     const active = [...this.#trips.values()].filter((trip) => trip.userId === userId && !["cancelled", "completed"].includes(trip.status));
     if (active.length >= MAX_ACTIVE_TRIPS_PER_USER) throw new TripLimitError();
@@ -162,7 +181,150 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     for (const specId of new Set(specs.map((spec) => spec.id))) {
       await this.evaluateTripsForSearchSpec(specId, now);
     }
-    return clone({ trip: this.#trips.get(trip.id) ?? trip, watch });
+    return clone({ trip: this.#trips.get(trip.id) ?? trip, watch, created: true });
+  }
+
+  async createTripPlanDraft(
+    userId: string,
+    request: string,
+    sourceMessageId: string | null,
+    now: Date
+  ): Promise<TripPlanDraft> {
+    const existing = await this.findOpenTripPlanDraft(userId, now);
+    if (existing) return existing;
+    const concurrentlyCreated = [...this.#tripPlanDrafts.values()]
+      .filter((draft) => draft.userId === userId)
+      .map((draft) => this.#expireDraft(draft, now))
+      .find((draft) => ["collecting", "awaiting_confirmation", "starting"].includes(draft.status));
+    if (concurrentlyCreated) return clone(concurrentlyCreated);
+    const timestamp = now.toISOString();
+    const draft: TripPlanDraft = {
+      id: randomUUID(),
+      userId,
+      status: "collecting",
+      revision: 1,
+      conversation: [request.trim()],
+      partial: clone(EMPTY_TRIP_PLAN_PARTIAL),
+      plan: null,
+      unresolvedFields: [],
+      inferredFields: {},
+      sourceMessageIds: sourceMessageId ? [sourceMessageId] : [],
+      tripId: null,
+      createIdempotencyKey: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      expiresAt: new Date(now.getTime() + 86_400_000).toISOString()
+    };
+    this.#tripPlanDrafts.set(draft.id, draft);
+    return clone(draft);
+  }
+
+  async getTripPlanDraft(userId: string, draftId: string, now: Date): Promise<TripPlanDraft | null> {
+    const draft = this.#tripPlanDrafts.get(draftId);
+    if (!draft || draft.userId !== userId) return null;
+    return clone(this.#expireDraft(draft, now));
+  }
+
+  async findOpenTripPlanDraft(userId: string, now: Date): Promise<TripPlanDraft | null> {
+    const open = [...this.#tripPlanDrafts.values()]
+      .filter((draft) => draft.userId === userId)
+      .map((draft) => this.#expireDraft(draft, now))
+      .filter((draft) => ["collecting", "awaiting_confirmation", "starting"].includes(draft.status))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+    return clone(open ?? null);
+  }
+
+  async reviseTripPlanDraft(
+    userId: string,
+    draftId: string,
+    expectedRevision: number,
+    revision: TripPlanDraftRevision,
+    now: Date
+  ): Promise<TripPlanDraft | null> {
+    return this.#updateTripPlanDraft(userId, draftId, expectedRevision, revision, now, ["collecting", "awaiting_confirmation"]);
+  }
+
+  async cancelTripPlanDraft(
+    userId: string,
+    draftId: string,
+    expectedRevision: number,
+    now: Date
+  ): Promise<TripPlanDraft | null> {
+    return this.#updateTripPlanDraft(userId, draftId, expectedRevision, { status: "cancelled" }, now, ["collecting", "awaiting_confirmation"]);
+  }
+
+  async reopenTripPlanDraft(
+    userId: string,
+    draftId: string,
+    expectedRevision: number,
+    now: Date
+  ): Promise<TripPlanDraft | null> {
+    return this.#updateTripPlanDraft(userId, draftId, expectedRevision, { status: "collecting" }, now, ["awaiting_confirmation"]);
+  }
+
+  async confirmTripPlanDraft(
+    userId: string,
+    draftId: string,
+    expectedRevision: number,
+    specs: SearchSpec[],
+    now: Date
+  ): Promise<{ draft: TripPlanDraft; result: TripCreationResult } | null> {
+    const pending = this.#tripPlanConfirmations.get(draftId);
+    if (pending) return reusedConfirmation(await pending);
+    const current = await this.getTripPlanDraft(userId, draftId, now);
+    if (!current) return null;
+    const concurrentlyStarted = this.#tripPlanConfirmations.get(draftId);
+    if (concurrentlyStarted) return reusedConfirmation(await concurrentlyStarted);
+    if (current.status === "started" && current.tripId) {
+      const trip = await this.getTrip(userId, current.tripId);
+      const watch = trip ? await this.getWatch(userId, trip.id) : null;
+      return trip && watch ? { draft: current, result: { trip, watch, created: false } } : null;
+    }
+    if (current.status !== "awaiting_confirmation" || current.revision !== expectedRevision || !current.plan) return null;
+    const starting = this.#updateTripPlanDraft(
+      userId,
+      draftId,
+      expectedRevision,
+      {
+        status: "starting",
+        createIdempotencyKey: `trip-plan:${draftId}:${expectedRevision}`
+      },
+      now,
+      ["awaiting_confirmation"]
+    );
+    if (!starting) return null;
+    const confirmation = (async () => {
+      try {
+        const result = await this.createTrip(userId, current.plan!.input, specs, now);
+        const started = this.#updateTripPlanDraft(
+          userId,
+          draftId,
+          starting.revision,
+          { status: "started", tripId: result.trip.id },
+          now,
+          ["starting"]
+        );
+        return started ? { draft: started, result } : null;
+      } catch (error) {
+        const failed = this.#tripPlanDrafts.get(draftId);
+        if (
+          failed?.userId === userId
+          && failed.status === "starting"
+          && failed.revision === starting.revision
+        ) {
+          this.#tripPlanDrafts.set(draftId, clone(current));
+        }
+        throw error;
+      }
+    })();
+    this.#tripPlanConfirmations.set(draftId, confirmation);
+    try {
+      return await confirmation;
+    } finally {
+      if (this.#tripPlanConfirmations.get(draftId) === confirmation) {
+        this.#tripPlanConfirmations.delete(draftId);
+      }
+    }
   }
 
   async updateTrip(userId: string, tripId: string, input: UpdateTripInput, specs: SearchSpec[] | null, now: Date): Promise<Trip> {
@@ -224,7 +386,16 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       .slice(0, limit);
     const scheduled = new Set<string>();
     for (const watch of due) {
-      for (const specId of this.#watchSpecs.get(watch.id) ?? []) {
+      const recommendation = this.#recommendations.get(watch.tripId);
+      const specIds = [...(this.#watchSpecs.get(watch.id) ?? [])]
+        .sort((left, right) => {
+          if (left === recommendation?.searchSpecId) return -1;
+          if (right === recommendation?.searchSpecId) return 1;
+          return this.#latestCompletedAt(left).localeCompare(this.#latestCompletedAt(right))
+            || left.localeCompare(right);
+        })
+        .slice(0, recommendation ? TRACKING_SEARCH_SPEC_LIMIT : DISCOVERY_SEARCH_SPEC_LIMIT);
+      for (const specId of specIds) {
         const pending = [...this.#runs.values()].some((run) => run.searchSpecId === specId && ["queued", "running"].includes(run.status));
         const latest = [...this.#runs.values()].filter((run) => run.searchSpecId === specId && run.status === "completed")
           .sort((a, b) => (b.completedAt ?? "").localeCompare(a.completedAt ?? ""))[0];
@@ -240,9 +411,14 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
           scheduled.add(specId);
         }
       }
+      const trip = this.#trips.get(watch.tripId);
       this.#watches.set(watch.id, {
         ...watch,
-        nextCheckAt: new Date(now.getTime() + watch.cadenceHours * 3_600_000).toISOString(),
+        nextCheckAt: new Date(now.getTime() + adaptiveWatchIntervalMs(
+          watch.cadenceHours,
+          trip?.brief.departureWindow.start ?? now.toISOString().slice(0, 10),
+          now
+        )).toISOString(),
         updatedAt: now.toISOString()
       });
     }
@@ -271,7 +447,10 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const run = this.#runs.get(runId);
     if (!run || run.claimedBy !== workerId || run.status !== "running") throw new Error("Search run lease is not owned by this worker");
     this.#runs.set(runId, { ...run, status: "completed", completedAt: now.toISOString(), leaseExpiresAt: "", error: null });
-    for (const offer of offers) {
+    for (const [offerId, offer] of this.#offers) {
+      if (offer.searchSpecId === run.searchSpecId) this.#offers.delete(offerId);
+    }
+    for (const offer of retainSearchOffers(offers)) {
       const stored: OfferSnapshot = { ...clone(offer), id: randomUUID(), searchRunId: runId, searchSpecId: run.searchSpecId };
       this.#offers.set(stored.id, stored);
     }
@@ -279,6 +458,29 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       this.#watches.set(watch.id, { ...watch, lastCheckAt: now.toISOString(), updatedAt: now.toISOString() });
     }
     void providerRequestId;
+  }
+
+  async pruneWatchData(now: Date): Promise<void> {
+    const staleBefore = now.getTime() - CURRENT_OFFER_RETENTION_MS;
+    const removedOfferIds = new Set<string>();
+    for (const [offerId, offer] of this.#offers) {
+      const expired = offer.expiresAt !== null && Date.parse(offer.expiresAt) <= now.getTime();
+      if (expired || Date.parse(offer.observedAt) < staleBefore) {
+        this.#offers.delete(offerId);
+        removedOfferIds.add(offerId);
+      }
+    }
+    for (const [tripId, recommendation] of this.#recommendations) {
+      if (recommendation.offerId && removedOfferIds.has(recommendation.offerId)) {
+        this.#recommendations.set(tripId, { ...recommendation, offerId: null });
+      }
+    }
+    for (const [runId, run] of this.#runs) {
+      const completedAt = run.completedAt ? Date.parse(run.completedAt) : Number.POSITIVE_INFINITY;
+      if (["completed", "failed"].includes(run.status) && completedAt < staleBefore) {
+        this.#runs.delete(runId);
+      }
+    }
   }
 
   async failSearchRun(workerId: string, runId: string, error: string, retryAfterMs: number | null, now: Date): Promise<void> {
@@ -312,7 +514,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       if (!best) continue;
       const previous = this.#recommendations.get(trip.id);
       const recommendation: TripRecommendation = {
-        tripId: trip.id, offerId: best.offer.id, itineraryKey: best.offer.itineraryKey,
+        tripId: trip.id, offerId: best.offer.id, searchSpecId: best.offer.searchSpecId,
+        itineraryKey: best.offer.itineraryKey,
         score: best.score, price: best.offer.price, currency: best.offer.currency,
         summary: recommendationSummary(best.offer), observedAt: best.offer.observedAt
       };
@@ -361,6 +564,47 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
 
   async close(): Promise<void> {}
 
+  #expireDraft(draft: TripPlanDraft, now: Date): TripPlanDraft {
+    if (
+      draft.expiresAt <= now.toISOString()
+      && ["collecting", "awaiting_confirmation", "starting"].includes(draft.status)
+    ) {
+      const expired = { ...draft, status: "expired" as const, updatedAt: now.toISOString() };
+      this.#tripPlanDrafts.set(draft.id, expired);
+      return expired;
+    }
+    return draft;
+  }
+
+  #updateTripPlanDraft(
+    userId: string,
+    draftId: string,
+    expectedRevision: number,
+    values: Partial<TripPlanDraft> | TripPlanDraftRevision,
+    now: Date,
+    expectedStatuses: TripPlanDraft["status"][]
+  ): TripPlanDraft | null {
+    const current = this.#tripPlanDrafts.get(draftId);
+    if (
+      !current
+      || current.userId !== userId
+      || current.revision !== expectedRevision
+      || !expectedStatuses.includes(current.status)
+      || current.expiresAt <= now.toISOString()
+    ) {
+      return null;
+    }
+    const updated: TripPlanDraft = {
+      ...current,
+      ...values,
+      revision: current.revision + 1,
+      updatedAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + 86_400_000).toISOString()
+    };
+    this.#tripPlanDrafts.set(draftId, updated);
+    return clone(updated);
+  }
+
   #requiredTrip(userId: string, tripId: string): Trip {
     const trip = this.#trips.get(tripId);
     if (!trip || trip.userId !== userId) throw new TripNotFoundError();
@@ -378,6 +622,14 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
 
   #watchesForSpec(specId: string): Watch[] {
     return [...this.#watches.values()].filter((watch) => this.#watchSpecs.get(watch.id)?.has(specId));
+  }
+
+  #latestCompletedAt(specId: string): string {
+    return [...this.#runs.values()]
+      .filter((run) => run.searchSpecId === specId && run.status === "completed")
+      .map((run) => run.completedAt ?? "")
+      .sort()
+      .at(-1) ?? "";
   }
 
   #enqueueNotification(
@@ -440,4 +692,15 @@ function deliveryTime(now: Date, timezone: string): Date {
 
 function clone<T>(value: T): T {
   return structuredClone(value);
+}
+
+function reusedConfirmation(
+  confirmed: { draft: TripPlanDraft; result: TripCreationResult } | null
+): { draft: TripPlanDraft; result: TripCreationResult } | null {
+  return confirmed
+    ? clone({
+        ...confirmed,
+        result: { ...confirmed.result, created: false }
+      })
+    : null;
 }

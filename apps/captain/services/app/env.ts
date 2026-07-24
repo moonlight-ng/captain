@@ -16,6 +16,8 @@ export type CaptainEnv = {
   telegramWebhookSecretToken: string | null;
   captainSessionSecret: string | null;
   duffelLiveMode: boolean;
+  aiModel: string;
+  aiGatewayApiKey: string | null;
 };
 
 export function loadEnv(): CaptainEnv {
@@ -37,7 +39,9 @@ export function loadEnv(): CaptainEnv {
     telegramBotToken: optional("TELEGRAM_BOT_TOKEN"),
     telegramWebhookSecretToken: optional("TELEGRAM_WEBHOOK_SECRET_TOKEN"),
     captainSessionSecret: optional("CAPTAIN_SESSION_SECRET"),
-    duffelLiveMode: booleanValue("DUFFEL_LIVE_MODE", false)
+    duffelLiveMode: booleanValue("DUFFEL_LIVE_MODE", false),
+    aiModel: process.env.AI_MODEL?.trim() || "openai/gpt-5.6-terra",
+    aiGatewayApiKey: optional("AI_GATEWAY_API_KEY")
   };
   if (mode === "production") {
     for (const [name, value] of [

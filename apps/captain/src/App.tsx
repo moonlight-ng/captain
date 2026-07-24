@@ -36,6 +36,27 @@ type TrackingNoticeState = { readonly message: string; readonly open: boolean } 
 const STARTUP_STAGES = ["Reading your brief", "Preparing the flight search", "Opening your workspace"] as const;
 const TRACKING_NOTICE_VISIBLE_MS = 2_280;
 const TRACKING_NOTICE_EXIT_MS = 120;
+const NEW_USER_FLIGHT_HELP_DELAY_MS = 1_000;
+const IDLE_MIC_PROMPT_DELAY_MS = 8_000;
+
+type VoiceRecognitionResult = {
+  readonly isFinal: boolean;
+  readonly 0?: { readonly transcript: string };
+};
+
+type VoiceRecognition = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onstart: (() => void) | null;
+  onresult: ((event: { readonly results: ArrayLike<VoiceRecognitionResult> }) => void) | null;
+  onerror: ((event: { readonly error: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+type VoiceRecognitionConstructor = new () => VoiceRecognition;
 
 export function App() {
   const [screen, setScreen] = useState<Screen>("loading");
@@ -143,8 +164,9 @@ export function App() {
     }
   }
 
-  function startBrief() {
-    setDraftBrief(defaultBrief());
+  function startBrief(request = "") {
+    const brief = defaultBrief();
+    setDraftBrief(request.trim() ? { ...brief, context: request.trim() } : brief);
     setBriefEditing(false);
     setError(null);
     setScreen("brief");
@@ -346,19 +368,162 @@ export function App() {
 function HomeScreen(props: {
   readonly agents: AgentSummary[];
   readonly busy: boolean;
-  readonly onStart: () => void;
+  readonly onStart: (request?: string) => void;
   readonly onOpen: (key: string) => void;
 }) {
+  const [request, setRequest] = useState("");
+  const [showFlightHelp, setShowFlightHelp] = useState(false);
+  const [showMicPrompt, setShowMicPrompt] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const flightHelpTimer = useRef<number | null>(null);
+  const micPromptTimer = useRef<number | null>(null);
+  const hasResponded = useRef(false);
+  const recognition = useRef<VoiceRecognition | null>(null);
+  const voiceTranscript = useRef("");
   const placeholderCount = Math.max(0, 3 - props.agents.length);
+
+  function clearFollowUpTimers() {
+    if (flightHelpTimer.current !== null) window.clearTimeout(flightHelpTimer.current);
+    if (micPromptTimer.current !== null) window.clearTimeout(micPromptTimer.current);
+    flightHelpTimer.current = null;
+    micPromptTimer.current = null;
+  }
+
+  function markResponded() {
+    if (hasResponded.current) return;
+    hasResponded.current = true;
+    clearFollowUpTimers();
+  }
+
+  useEffect(() => {
+    if (props.agents.length === 0) {
+      flightHelpTimer.current = window.setTimeout(() => {
+        if (!hasResponded.current) setShowFlightHelp(true);
+      }, NEW_USER_FLIGHT_HELP_DELAY_MS);
+    }
+    micPromptTimer.current = window.setTimeout(() => {
+      if (!hasResponded.current) setShowMicPrompt(true);
+    }, IDLE_MIC_PROMPT_DELAY_MS);
+
+    return () => {
+      clearFollowUpTimers();
+      if (recognition.current) {
+        recognition.current.onend = null;
+        recognition.current.stop();
+        recognition.current = null;
+      }
+    };
+  }, [props.agents.length]);
+
+  function updateRequest(value: string) {
+    setRequest(value);
+    setVoiceError(null);
+    if (value.trim()) markResponded();
+  }
+
+  function submitRequest() {
+    const trimmed = request.trim();
+    if (!trimmed || props.busy) return;
+    markResponded();
+    props.onStart(trimmed);
+  }
+
+  function toggleVoiceInput() {
+    markResponded();
+    setVoiceError(null);
+    if (recognition.current && listening) {
+      recognition.current.stop();
+      return;
+    }
+
+    const voiceWindow = window as typeof window & {
+      SpeechRecognition?: VoiceRecognitionConstructor;
+      webkitSpeechRecognition?: VoiceRecognitionConstructor;
+    };
+    const Recognition = voiceWindow.SpeechRecognition ?? voiceWindow.webkitSpeechRecognition;
+    if (!Recognition) {
+      setVoiceError("Voice input isn’t supported here. Type your request instead.");
+      return;
+    }
+
+    const nextRecognition = new Recognition();
+    recognition.current = nextRecognition;
+    voiceTranscript.current = "";
+    nextRecognition.continuous = false;
+    nextRecognition.interimResults = true;
+    nextRecognition.lang = navigator.language || "en-GB";
+    nextRecognition.onstart = () => setListening(true);
+    nextRecognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .map((result) => result[0]?.transcript ?? "")
+        .join(" ")
+        .trim();
+      voiceTranscript.current = transcript;
+      setRequest(transcript);
+    };
+    nextRecognition.onerror = (event) => {
+      voiceTranscript.current = "";
+      setListening(false);
+      setVoiceError(event.error === "not-allowed"
+        ? "Microphone access is off. Allow it or type your request instead."
+        : "I couldn’t hear that. Try the mic again or type your request.");
+    };
+    nextRecognition.onend = () => {
+      const transcript = voiceTranscript.current.trim();
+      setListening(false);
+      recognition.current = null;
+      if (transcript) props.onStart(transcript);
+    };
+    nextRecognition.start();
+  }
 
   return (
     <section className={`screen home-screen ${props.agents.length > 0 ? "has-agent" : ""}`} data-screen="home">
       {props.agents.length > 0 && <div className="home-atmosphere" aria-hidden="true" />}
       <div className="home-content live-home-content">
-        <div className="home-intro">
-          <h1>Your Trips</h1>
-          <button className="primary-pill" disabled={props.busy} onClick={props.onStart}>Start a brief</button>
+        <div className="home-intro captain-intro">
+          <div className="captain-messages" aria-live="polite">
+            <h1>Aye aye, where to?</h1>
+            {showFlightHelp && <p className="captain-follow-up fade-up">I can help you find and book a flight.</p>}
+            {showMicPrompt && <p className="captain-follow-up fade-up">Use the mic to describe your request</p>}
+          </div>
+          <form className="captain-composer" onSubmit={(event) => { event.preventDefault(); submitRequest(); }}>
+            <label className="sr-only" htmlFor="captain-request">Describe your trip</label>
+            <input
+              id="captain-request"
+              autoComplete="off"
+              disabled={props.busy || listening}
+              placeholder={listening ? "Listening…" : "Describe your trip"}
+              value={request}
+              onChange={(event) => updateRequest(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  submitRequest();
+                }
+              }}
+            />
+            {request.trim() && !listening && (
+              <button className="captain-send" type="submit" aria-label="Send request" disabled={props.busy}>
+                <ArrowUpIcon />
+              </button>
+            )}
+            <button
+              className={`captain-mic ${listening ? "listening" : ""}`}
+              type="button"
+              aria-label={listening ? "Stop listening" : "Describe your request with the microphone"}
+              aria-pressed={listening}
+              disabled={props.busy}
+              onClick={toggleVoiceInput}
+            >
+              <MicrophoneIcon />
+            </button>
+          </form>
+          {voiceError && <p className="captain-voice-error" role="alert">{voiceError}</p>}
+          <button className="captain-form-link" disabled={props.busy} onClick={() => props.onStart()}>Fill in a trip brief instead</button>
         </div>
+        {props.agents.length > 0 && <h2 className="home-trip-heading">Your Trips</h2>}
         <div className="agent-card-list" aria-label="Trips">
           {props.agents.map((agent) => (
             <button className="agent-home-card live-agent-card" key={agent.key} onClick={() => props.onOpen(agent.key)}>
@@ -741,5 +906,7 @@ function SearchIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="curr
 function SettingsIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 9 19.36a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.08 14H3v-4h.08A1.7 1.7 0 0 0 4.64 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63 1.7 1.7 0 0 0 10 3.08V3h4v.08A1.7 1.7 0 0 0 15 4.64a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9 1.7 1.7 0 0 0 20.92 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z" /></svg>; }
 function TrackIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><circle cx="12" cy="12" r="8" /><path d="M12 2v3M22 12h-3M12 22v-3M2 12h3" /></svg>; }
 function PlaneIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m3 11 18-7-7 18-2.5-8.5L3 11Z" /><path d="m11.5 13.5 4-4" /></svg>; }
+function MicrophoneIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" /></svg>; }
+function ArrowUpIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m12 19V5m-6 6 6-6 6 6" /></svg>; }
 function BriefIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d="M7 5h10M7 10h10M7 15h6" /><path d="M5 2.8h14a2 2 0 0 1 2 2v14.4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4.8a2 2 0 0 1 2-2Z" /></svg>; }
 function ActivityIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>; }

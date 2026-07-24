@@ -69,11 +69,18 @@ preserving explicitly suspended accounts.
 
 - Maximum three active Trips per traveller.
 - Maximum 24 provider combinations per Trip.
-- Six-hour default tracking cadence; one-hour minimum.
+- Six SearchSpecs in the initial discovery batch, then the recommended
+  SearchSpec plus two least-recently-checked alternatives.
+- Six-hour default tracking cadence; distant departures automatically back off
+  to 12 or 24 hours, with a three-hour floor in the final week.
 - Worker orchestration every 60 seconds.
 - Shared-result freshness of 15 minutes.
 - 180-second leases, three attempts, four globally active runs, and one Duffel
   request at a time per worker.
+- At most 25 diverse, normalized offers per provider search. Raw Duffel
+  payloads are never retained.
+- Current offers and search runs have seven-day retention; compact price
+  history has 90-day retention.
 - Quiet hours from 22:00 to 07:00 in the traveller’s timezone for non-critical
   notifications.
 

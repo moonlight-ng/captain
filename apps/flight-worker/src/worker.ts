@@ -34,6 +34,7 @@ export class FlightWorker {
     if (this.#running) return { scheduled: 0, processed: 0, notified: 0 };
     this.#running = true;
     try {
+      await this.#store.pruneWatchData(now);
       const scheduled = await this.#store.scheduleDueSearchRuns(now, this.#freshnessMs, 100);
       let processed = 0;
       // One provider request at a time keeps the Duffel bucket deterministic.
@@ -79,8 +80,7 @@ export class FlightWorker {
           stops: Math.max(0, offer.segments.length - run.request.slices.length),
           durationSeconds: totalDuration(offer.segments),
           conditions: offer.conditions,
-          segments: offer.segments,
-          raw: offer.raw
+          segments: offer.segments
         }
       })), now);
       const changed = await this.#store.evaluateTripsForSearchSpec(run.searchSpecId, now);
