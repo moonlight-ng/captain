@@ -25,7 +25,6 @@ export default defineEval({
     const started = await t.send("Yes");
     started.expectOk();
     t.check(started.message, includes(/Trip is saved|already saved/iu));
-    t.check(started.message, includes("Trip reference:"));
     t.check(started.message, includes("Send /trips"));
 
     const where = await t.send("Where?");
@@ -33,12 +32,11 @@ export default defineEval({
     t.check(where.message, includes("Send /trips"));
     t.calledTool("prepare_trip", { count: 2 });
     t.calledTool("start_prepared_trip", { count: 1 });
-    t.notCalledTool("update_trip");
     t.judge.autoevals.closedQA([
       "The confirmation and receipt preserve a Sunday 16 August 2026 departure and Sunday 23 August 2026 return, which is seven nights.",
       "The route is Lagos LOS to the New York metropolitan area NYC for one traveller.",
-      "Economy, at most one stop, NGN, and six-hour tracking are clearly presented as defaults rather than user-supplied preferences.",
-      "Creation is claimed only after confirmation and includes a persisted Trip reference.",
+      "Economy, at most one stop, the traveller profile currency, and adaptive tracking are clearly presented as defaults rather than user-supplied preferences.",
+      "Creation is claimed only after confirmation and the saved Trip is available through /trips.",
       "The final Where reply identifies where the Trip is saved and points to /trips instead of asking a generic clarification."
     ].join(" ")).atLeast(0.9);
   }

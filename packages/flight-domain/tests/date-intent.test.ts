@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveTripDateIntent } from "../src/date-intent.js";
+import {
+  resolveTripDateIntent,
+  resolveTripDateSequence
+} from "../src/date-intent.js";
 
 const now = new Date("2025-07-01T12:00:00Z");
 
@@ -45,6 +48,73 @@ describe("trip date intent", () => {
     expect(resolveTripDateIntent("Fly 16–23 Aug", now)).toEqual({
       departureDate: "2025-08-16",
       returnDate: "2025-08-23",
+      issue: null
+    });
+  });
+
+  it("inherits a month and year for a later ordinal day", () => {
+    expect(resolveTripDateIntent(
+      "To New York on Aug 17. Return to London on the 23rd",
+      new Date("2026-07-27T00:00:00Z")
+    )).toEqual({
+      departureDate: "2026-08-17",
+      returnDate: "2026-08-23",
+      issue: null
+    });
+  });
+
+  it("returns every dated leg for longer multi-city itineraries", () => {
+    expect(resolveTripDateSequence(
+      "Lagos on Aug 17, New York on the 20th, London on the 23rd",
+      new Date("2026-07-27T00:00:00Z")
+    )).toEqual({
+      dates: ["2026-08-17", "2026-08-20", "2026-08-23"],
+      issue: null
+    });
+  });
+
+  it("resolves relative dates in the traveller's timezone", () => {
+    expect(resolveTripDateIntent(
+      "Fly today",
+      new Date("2026-07-31T23:30:00Z"),
+      "Africa/Lagos"
+    )).toEqual({
+      departureDate: "2026-08-01",
+      returnDate: null,
+      issue: null
+    });
+  });
+
+  it("resolves common relative dates deterministically", () => {
+    expect(resolveTripDateIntent("Fly this Saturday", now)).toEqual({
+      departureDate: "2025-07-05",
+      returnDate: null,
+      issue: null
+    });
+    expect(resolveTripDateIntent("Fly tomorrow", now)).toEqual({
+      departureDate: "2025-07-02",
+      returnDate: null,
+      issue: null
+    });
+    expect(resolveTripDateIntent("Fly in two weeks", now)).toEqual({
+      departureDate: "2025-07-15",
+      returnDate: null,
+      issue: null
+    });
+    expect(resolveTripDateIntent("Fly Saturday", new Date("2025-07-05T12:00:00Z"))).toEqual({
+      departureDate: "2025-07-05",
+      returnDate: null,
+      issue: null
+    });
+  });
+
+  it("anchors a next-day return to the departure in the same request", () => {
+    expect(resolveTripDateIntent(
+      "Fly this Sunday and return to Lagos the next day",
+      new Date("2026-07-27T07:55:00Z")
+    )).toEqual({
+      departureDate: "2026-08-02",
+      returnDate: "2026-08-03",
       issue: null
     });
   });

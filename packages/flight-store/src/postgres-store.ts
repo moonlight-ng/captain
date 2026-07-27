@@ -1,14 +1,18 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  DEFAULT_PROFILE,
   MAX_ACTIVE_TRIPS_PER_USER,
   TripLimitError,
   TripNotFoundError,
   TripVersionConflictError,
   EMPTY_TRIP_PLAN_PARTIAL,
+  EMPTY_TRIP_PLAN_TURN_STATE,
   plannedTripSchema,
   tripPlanPartialSchema,
+  tripPlanTurnStateSchema,
   type CreateTripInput,
+  type FlightSearchProviderId,
   type OfferSnapshot,
   type SearchSpec,
   type Trip,
@@ -17,7 +21,9 @@ import {
   type TripPlanDraft,
   type TripPlanDraftRevision,
   type TripStatus,
-  type UpdateTripInput,
+  type TravellerProfile,
+  type UpdateTravellerProfile,
+  type UpdateTripBrief,
   type Watch
 } from "@agents/flight-domain";
 import postgres, { type Sql } from "postgres";
@@ -31,9 +37,16 @@ import type {
   ConversationContext,
   TelegramUserInput,
   TripFlightSelection,
+  TripActivity,
   TripRecommendation
 } from "./contracts.js";
-import { offerScore, recommendationSummary } from "./ranking.js";
+import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
+import {
+  meetsAlertThreshold,
+  rankOffers,
+  recommendationReasonCodes,
+  recommendationSummary
+} from "./ranking.js";
 import {
   adaptiveWatchIntervalMs,
   CURRENT_OFFER_RETENTION_MS,
@@ -80,6 +93,13 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         `;
         return toUser({ ...existing[0], chat_id: input.telegramChatId, username: input.username, first_name: input.firstName, last_name: input.lastName });
       }
+      if (!publicBetaEnabled()) throw new BetaLaunchGateError();
+      await tx`select pg_advisory_xact_lock(1906202601)`;
+      const betaLimit = positiveInteger(process.env.CAPTAIN_BETA_USER_LIMIT, 25);
+      const counts = await tx<Array<{ count: string }>>`
+        select count(*)::text as count from captain.users
+      `;
+      if (Number(counts[0]?.count ?? 0) >= betaLimit) throw new BetaCapacityError(betaLimit);
       const userId = randomUUID();
       const conversationId = randomUUID();
       await tx`
@@ -117,6 +137,194 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       where users.id = ${userId}
     `;
     return rows[0] ? toUser(rows[0]) : null;
+  }
+
+  async updateUserTimezone(userId: string, timeZone: string, now: Date): Promise<CaptainUser> {
+    await this.#sql`
+      update captain.users set timezone = ${timeZone}, updated_at = ${now}
+      where id = ${userId}
+    `;
+    const user = await this.getUser(userId);
+    if (!user) throw new Error("User not found");
+    return user;
+  }
+
+  async countUsers(): Promise<number> {
+    const rows = await this.#sql<Array<{ count: string }>>`
+      select count(*)::text as count from captain.users
+    `;
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  async deleteUser(userId: string): Promise<void> {
+    await this.#sql`delete from captain.users where id = ${userId}`;
+  }
+
+  async getProfile(userId: string): Promise<TravellerProfile | null> {
+    const rows = await this.#sql<ProfileRow[]>`
+      select * from captain.traveller_profiles where user_id = ${userId}
+    `;
+    return rows[0] ? toProfile(rows[0]) : null;
+  }
+
+  async ensureProfile(userId: string, now: Date): Promise<TravellerProfile> {
+    const rows = await this.#sql<ProfileRow[]>`
+      insert into captain.traveller_profiles (
+        user_id, default_currency, ranking_mode, preferred_airline_codes,
+        excluded_airline_codes, alerts_enabled, max_alerts_per_day,
+        quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
+        onboarding_step, onboarding_completed_at,
+        created_at, updated_at
+      )
+      select ${userId}, ${DEFAULT_PROFILE.defaultCurrency}, ${DEFAULT_PROFILE.rankingMode},
+        ${this.#sql.json([])}, ${this.#sql.json([])}, ${DEFAULT_PROFILE.alertsEnabled},
+        ${DEFAULT_PROFILE.maxAlertsPerDay}, ${DEFAULT_PROFILE.quietHoursEnabled},
+        ${DEFAULT_PROFILE.quietHoursStart}, ${DEFAULT_PROFILE.quietHoursEnd},
+        'currency', null, ${now}, ${now}
+      where exists (select 1 from captain.users where id = ${userId})
+      on conflict (user_id) do update set user_id = excluded.user_id
+      returning *
+    `;
+    if (!rows[0]) throw new Error("User not found");
+    return toProfile(rows[0]);
+  }
+
+  async updateProfile(
+    userId: string,
+    input: UpdateTravellerProfile & {
+      onboardingStep?: TravellerProfile["onboardingStep"];
+      onboardingCompletedAt?: string | null;
+    },
+    now: Date
+  ): Promise<TravellerProfile> {
+    await this.ensureProfile(userId, now);
+    const rows = await this.#sql<ProfileRow[]>`
+      update captain.traveller_profiles set
+        default_currency = coalesce(${input.defaultCurrency ?? null}, default_currency),
+        ranking_mode = coalesce(${input.rankingMode ?? null}, ranking_mode),
+        preferred_airline_codes = coalesce(
+          ${input.preferredAirlineCodes ? this.#sql.json(input.preferredAirlineCodes) : null},
+          preferred_airline_codes
+        ),
+        excluded_airline_codes = coalesce(
+          ${input.excludedAirlineCodes ? this.#sql.json(input.excludedAirlineCodes) : null},
+          excluded_airline_codes
+        ),
+        alerts_enabled = coalesce(${input.alertsEnabled ?? null}, alerts_enabled),
+        max_alerts_per_day = coalesce(${input.maxAlertsPerDay ?? null}, max_alerts_per_day),
+        quiet_hours_enabled = coalesce(${input.quietHoursEnabled ?? null}, quiet_hours_enabled),
+        quiet_hours_start = coalesce(${input.quietHoursStart ?? null}, quiet_hours_start),
+        quiet_hours_end = coalesce(${input.quietHoursEnd ?? null}, quiet_hours_end),
+        onboarding_step = coalesce(${input.onboardingStep ?? null}, onboarding_step),
+        onboarding_completed_at = case
+          when ${input.onboardingCompletedAt !== undefined}
+            then ${input.onboardingCompletedAt ? new Date(input.onboardingCompletedAt) : null}
+          else onboarding_completed_at
+        end,
+        updated_at = ${now}
+      where user_id = ${userId}
+      returning *
+    `;
+    const specs = await this.#sql<Array<{ search_spec_id: string }>>`
+      select distinct link.search_spec_id
+      from captain.watch_search_specs link
+      join captain.watches watch on watch.id = link.watch_id
+      join captain.trips trip on trip.id = watch.trip_id
+      where trip.user_id = ${userId}
+        and trip.status not in ('cancelled', 'completed', 'archived')
+    `;
+    for (const spec of specs) await this.evaluateTripsForSearchSpec(spec.search_spec_id, now);
+    return toProfile(rows[0]!);
+  }
+
+  async createLoginToken(
+    userId: string,
+    tokenHash: string,
+    redirectPath: "/trip" | "/preferences",
+    expiresAt: Date,
+    now: Date
+  ): Promise<void> {
+    await this.#sql`
+      insert into captain.login_tokens (
+        token_hash, user_id, redirect_path, expires_at, consumed_at, created_at
+      ) values (${tokenHash}, ${userId}, ${redirectPath}, ${expiresAt}, null, ${now})
+    `;
+  }
+
+  async consumeLoginToken(tokenHash: string, now: Date) {
+    const rows = await this.#sql<Array<{ user_id: string; redirect_path: "/trip" | "/preferences" }>>`
+      update captain.login_tokens set consumed_at = ${now}
+      where token_hash = ${tokenHash} and consumed_at is null and expires_at > ${now}
+      returning user_id, redirect_path
+    `;
+    return rows[0] ? { userId: rows[0].user_id, redirectPath: rows[0].redirect_path } : null;
+  }
+
+  async createWebSession(userId: string, tokenHash: string, expiresAt: Date, now: Date): Promise<void> {
+    await this.#sql`
+      insert into captain.web_sessions (
+        token_hash, user_id, expires_at, revoked_at, created_at, last_seen_at
+      ) values (${tokenHash}, ${userId}, ${expiresAt}, null, ${now}, ${now})
+    `;
+  }
+
+  async resolveWebSession(tokenHash: string, now: Date): Promise<string | null> {
+    const rows = await this.#sql<Array<{ user_id: string }>>`
+      update captain.web_sessions set last_seen_at = ${now}
+      where token_hash = ${tokenHash} and revoked_at is null and expires_at > ${now}
+      returning user_id
+    `;
+    return rows[0]?.user_id ?? null;
+  }
+
+  async revokeWebSession(tokenHash: string, now: Date): Promise<void> {
+    await this.#sql`
+      update captain.web_sessions set revoked_at = ${now}
+      where token_hash = ${tokenHash} and revoked_at is null
+    `;
+  }
+
+  async revokeUserSessions(userId: string, now: Date): Promise<void> {
+    await this.#sql`
+      update captain.web_sessions set revoked_at = ${now}
+      where user_id = ${userId} and revoked_at is null
+    `;
+  }
+
+  async reserveDailyResponseBudget(now: Date, amount: number, limit: number): Promise<boolean> {
+    return this.#sql.begin(async (tx) => {
+      const date = now.toISOString().slice(0, 10);
+      await tx`
+        insert into captain.api_usage_days (
+          usage_date, response_count, web_search_call_count, updated_at
+        ) values (${date}, 0, 0, ${now})
+        on conflict (usage_date) do nothing
+      `;
+      const rows = await tx<Array<{ response_count: number }>>`
+        select response_count from captain.api_usage_days
+        where usage_date = ${date}
+        for update
+      `;
+      if (Number(rows[0]?.response_count ?? 0) + amount > limit) return false;
+      await tx`
+        update captain.api_usage_days set
+          response_count = response_count + ${amount}, updated_at = ${now}
+        where usage_date = ${date}
+      `;
+      return true;
+    });
+  }
+
+  async recordWebSearchCalls(now: Date, count: number): Promise<void> {
+    const date = now.toISOString().slice(0, 10);
+    await this.#sql`
+      insert into captain.api_usage_days (
+        usage_date, response_count, web_search_call_count, updated_at
+      ) values (${date}, 0, ${Math.max(0, count)}, ${now})
+      on conflict (usage_date) do update set
+        web_search_call_count = captain.api_usage_days.web_search_call_count + excluded.web_search_call_count,
+        updated_at = excluded.updated_at
+    `;
   }
 
   async claimTelegramUpdate(updateKey: string, userId: string, now: Date): Promise<boolean> {
@@ -180,6 +388,21 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     return rows.map(toTrip);
   }
 
+  async getActiveTrip(userId: string): Promise<Trip | null> {
+    const rows = await this.#sql<TripRow[]>`
+      select trip.* from captain.trips trip
+      left join captain.conversations conversation
+        on conversation.user_id = trip.user_id
+      where trip.user_id = ${userId}
+        and trip.status not in ('cancelled', 'completed', 'archived')
+      order by
+        case when trip.id = conversation.active_trip_id then 0 else 1 end,
+        trip.updated_at desc
+      limit 1
+    `;
+    return rows[0] ? toTrip(rows[0]) : null;
+  }
+
   async getTrip(userId: string, tripId: string): Promise<Trip | null> {
     const rows = await this.#sql<TripRow[]>`
       select * from captain.trips where id = ${tripId} and user_id = ${userId}
@@ -203,13 +426,6 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     return rows[0] ? toWatch(rows[0]) : null;
   }
 
-  async getTripByLegacyKey(userId: string, legacyAgentKey: string): Promise<Trip | null> {
-    const rows = await this.#sql<TripRow[]>`
-      select * from captain.trips where legacy_agent_key = ${legacyAgentKey} and user_id = ${userId}
-    `;
-    return rows[0] ? toTrip(rows[0]) : null;
-  }
-
   async createTrip(userId: string, input: CreateTripInput, specs: SearchSpec[], now: Date): Promise<TripCreationResult> {
     const created = await this.#sql.begin(async (tx) => {
       await tx`select pg_advisory_xact_lock(hashtext(${userId}))`;
@@ -219,6 +435,58 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       await this.evaluateTripsForSearchSpec(specId, now);
     }
     return { ...created, trip: await this.getTrip(userId, created.trip.id) ?? created.trip };
+  }
+
+  async updateTripBrief(
+    userId: string,
+    tripId: string,
+    input: UpdateTripBrief,
+    specs: SearchSpec[],
+    now: Date
+  ): Promise<Trip> {
+    return this.#sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${userId}))`;
+      const rows = await tx<TripRow[]>`
+        select * from captain.trips
+        where id = ${tripId} and user_id = ${userId}
+        for update
+      `;
+      const current = rows[0];
+      if (!current) throw new TripNotFoundError();
+      if (current.version !== input.expectedVersion) {
+        throw new TripVersionConflictError(current.version);
+      }
+      const updated = await tx<TripRow[]>`
+        update captain.trips set
+          brief = ${tx.json(json(input.brief))},
+          status = 'tracking',
+          version = version + 1,
+          updated_at = ${now}
+        where id = ${tripId}
+        returning *
+      `;
+      const watches = await tx<Array<{ id: string }>>`
+        update captain.watches set
+          status = 'active',
+          next_check_at = ${now},
+          delayed_at = null,
+          delay_reason = null,
+          updated_at = ${now}
+        where trip_id = ${tripId}
+        returning id
+      `;
+      if (!watches[0]) throw new Error("Trip Watch not found");
+      await syncSpecs(tx, watches[0].id, specs, now);
+      await tx`delete from captain.trip_recommendations where trip_id = ${tripId}`;
+      await tx`
+        insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
+        values (
+          ${randomUUID()}, ${tripId}, ${userId}, 'trip_brief_updated',
+          ${tx.json(json(input.brief))}, ${now}
+        )
+      `;
+      return toTrip(updated[0]!);
+    });
   }
 
   async createTripPlanDraft(
@@ -243,12 +511,13 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       const rows = await tx<TripPlanDraftRow[]>`
         insert into captain.trip_plan_drafts (
           id, user_id, status, revision, conversation, partial, plan, unresolved_fields,
-          inferred_fields, source_message_ids, trip_id, create_idempotency_key,
+          inferred_fields, turn_state, source_message_ids, trip_id, create_idempotency_key,
           created_at, updated_at, expires_at
         ) values (
           ${id}, ${userId}, 'collecting', 1, ${tx.json([request.trim()])},
           ${tx.json(json(EMPTY_TRIP_PLAN_PARTIAL))}, null,
-          ${tx.json([])}, ${tx.json({})}, ${tx.json(sourceMessageId ? [sourceMessageId] : [])},
+          ${tx.json([])}, ${tx.json({})}, ${tx.json(json(EMPTY_TRIP_PLAN_TURN_STATE))},
+          ${tx.json(sourceMessageId ? [sourceMessageId] : [])},
           null, null, ${now}, ${now}, ${expiresAt}
         )
         returning *
@@ -292,6 +561,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         plan = ${revision.plan ? this.#sql.json(json(revision.plan)) : null},
         unresolved_fields = ${this.#sql.json(json(revision.unresolvedFields))},
         inferred_fields = ${this.#sql.json(json(revision.inferredFields))},
+        turn_state = ${this.#sql.json(json(revision.turnState))},
         source_message_ids = ${this.#sql.json(json(revision.sourceMessageIds))},
         updated_at = ${now},
         expires_at = ${new Date(now.getTime() + 86_400_000)}
@@ -408,35 +678,6 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     };
   }
 
-  async updateTrip(userId: string, tripId: string, input: UpdateTripInput, specs: SearchSpec[] | null, now: Date): Promise<Trip> {
-    return this.#sql.begin(async (tx) => {
-      const rows = await tx<TripRow[]>`select * from captain.trips where id = ${tripId} and user_id = ${userId} for update`;
-      const current = rows[0];
-      if (!current) throw new TripNotFoundError();
-      if (current.version !== input.expectedVersion) throw new TripVersionConflictError(current.version);
-      const title = input.title ?? current.title;
-      const brief = input.brief ?? current.brief;
-      const status = input.brief ? "tracking" : current.status;
-      const updated = await tx<TripRow[]>`
-        update captain.trips set title = ${title}, brief = ${tx.json(json(brief))},
-          status = ${status}, version = version + 1, updated_at = ${now}
-        where id = ${tripId} returning *
-      `;
-      if (specs) {
-        const watches = await tx<Array<{ id: string }>>`select id from captain.watches where trip_id = ${tripId}`;
-        if (watches[0]) {
-          await syncSpecs(tx, watches[0].id, specs, now);
-          await tx`update captain.watches set status = 'active', next_check_at = ${now}, updated_at = ${now} where id = ${watches[0].id}`;
-        }
-      }
-      await tx`
-        insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
-        values (${randomUUID()}, ${tripId}, ${userId}, 'trip_updated', ${tx.json(json(input))}, ${now})
-      `;
-      return toTrip(updated[0]!);
-    });
-  }
-
   async applyTripAction(userId: string, tripId: string, action: TripAction, now: Date): Promise<Trip> {
     return this.#sql.begin(async (tx) => {
       const rows = await tx<TripRow[]>`select * from captain.trips where id = ${tripId} and user_id = ${userId} for update`;
@@ -452,6 +693,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       await tx`
         update captain.watches set status = ${watchStatus},
           next_check_at = case when ${action.type} in ('refresh', 'resume') then ${now} else next_check_at end,
+          last_manual_refresh_at = case when ${action.type} = 'refresh' then ${now} else last_manual_refresh_at end,
           updated_at = ${now}
         where trip_id = ${tripId}
       `;
@@ -461,6 +703,28 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       `;
       return toTrip(updated[0]!);
     });
+  }
+
+  async listTripActivity(userId: string, tripId: string): Promise<TripActivity[]> {
+    const rows = await this.#sql<Array<{
+      id: string;
+      event_type: string;
+      payload: Record<string, unknown>;
+      created_at: Date;
+    }>>`
+      select event.id, event.event_type, event.payload, event.created_at
+      from captain.trip_events event
+      join captain.trips trip on trip.id = event.trip_id
+      where event.trip_id = ${tripId} and trip.user_id = ${userId}
+      order by event.created_at desc
+      limit 50
+    `;
+    return rows.map((row) => ({
+      id: row.id,
+      eventType: row.event_type,
+      payload: row.payload,
+      createdAt: iso(row.created_at)
+    }));
   }
 
   async listTripOffers(userId: string, tripId: string, now: Date): Promise<OfferSnapshot[]> {
@@ -647,7 +911,10 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         with candidates as (
           select id from captain.search_runs
           where scheduled_at <= ${now} and attempt < 3
-            and (status = 'queued' or (status = 'running' and lease_expires_at <= ${now}))
+            and (
+              status in ('queued', 'deferred')
+              or (status = 'running' and lease_expires_at <= ${now})
+            )
           order by scheduled_at asc limit ${claimLimit}
           for update skip locked
         ), claimed as (
@@ -694,11 +961,18 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           insert into captain.offers (
             id, search_run_id, search_spec_id, itinerary_key, provider,
             provider_offer_id, provider_search_id, price, currency, expires_at,
-            observed_at, snapshot
+            observed_at, snapshot, fare_basis, primary_airline_code,
+            participating_airline_codes, evidence, discovery_response_id,
+            verification_response_id, prompt_version, model, verified_at
           ) values (
             ${offerId}, ${runId}, ${run.search_spec_id}, ${offer.itineraryKey}, ${offer.provider},
             ${offer.providerOfferId}, ${offer.providerSearchId}, ${offer.price}, ${offer.currency},
-            ${offer.expiresAt}, ${offer.observedAt}, ${tx.json(json(offer.snapshot))}
+            ${offer.expiresAt}, ${offer.observedAt}, ${tx.json(json(offer.snapshot))},
+            ${offer.fareBasis}, ${offer.primaryAirlineCode},
+            ${tx.json(json(offer.participatingAirlineCodes))},
+            ${tx.json(json(offer.evidence))}, ${offer.discoveryResponseId},
+            ${offer.verificationResponseId}, ${offer.promptVersion}, ${offer.model},
+            ${offer.verifiedAt}
           ) on conflict (search_run_id, provider_offer_id) do nothing
         `;
         await tx`
@@ -719,7 +993,8 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         )
       `;
       await tx`
-        update captain.watches watch set last_check_at = ${now}, updated_at = ${now}
+        update captain.watches watch set last_check_at = ${now},
+          delayed_at = null, delay_reason = null, updated_at = ${now}
         from captain.watch_search_specs link
         where link.watch_id = watch.id and link.search_spec_id = ${run.search_spec_id}
       `;
@@ -742,6 +1017,11 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         delete from captain.search_runs
         where status in ('completed', 'failed')
           and completed_at < ${staleOfferBefore}
+      `;
+      await tx`
+        delete from captain.trips
+        where status = 'archived'
+          and archived_at < ${new Date(now.getTime() - 90 * 86_400_000)}
       `;
       await tx`
         delete from captain.itineraries itinerary
@@ -775,77 +1055,144 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     if (terminal) await this.#enqueueAttentionForSpec(terminal, error, now);
   }
 
+  async deferSearchRun(workerId: string, runId: string, until: Date, reason: string, now: Date): Promise<void> {
+    const rows = await this.#sql<Array<{ id: string }>>`
+      update captain.search_runs set
+        status = 'deferred', attempt = greatest(0, attempt - 1),
+        claimed_by = null, lease_expires_at = null, scheduled_at = ${until},
+        completed_at = null, error = ${reason}
+      where id = ${runId} and status = 'running' and claimed_by = ${workerId}
+      returning id
+    `;
+    if (!rows[0]) throw new Error("Search run lease is not owned by this worker");
+    await this.#sql`
+      update captain.watches watch set
+        delayed_at = ${now}, delay_reason = ${reason}, updated_at = ${now}
+      from captain.watch_search_specs link
+      where link.watch_id = watch.id
+        and link.search_spec_id = (
+          select search_spec_id from captain.search_runs where id = ${runId}
+        )
+    `;
+  }
+
   async evaluateTripsForSearchSpec(searchSpecId: string, now: Date): Promise<number> {
     const rows = await this.#sql<TripRow[]>`
       select distinct trip.* from captain.trips trip
       join captain.watches watch on watch.trip_id = trip.id
       join captain.watch_search_specs link on link.watch_id = watch.id
       where link.search_spec_id = ${searchSpecId}
-        and trip.status not in ('paused', 'cancelled', 'completed')
+        and trip.status not in ('paused', 'cancelled', 'completed', 'archived')
     `;
     let changed = 0;
     for (const row of rows) {
       const trip = toTrip(row);
       const offers = await this.listTripOffers(trip.userId, trip.id, now);
-      const ranked = offers.map((offer) => ({ offer, score: offerScore(trip.brief, offer) }))
-        .filter((item) => Number.isFinite(item.score))
-        .sort((left, right) => left.score - right.score || left.offer.price - right.offer.price);
+      const profile = await this.ensureProfile(trip.userId, now);
+      const ranked = rankOffers(trip.brief, profile, offers);
       const best = ranked[0];
-      if (!best) continue;
+      if (!best) {
+        await this.#sql`delete from captain.trip_recommendations where trip_id = ${trip.id}`;
+        continue;
+      }
       const previousRows = await this.#sql<RecommendationRow[]>`
         select * from captain.trip_recommendations where trip_id = ${trip.id}
       `;
       const previous = previousRows[0] ? toRecommendation(previousRows[0]) : null;
+      const comparison = previous
+        ? rankOffers(trip.brief, profile, [...offers, previous.snapshot.current])
+        : [];
+      const previousRanked = previous
+        ? comparison.find((candidate) => candidate.offer.id === previous.snapshot.current.id) ?? {
+            offer: previous.snapshot.current,
+            score: previous.score
+          }
+        : null;
+      const comparableBest = comparison.find((candidate) => candidate.offer.id === best.offer.id) ?? best;
+      const reasonCodes = recommendationReasonCodes(
+        profile.rankingMode,
+        best.offer,
+        previous?.snapshot.current ?? null
+      );
       const recommendation: TripRecommendation = {
         tripId: trip.id, offerId: best.offer.id, searchSpecId: best.offer.searchSpecId,
         itineraryKey: best.offer.itineraryKey,
         score: best.score, price: best.offer.price, currency: best.offer.currency,
-        summary: recommendationSummary(best.offer), observedAt: best.offer.observedAt
+        summary: recommendationSummary(best.offer), observedAt: best.offer.observedAt,
+        rankingMode: profile.rankingMode,
+        snapshot: {
+          current: best.offer,
+          previous: previous?.snapshot.current ?? null,
+          rankingMode: profile.rankingMode,
+          reasonCodes,
+          createdAt: now.toISOString()
+        }
       };
-      const kind = !previous
-        ? "initial_results"
-        : best.offer.price <= previous.price * 0.95
-          ? "price_drop"
-          : previous.itineraryKey !== best.offer.itineraryKey && best.score < previous.score
-            ? "new_best"
-            : null;
-      await this.#sql.begin(async (tx) => {
+      const qualifies = meetsAlertThreshold(profile.rankingMode, comparableBest, previousRanked);
+      const kind = !profile.alertsEnabled
+        ? null
+        : !previous
+          ? "initial_results"
+          : qualifies && profile.rankingMode === "cheapest"
+            ? "price_drop"
+            : qualifies
+              ? "new_best"
+              : null;
+      const notified = await this.#sql.begin(async (tx) => {
+        let queued = false;
         await tx`
           insert into captain.trip_recommendations (
-            trip_id, offer_id, search_spec_id, itinerary_key, score, price, currency, summary, observed_at, updated_at
+            trip_id, offer_id, search_spec_id, itinerary_key, score, price, currency,
+            summary, observed_at, ranking_mode, snapshot, updated_at
           ) values (
             ${trip.id}, ${best.offer.id}, ${best.offer.searchSpecId}, ${best.offer.itineraryKey}, ${best.score},
-            ${best.offer.price}, ${best.offer.currency}, ${recommendation.summary}, ${best.offer.observedAt}, ${now}
+            ${best.offer.price}, ${best.offer.currency}, ${recommendation.summary},
+            ${best.offer.observedAt}, ${recommendation.rankingMode},
+            ${tx.json(json(recommendation.snapshot))}, ${now}
           ) on conflict (trip_id) do update set
             offer_id = excluded.offer_id, search_spec_id = excluded.search_spec_id,
             itinerary_key = excluded.itinerary_key,
             score = excluded.score, price = excluded.price, currency = excluded.currency,
-            summary = excluded.summary, observed_at = excluded.observed_at, updated_at = excluded.updated_at
+            summary = excluded.summary, observed_at = excluded.observed_at,
+            ranking_mode = excluded.ranking_mode, snapshot = excluded.snapshot,
+            updated_at = excluded.updated_at
         `;
         if (kind) {
-          const dedupKey = `${trip.id}:${kind}:${best.offer.itineraryKey}:${best.offer.price}`;
-          const telegram = await tx<Array<{ exists: boolean }>>`
-            select exists(select 1 from captain.telegram_accounts where user_id = ${trip.userId}) as exists
+          const recentAlerts = await tx<Array<{ count: string }>>`
+            select count(*)::text as count from captain.notifications
+            where user_id = ${trip.userId}
+              and kind in ('price_drop', 'new_best')
+              and created_at >= ${new Date(now.getTime() - 86_400_000)}
           `;
-          if (telegram[0]?.exists) {
-            const availableAt = await userDeliveryTime(tx, trip.userId, now);
-            await tx`
-              insert into captain.notifications (
-                id, user_id, trip_id, kind, dedup_key, payload, status,
-                attempts, available_at, created_at, updated_at
-              ) values (
-                ${randomUUID()}, ${trip.userId}, ${trip.id}, ${kind}, ${dedupKey},
-                ${tx.json(json({
-                  tripTitle: trip.title,
-                  ...recommendation,
-                  ...(previous ? {
-                    previousPrice: previous.price,
-                    dropPercent: previous.price > 0 ? Math.round((1 - recommendation.price / previous.price) * 100) : 0
-                  } : {})
-                }))},
-                'pending', 0, ${availableAt}, ${now}, ${now}
-              ) on conflict (dedup_key) do nothing
+          const capped = kind !== "initial_results"
+            && Number(recentAlerts[0]?.count ?? 0) >= profile.maxAlertsPerDay;
+          if (!capped) {
+            const dedupKey = `${trip.id}:${kind}:${best.offer.itineraryKey}:${best.offer.price}`;
+            const telegram = await tx<Array<{ exists: boolean }>>`
+              select exists(select 1 from captain.telegram_accounts where user_id = ${trip.userId}) as exists
             `;
+            if (telegram[0]?.exists) {
+              const availableAt = await userDeliveryTime(tx, trip.userId, now);
+              const inserted = await tx<Array<{ id: string }>>`
+                insert into captain.notifications (
+                  id, user_id, trip_id, kind, dedup_key, payload, status,
+                  attempts, available_at, created_at, updated_at
+                ) values (
+                  ${randomUUID()}, ${trip.userId}, ${trip.id}, ${kind}, ${dedupKey},
+                  ${tx.json(json({
+                    tripTitle: trip.title,
+                    ...recommendation,
+                    ...(previous ? {
+                      previousPrice: previous.price,
+                      dropPercent: previous.price > 0 ? Math.round((1 - recommendation.price / previous.price) * 100) : 0
+                    } : {})
+                  }))},
+                  'pending', 0, ${availableAt}, ${now}, ${now}
+                ) on conflict (dedup_key) do nothing
+                returning id
+              `;
+              queued = inserted.length === 1;
+            }
           }
         }
         if (trip.status === "tracking") {
@@ -854,8 +1201,9 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
               version = version + 1, updated_at = ${now} where id = ${trip.id}
           `;
         }
+        return queued;
       });
-      if (kind) changed += 1;
+      if (notified) changed += 1;
     }
     return changed;
   }
@@ -880,14 +1228,16 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       return rows.map((row) => ({
         id: row.id, userId: row.user_id, tripId: row.trip_id,
         telegramChatId: Number(row.chat_id), kind: row.kind,
-        payload: row.payload, attempts: row.attempts
+        payload: row.payload, attempts: row.attempts,
+        telegramMessageId: row.telegram_message_id === null ? null : Number(row.telegram_message_id)
       }));
     });
   }
 
-  async markNotificationSent(notificationId: string, now: Date): Promise<void> {
+  async markNotificationSent(notificationId: string, telegramMessageId: number, now: Date): Promise<void> {
     await this.#sql`
-      update captain.notifications set status = 'sent', delivered_at = ${now}, error = null, updated_at = ${now}
+      update captain.notifications set status = 'sent', delivered_at = ${now},
+        telegram_message_id = ${telegramMessageId}, error = null, updated_at = ${now}
       where id = ${notificationId} and status = 'sending'
     `;
   }
@@ -899,6 +1249,41 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         available_at = ${new Date(now.getTime() + 300_000)}, error = ${error}, updated_at = ${now}
       where id = ${notificationId} and status = 'sending'
     `;
+  }
+
+  async getNotificationByTelegramMessage(
+    userId: string,
+    telegramMessageId: number
+  ): Promise<CaptainNotification | null> {
+    const rows = await this.#sql<Array<NotificationRow & { chat_id: string }>>`
+      select notification.*, telegram.chat_id::text as chat_id
+      from captain.notifications notification
+      join captain.telegram_accounts telegram on telegram.user_id = notification.user_id
+      where notification.user_id = ${userId}
+        and notification.telegram_message_id = ${telegramMessageId}
+      limit 1
+    `;
+    const row = rows[0];
+    return row ? {
+      id: row.id,
+      userId: row.user_id,
+      tripId: row.trip_id,
+      telegramChatId: Number(row.chat_id),
+      kind: row.kind,
+      payload: row.payload,
+      attempts: row.attempts,
+      telegramMessageId: row.telegram_message_id === null ? null : Number(row.telegram_message_id)
+    } : null;
+  }
+
+  async getRecommendation(userId: string, tripId: string): Promise<TripRecommendation | null> {
+    const rows = await this.#sql<RecommendationRow[]>`
+      select recommendation.*
+      from captain.trip_recommendations recommendation
+      join captain.trips trip on trip.id = recommendation.trip_id
+      where recommendation.trip_id = ${tripId} and trip.user_id = ${userId}
+    `;
+    return rows[0] ? toRecommendation(rows[0]) : null;
   }
 
   async close(): Promise<void> {
@@ -981,13 +1366,9 @@ async function createTripInTransaction(
   specs: SearchSpec[],
   now: Date
 ): Promise<TripCreationResult> {
-  const counts = await sql<Array<{ count: string }>>`
-    select count(*)::text as count from captain.trips
-    where user_id = ${userId} and status not in ('cancelled', 'completed')
-  `;
   const duplicates = await sql<TripRow[]>`
     select * from captain.trips
-    where user_id = ${userId} and status not in ('cancelled', 'completed')
+    where user_id = ${userId} and status not in ('cancelled', 'completed', 'archived')
       and brief = ${sql.json(json(input.brief))}
     order by updated_at desc limit 1
     for update
@@ -1003,7 +1384,13 @@ async function createTripInTransaction(
     `;
     return { trip: toTrip(duplicates[0]), watch: toWatch(watches[0]), created: false };
   }
-  if (Number(counts[0]?.count ?? 0) >= MAX_ACTIVE_TRIPS_PER_USER) {
+  const activeCounts = await sql<Array<{ count: string }>>`
+    select count(*)::text as count
+    from captain.trips
+    where user_id = ${userId}
+      and status not in ('cancelled', 'completed', 'archived')
+  `;
+  if (Number(activeCounts[0]?.count ?? 0) >= MAX_ACTIVE_TRIPS_PER_USER) {
     throw new TripLimitError();
   }
   const tripId = randomUUID();
@@ -1034,11 +1421,12 @@ async function createTripInTransaction(
     trip: {
       id: tripId,
       userId,
-      legacyAgentKey: null,
       title: input.title,
       status: "tracking",
       version: 1,
       brief: input.brief,
+      archivedAt: null,
+      archiveReason: null,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString()
     },
@@ -1049,6 +1437,9 @@ async function createTripInTransaction(
       cadenceHours: input.cadenceHours,
       nextCheckAt: now.toISOString(),
       lastCheckAt: null,
+      lastManualRefreshAt: null,
+      delayedAt: null,
+      delayReason: null,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString()
     },
@@ -1066,12 +1457,31 @@ async function expireTripPlanDrafts(sql: Sql, userId: string, now: Date): Promis
 }
 
 async function userDeliveryTime(sql: Sql, userId: string, now: Date): Promise<Date> {
-  const rows = await sql<Array<{ timezone: string }>>`select timezone from captain.users where id = ${userId}`;
+  const rows = await sql<Array<{
+    timezone: string;
+    quiet_hours_enabled: boolean | null;
+    quiet_hours_start: number | null;
+    quiet_hours_end: number | null;
+  }>>`
+    select users.timezone, profile.quiet_hours_enabled,
+      profile.quiet_hours_start, profile.quiet_hours_end
+    from captain.users users
+    left join captain.traveller_profiles profile on profile.user_id = users.id
+    where users.id = ${userId}
+  `;
   const timezone = rows[0]?.timezone ?? "UTC";
+  if (rows[0]?.quiet_hours_enabled === false) return now;
+  const start = rows[0]?.quiet_hours_start ?? DEFAULT_PROFILE.quietHoursStart;
+  const end = rows[0]?.quiet_hours_end ?? DEFAULT_PROFILE.quietHoursEnd;
   try {
     const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: timezone, hour: "2-digit", hourCycle: "h23" }).format(now));
-    if (hour >= 22) return new Date(now.getTime() + (31 - hour) * 3_600_000);
-    if (hour < 7) return new Date(now.getTime() + (7 - hour) * 3_600_000);
+    if (start === end) return now;
+    if (start > end) {
+      if (hour >= start) return new Date(now.getTime() + (24 - hour + end) * 3_600_000);
+      if (hour < end) return new Date(now.getTime() + (end - hour) * 3_600_000);
+    } else if (hour >= start && hour < end) {
+      return new Date(now.getTime() + (end - hour) * 3_600_000);
+    }
   } catch {
     // Invalid timezones fall back to immediate delivery.
   }
@@ -1089,18 +1499,27 @@ function actionStatus(action: TripAction["type"], current: TripStatus): TripStat
 type UserRow = { id: string; status: CaptainUser["status"]; timezone: string };
 type TelegramRow = { telegram_user_id: string | number; chat_id: string | number; username: string | null; first_name: string | null; last_name: string | null };
 type TripRow = {
-  id: string; user_id: string; legacy_agent_key: string | null; title: string; status: TripStatus;
-  version: number; brief: Trip["brief"]; created_at: Date; updated_at: Date;
+  id: string; user_id: string; title: string; status: TripStatus;
+  version: number; brief: Trip["brief"]; archived_at: Date | null;
+  archive_reason: Trip["archiveReason"]; created_at: Date; updated_at: Date;
 };
 type OfferRow = {
   id: string; search_run_id: string; search_spec_id: string; itinerary_key: string;
-  provider: "duffel"; provider_offer_id: string; provider_search_id: string;
+  provider: FlightSearchProviderId; provider_offer_id: string; provider_search_id: string;
   price: string | number; currency: string; expires_at: Date | null; observed_at: Date;
+  fare_basis: "one_adult_total"; primary_airline_code: string;
+  participating_airline_codes: string[];
+  evidence: OfferSnapshot["evidence"];
+  discovery_response_id: string; verification_response_id: string;
+  prompt_version: string; model: string; verified_at: Date;
   snapshot: Record<string, unknown>;
 };
 type WatchRow = {
   id: string; trip_id: string; status: Watch["status"]; cadence_hours: number;
-  next_check_at: Date | null; last_check_at: Date | null; created_at: Date; updated_at: Date;
+  next_check_at: Date | null; last_check_at: Date | null;
+  last_manual_refresh_at: Date | null;
+  delayed_at: Date | null; delay_reason: string | null;
+  created_at: Date; updated_at: Date;
 };
 type TripPlanDraftRow = {
   id: string;
@@ -1112,6 +1531,7 @@ type TripPlanDraftRow = {
   plan: unknown | null;
   unresolved_fields: string[];
   inferred_fields: Record<string, string>;
+  turn_state: unknown;
   source_message_ids: string[];
   trip_id: string | null;
   create_idempotency_key: string | null;
@@ -1123,10 +1543,29 @@ type RecommendationRow = {
   trip_id: string; offer_id: string | null; search_spec_id: string | null;
   itinerary_key: string; score: string | number;
   price: string | number; currency: string; summary: string; observed_at: Date;
+  ranking_mode: TripRecommendation["rankingMode"];
+  snapshot: TripRecommendation["snapshot"];
 };
 type NotificationRow = {
   id: string; user_id: string; trip_id: string; kind: CaptainNotification["kind"];
   payload: Record<string, unknown>; attempts: number;
+  telegram_message_id: string | number | null;
+};
+type ProfileRow = {
+  user_id: string;
+  default_currency: string;
+  ranking_mode: TravellerProfile["rankingMode"];
+  preferred_airline_codes: string[];
+  excluded_airline_codes: string[];
+  alerts_enabled: boolean;
+  max_alerts_per_day: number;
+  quiet_hours_enabled: boolean;
+  quiet_hours_start: number;
+  quiet_hours_end: number;
+  onboarding_completed_at: Date | null;
+  onboarding_step: TravellerProfile["onboardingStep"];
+  created_at: Date;
+  updated_at: Date;
 };
 
 function toUser(row: UserRow & TelegramRow): CaptainUser {
@@ -1142,8 +1581,10 @@ function toUser(row: UserRow & TelegramRow): CaptainUser {
 
 function toTrip(row: TripRow): Trip {
   return {
-    id: row.id, userId: row.user_id, legacyAgentKey: row.legacy_agent_key,
+    id: row.id, userId: row.user_id,
     title: row.title, status: row.status, version: row.version, brief: row.brief,
+    archivedAt: row.archived_at ? iso(row.archived_at) : null,
+    archiveReason: row.archive_reason,
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
   };
 }
@@ -1153,7 +1594,17 @@ function toOffer(row: OfferRow): OfferSnapshot {
     id: row.id, searchRunId: row.search_run_id, searchSpecId: row.search_spec_id,
     itineraryKey: row.itinerary_key, provider: row.provider,
     providerOfferId: row.provider_offer_id, providerSearchId: row.provider_search_id,
-    price: Number(row.price), currency: row.currency, expiresAt: row.expires_at ? iso(row.expires_at) : null,
+    price: Number(row.price), priceAmount: decimalString(row.price), currency: row.currency,
+    fareBasis: row.fare_basis,
+    primaryAirlineCode: row.primary_airline_code,
+    participatingAirlineCodes: row.participating_airline_codes,
+    evidence: row.evidence,
+    discoveryResponseId: row.discovery_response_id,
+    verificationResponseId: row.verification_response_id,
+    promptVersion: row.prompt_version,
+    model: row.model,
+    verifiedAt: iso(row.verified_at),
+    expiresAt: row.expires_at ? iso(row.expires_at) : null,
     observedAt: iso(row.observed_at), snapshot: row.snapshot
   };
 }
@@ -1163,6 +1614,9 @@ function toWatch(row: WatchRow): Watch {
     id: row.id, tripId: row.trip_id, status: row.status, cadenceHours: row.cadence_hours,
     nextCheckAt: row.next_check_at ? iso(row.next_check_at) : null,
     lastCheckAt: row.last_check_at ? iso(row.last_check_at) : null,
+    lastManualRefreshAt: row.last_manual_refresh_at ? iso(row.last_manual_refresh_at) : null,
+    delayedAt: row.delayed_at ? iso(row.delayed_at) : null,
+    delayReason: row.delay_reason,
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
   };
 }
@@ -1178,6 +1632,7 @@ function toTripPlanDraft(row: TripPlanDraftRow): TripPlanDraft {
     plan: row.plan ? plannedTripSchema.parse(row.plan) : null,
     unresolvedFields: row.unresolved_fields,
     inferredFields: row.inferred_fields,
+    turnState: tripPlanTurnStateSchema.parse(row.turn_state ?? EMPTY_TRIP_PLAN_TURN_STATE),
     sourceMessageIds: row.source_message_ids,
     tripId: row.trip_id,
     createIdempotencyKey: row.create_idempotency_key,
@@ -1192,7 +1647,28 @@ function toRecommendation(row: RecommendationRow): TripRecommendation {
     tripId: row.trip_id, offerId: row.offer_id, searchSpecId: row.search_spec_id,
     itineraryKey: row.itinerary_key,
     score: Number(row.score), price: Number(row.price), currency: row.currency,
-    summary: row.summary, observedAt: iso(row.observed_at)
+    summary: row.summary, observedAt: iso(row.observed_at),
+    rankingMode: row.ranking_mode,
+    snapshot: row.snapshot
+  };
+}
+
+function toProfile(row: ProfileRow): TravellerProfile {
+  return {
+    userId: row.user_id,
+    defaultCurrency: row.default_currency,
+    rankingMode: row.ranking_mode,
+    preferredAirlineCodes: row.preferred_airline_codes,
+    excludedAirlineCodes: row.excluded_airline_codes,
+    alertsEnabled: row.alerts_enabled,
+    maxAlertsPerDay: row.max_alerts_per_day,
+    quietHoursEnabled: row.quiet_hours_enabled,
+    quietHoursStart: row.quiet_hours_start,
+    quietHoursEnd: row.quiet_hours_end,
+    onboardingCompletedAt: row.onboarding_completed_at ? iso(row.onboarding_completed_at) : null,
+    onboardingStep: row.onboarding_step,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at)
   };
 }
 
@@ -1206,4 +1682,22 @@ function iso(value: Date | string): string {
 
 function json(value: unknown): Parameters<Sql["json"]>[0] {
   return value as Parameters<Sql["json"]>[0];
+}
+
+function positiveInteger(value: string | undefined, fallback: number): number {
+  const candidate = Number(value);
+  return Number.isSafeInteger(candidate) && candidate > 0 ? candidate : fallback;
+}
+
+function publicBetaEnabled(): boolean {
+  return !["0", "false", "off", "no"].includes(
+    (process.env.CAPTAIN_PUBLIC_BETA_ENABLED ?? "true").trim().toLowerCase()
+  );
+}
+
+function decimalString(value: string | number): string {
+  if (typeof value === "string") {
+    return value.includes(".") ? value.replace(/0+$/u, "").replace(/\.$/u, "") : value;
+  }
+  return Number.isInteger(value) ? String(value) : String(value);
 }

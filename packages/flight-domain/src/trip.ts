@@ -1,9 +1,11 @@
 import { z } from "zod";
 
+import type { FlightSearchProviderId } from "./provider.js";
+
 export const MAX_ACTIVE_TRIPS_PER_USER = 3;
-export const MAX_SEARCH_COMBINATIONS = 24;
-export const DEFAULT_CADENCE_HOURS = 6;
-export const MINIMUM_CADENCE_HOURS = 1;
+export const MAX_SEARCH_COMBINATIONS = 1;
+export const DEFAULT_CADENCE_HOURS = 3;
+export const MINIMUM_CADENCE_HOURS = 3;
 
 const iataCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/);
 const airlineCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,3}$/);
@@ -29,17 +31,10 @@ export const tripLegSchema = z.object({
 export type TripLeg = z.infer<typeof tripLegSchema>;
 
 export const travellersSchema = z.object({
-  adults: z.number().int().min(1).max(9),
-  childrenAges: z.array(z.number().int().min(2).max(17)).max(8).default([]),
-  infants: z.number().int().min(0).max(4).default(0)
-}).strict().superRefine((value, context) => {
-  if (value.infants > value.adults) {
-    context.addIssue({ code: "custom", path: ["infants"], message: "Each infant must travel with an adult" });
-  }
-  if (value.adults + value.childrenAges.length + value.infants > 9) {
-    context.addIssue({ code: "custom", message: "A Trip supports at most nine travellers" });
-  }
-});
+  adults: z.literal(1),
+  childrenAges: z.array(z.never()).max(0).default([]),
+  infants: z.literal(0).default(0)
+}).strict();
 
 const stayNightsSchema = z.object({
   minimum: z.number().int().min(1).max(30),
@@ -94,7 +89,8 @@ export const tripStatusSchema = z.enum([
   "recommended",
   "paused",
   "cancelled",
-  "completed"
+  "completed",
+  "archived"
 ]);
 export type TripStatus = z.infer<typeof tripStatusSchema>;
 
@@ -105,29 +101,27 @@ export const createTripSchema = z.object({
 }).strict();
 export type CreateTripInput = z.infer<typeof createTripSchema>;
 
-export const updateTripSchema = z.object({
-  expectedVersion: z.number().int().positive(),
-  title: z.string().trim().min(1).max(120).optional(),
-  brief: tripBriefSchema.optional()
-}).strict().refine((value) => value.title !== undefined || value.brief !== undefined, {
-  message: "At least one Trip field must be updated"
-});
-export type UpdateTripInput = z.infer<typeof updateTripSchema>;
-
 export const tripActionSchema = z.object({
   type: z.enum(["pause", "resume", "refresh", "cancel", "complete"]),
   expectedVersion: z.number().int().positive()
 }).strict();
 export type TripAction = z.infer<typeof tripActionSchema>;
 
+export const updateTripBriefSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  brief: tripBriefSchema
+}).strict();
+export type UpdateTripBrief = z.infer<typeof updateTripBriefSchema>;
+
 export type Trip = {
   id: string;
   userId: string;
-  legacyAgentKey: string | null;
   title: string;
   status: TripStatus;
   version: number;
   brief: TripBrief;
+  archivedAt: string | null;
+  archiveReason: "replaced" | "user" | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -139,6 +133,9 @@ export type Watch = {
   cadenceHours: number;
   nextCheckAt: string | null;
   lastCheckAt: string | null;
+  lastManualRefreshAt: string | null;
+  delayedAt: string | null;
+  delayReason: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -148,11 +145,21 @@ export type OfferSnapshot = {
   searchRunId: string;
   searchSpecId: string;
   itineraryKey: string;
-  provider: "duffel";
+  provider: FlightSearchProviderId;
   providerOfferId: string;
   providerSearchId: string;
   price: number;
+  priceAmount: string;
   currency: string;
+  fareBasis: "one_adult_total";
+  primaryAirlineCode: string;
+  participatingAirlineCodes: string[];
+  evidence: Array<{ url: string; title: string; domain: string }>;
+  discoveryResponseId: string;
+  verificationResponseId: string;
+  promptVersion: string;
+  model: string;
+  verifiedAt: string;
   expiresAt: string | null;
   observedAt: string;
   snapshot: Record<string, unknown>;

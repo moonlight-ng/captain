@@ -21,12 +21,21 @@ import {
   type PendingSessionRotation,
   type SessionLimitInputRequest
 } from "@agents/telegram-core";
-import type { TripPlanResult } from "@agents/flight-domain";
+import {
+  TripLimitError,
+  type TravellerProfile,
+  type TripPlanResult
+} from "@agents/flight-domain";
+import {
+  BetaCapacityError,
+  BetaLaunchGateError,
+  type CaptainUser,
+  type RecommendationSnapshot
+} from "@agents/flight-store";
 
 import { getCaptainServices } from "../../services/app/services.js";
 import { TripPlanningService } from "../../services/trip-planning/service.js";
 import {
-  formatTripList,
   telegramDashboardMessage
 } from "../../services/trip-planning/format.js";
 
@@ -39,7 +48,7 @@ const pendingSessionRotations = new Map<string, PendingSessionRotation>();
 const agentProgressMessages = new Map<string, { chatId: string; messageId: string }>();
 const PLANNING_PROGRESS_TEXT = "Working through the route and dates…";
 const AGENT_PROGRESS_TEXT = "Working on it…";
-const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. Your saved Trips are unchanged—please try again.";
+const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. Your saved Trip is unchanged—please try again.";
 
 export default telegramChannel({
   route: "/eve/v1/telegram",
@@ -53,13 +62,24 @@ export default telegramChannel({
     if (telegramUserId === null || telegramChatId === null || messageId === null) return null;
 
     const services = await getCaptainServices();
-    const user = await services.platformStore.ensureTelegramUser({
-      telegramUserId,
-      telegramChatId,
-      username: message.from?.username ?? null,
-      firstName: message.from?.firstName ?? null,
-      lastName: message.from?.lastName ?? null
-    }, new Date());
+    let user: CaptainUser;
+    try {
+      user = await services.platformStore.ensureTelegramUser({
+        telegramUserId,
+        telegramChatId,
+        username: message.from?.username ?? null,
+        firstName: message.from?.firstName ?? null,
+        lastName: message.from?.lastName ?? null
+      }, new Date());
+    } catch (error) {
+      if (error instanceof BetaCapacityError || error instanceof BetaLaunchGateError) {
+        await ctx.telegram.post(error instanceof BetaLaunchGateError
+          ? "Captain’s public beta isn’t open yet."
+          : "Captain’s 25-person beta is full right now. Please try again later.");
+        return null;
+      }
+      throw error;
+    }
     const updateKey = telegramMessageUpdateKey("captain", telegramChatId, messageId);
     if (!await services.platformStore.claimTelegramUpdate(updateKey, user.id, new Date())) return null;
     if (user.status !== "active") {
@@ -77,24 +97,59 @@ export default telegramChannel({
         return null;
       }
     }
+    const profile = await services.platformStore.ensureProfile(user.id, new Date());
     if (content === "/start") {
-      const welcome = "I’m Captain. Tell me where and roughly when you want to fly, and I’ll create a Trip, track prices, compare the strongest options, and message you when something important changes.";
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
-      await services.platformStore.appendMessage(user.id, "assistant", welcome, new Date());
-      await ctx.telegram.post(welcome);
+      if (!profile.onboardingCompletedAt) {
+        await services.platformStore.updateProfile(
+          user.id,
+          { onboardingStep: "currency" },
+          new Date()
+        );
+        await postCurrencyQuestion(ctx);
+      } else {
+        const welcome = "I’m Captain. I track up to three Trips at a time and only show fares that pass two independent web checks.";
+        await services.platformStore.appendMessage(user.id, "assistant", welcome, new Date());
+        await postWithLink(
+          ctx,
+          welcome,
+          "Edit preferences",
+          services.auth.createAccessLink(user.id, "/preferences")
+        );
+      }
+      return null;
+    }
+    if (!profile.onboardingCompletedAt) {
+      if (await handleOnboardingText(ctx, user.id, profile, content)) return null;
+    }
+    if (content === "/preferences") {
+      await services.platformStore.appendMessage(user.id, "user", content, new Date());
+      await postWithLink(
+        ctx,
+        "Your preferences control how Captain ranks all tracked Trips and future Trips.",
+        "Edit preferences",
+        services.auth.createAccessLink(user.id, "/preferences")
+      );
       return null;
     }
     if (content === "/trips") {
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
-      const trips = await services.trips.list(user.id);
-      const response = trips.length === 0
-        ? "You don’t have any Trips yet. Tell me where and when you want to go."
-        : formatTripList(
-            trips,
-            (tripId) => services.tripPlanning.dashboardUrlForTrip(user.id, tripId)
-          );
+      const response = await services.tripPlanning.activeTripsLocation(user.id);
+      if (!response) {
+        await ctx.telegram.post("You don’t have a Trip yet. Tell me where and when you want to fly.");
+        return null;
+      }
       await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
       await postTelegramDashboardMessage(ctx, response);
+      return null;
+    }
+    if (content === "/signout") {
+      await ctx.telegram.post("Captain’s design links are reusable for now. There is no web sign-out during design.");
+      return null;
+    }
+    if (content === "/delete_account") {
+      await services.platformStore.deleteUser(user.id);
+      await ctx.telegram.post("Your Captain account, Trip, sessions, and retained fare evidence have been deleted.");
       return null;
     }
     if (!content) {
@@ -104,6 +159,35 @@ export default telegramChannel({
 
     const sourceMessageId = await services.platformStore.appendMessage(user.id, "user", content, new Date());
     await ctx.telegram.startTyping();
+
+    const quotedMessageId = repliedToTelegramMessageId(message.raw);
+    if (quotedMessageId !== null) {
+      const notification = await services.platformStore.getNotificationByTelegramMessage(
+        user.id,
+        quotedMessageId
+      );
+      const snapshot = notification ? snapshotFromPayload(notification.payload) : null;
+      if (snapshot) {
+        const explanation = explainRecommendation(snapshot);
+        await services.platformStore.appendMessage(user.id, "assistant", explanation, new Date());
+        await ctx.telegram.post(explanation);
+        return null;
+      }
+    }
+    if (isExplanationQuestion(content)) {
+      const trip = await services.platformStore.getActiveTrip(user.id);
+      const recommendation = trip
+        ? await services.platformStore.getRecommendation(user.id, trip.id)
+        : null;
+      if (recommendation) {
+        const explanation = explainRecommendation(recommendation.snapshot);
+        await services.platformStore.appendMessage(user.id, "assistant", explanation, new Date());
+        await ctx.telegram.post(explanation);
+      } else {
+        await ctx.telegram.post("I don’t have a verified recommendation for your Trip yet. I’ll explain it as soon as one passes both checks.");
+      }
+      return null;
+    }
 
     if (isCaptainGreeting(content)) {
       const draft = await services.tripPlanning.findOpen(user.id);
@@ -145,6 +229,17 @@ export default telegramChannel({
         return null;
       }
     } catch (error) {
+      if (error instanceof TripLimitError) {
+        const message = "You’re already tracking three Trips. Open Agent settings and stop tracking one before creating another.";
+        await services.platformStore.appendMessage(user.id, "assistant", message, new Date());
+        await postWithLink(
+          ctx,
+          message,
+          "Agent settings",
+          services.auth.createAccessLink(user.id, "/preferences")
+        );
+        return null;
+      }
       console.error(JSON.stringify({
         event: "captain.telegram_message_processing_failed",
         error: error instanceof Error ? error.name : "UnknownError"
@@ -179,19 +274,46 @@ export default telegramChannel({
   },
   async onCallbackQuery(ctx, query) {
     if (!privateHumanCallback(query)) return;
+    const profileAction = parseProfileCallback(query.data);
+    if (profileAction) {
+      try {
+        await handleProfileCallback(ctx, query, profileAction);
+      } catch (error) {
+        if (!(error instanceof BetaCapacityError || error instanceof BetaLaunchGateError)) throw error;
+        await ctx.telegram.answerCallbackQuery({
+          callbackQueryId: query.id,
+          text: error instanceof BetaLaunchGateError
+            ? "Captain’s public beta isn’t open yet."
+            : "Captain’s 25-person beta is full right now."
+        });
+      }
+      return;
+    }
     const action = parseTripPlanCallback(query.data);
     if (!action) return;
     const telegramUserId = safeId(query.from.id);
     const telegramChatId = safeId(query.message?.chat.id ?? "");
     if (telegramUserId === null || telegramChatId === null) return;
     const services = await getCaptainServices();
-    const user = await services.platformStore.ensureTelegramUser({
-      telegramUserId,
-      telegramChatId,
-      username: query.from.username ?? null,
-      firstName: query.from.firstName ?? null,
-      lastName: query.from.lastName ?? null
-    }, new Date());
+    let user: CaptainUser;
+    try {
+      user = await services.platformStore.ensureTelegramUser({
+        telegramUserId,
+        telegramChatId,
+        username: query.from.username ?? null,
+        firstName: query.from.firstName ?? null,
+        lastName: query.from.lastName ?? null
+      }, new Date());
+    } catch (error) {
+      if (!(error instanceof BetaCapacityError || error instanceof BetaLaunchGateError)) throw error;
+      await ctx.telegram.answerCallbackQuery({
+        callbackQueryId: query.id,
+        text: error instanceof BetaLaunchGateError
+          ? "Captain’s public beta isn’t open yet."
+          : "Captain’s 25-person beta is full right now."
+      });
+      return;
+    }
     if (user.status !== "active") {
       await ctx.telegram.answerCallbackQuery({
         callbackQueryId: query.id,
@@ -205,12 +327,12 @@ export default telegramChannel({
           callbackQueryId: query.id,
           text: "Creating the Trip…"
         });
-        await clearCallbackButtons(ctx, query);
         const result = await services.tripPlanning.confirm(
           user.id,
           action.draftId,
           action.revision
         );
+        await clearCallbackButtons(ctx, query);
         await postTripPlanResult(ctx, user.id, result);
         return;
       }
@@ -238,6 +360,19 @@ export default telegramChannel({
       await clearCallbackButtons(ctx, query);
       await postTripPlanResult(ctx, user.id, result);
     } catch (error) {
+      if (error instanceof TripLimitError) {
+        await ctx.telegram.answerCallbackQuery({
+          callbackQueryId: query.id,
+          text: "Three-Trip limit reached."
+        });
+        await postWithLink(
+          ctx,
+          "You’re already tracking three Trips. Stop tracking one before creating another.",
+          "Agent settings",
+          services.auth.createAccessLink(user.id, "/preferences")
+        );
+        return;
+      }
       console.error(JSON.stringify({
         event: "captain.telegram_trip_plan_callback_failed",
         error: error instanceof Error ? error.name : "UnknownError"
@@ -350,6 +485,295 @@ export default telegramChannel({
   }
 });
 
+async function postCurrencyQuestion(ctx: TelegramContext): Promise<void> {
+  await ctx.telegram.post({
+    text: "First, choose your default currency. I’ll suggest a local currency for domestic Trips and use this default for international Trips. Captain never converts fares.",
+    reply_markup: {
+      inline_keyboard: [
+        ["USD", "GBP", "NGN"].map((currency) => ({
+          text: currency,
+          callback_data: `captain-profile:currency:${currency}`
+        })),
+        ["EUR", "KES", "TZS"].map((currency) => ({
+          text: currency,
+          callback_data: `captain-profile:currency:${currency}`
+        }))
+      ]
+    }
+  });
+}
+
+async function postRankingQuestion(ctx: TelegramContext): Promise<void> {
+  await ctx.telegram.post({
+    text: "What should Captain optimize for?",
+    reply_markup: {
+      inline_keyboard: [[
+        { text: "Cheapest", callback_data: "captain-profile:ranking:cheapest" },
+        { text: "Balanced", callback_data: "captain-profile:ranking:balanced" },
+        { text: "Fastest", callback_data: "captain-profile:ranking:fastest" }
+      ]]
+    }
+  });
+}
+
+async function postAirlineQuestion(ctx: TelegramContext): Promise<void> {
+  await ctx.telegram.post(
+    "Any airline preferences? Reply like “prefer KQ, avoid VS”, or send /skip. You can edit this later."
+  );
+}
+
+async function handleOnboardingText(
+  ctx: TelegramContext,
+  userId: string,
+  profile: TravellerProfile,
+  content: string
+): Promise<boolean> {
+  const services = await getCaptainServices();
+  if (profile.onboardingStep === "currency") {
+    const currency = /^[A-Za-z]{3}$/u.test(content.trim()) ? content.trim().toUpperCase() : null;
+    if (!currency) {
+      await postCurrencyQuestion(ctx);
+      return true;
+    }
+    await services.platformStore.updateProfile(
+      userId,
+      { defaultCurrency: currency, onboardingStep: "ranking" },
+      new Date()
+    );
+    await postRankingQuestion(ctx);
+    return true;
+  }
+  if (profile.onboardingStep === "ranking") {
+    const ranking = /^(cheapest|balanced|fastest)$/iu.exec(content.trim())?.[1]?.toLowerCase();
+    if (!ranking) {
+      await postRankingQuestion(ctx);
+      return true;
+    }
+    await services.platformStore.updateProfile(
+      userId,
+      {
+        rankingMode: ranking as TravellerProfile["rankingMode"],
+        onboardingStep: "airlines"
+      },
+      new Date()
+    );
+    await postAirlineQuestion(ctx);
+    return true;
+  }
+  const preferences = parseAirlinePreferences(content);
+  if (!preferences) {
+    await postAirlineQuestion(ctx);
+    return true;
+  }
+  await completeOnboarding(ctx, userId, preferences);
+  return true;
+}
+
+async function handleProfileCallback(
+  ctx: TelegramContext,
+  query: TelegramCallbackQuery,
+  action:
+    | { type: "currency"; value: string }
+    | { type: "ranking"; value: TravellerProfile["rankingMode"] }
+): Promise<void> {
+  const telegramUserId = safeId(query.from.id);
+  const telegramChatId = safeId(query.message?.chat.id ?? "");
+  if (telegramUserId === null || telegramChatId === null) return;
+  const services = await getCaptainServices();
+  const user = await services.platformStore.ensureTelegramUser({
+    telegramUserId,
+    telegramChatId,
+    username: query.from.username ?? null,
+    firstName: query.from.firstName ?? null,
+    lastName: query.from.lastName ?? null
+  }, new Date());
+  await clearCallbackButtons(ctx, query);
+  if (action.type === "currency") {
+    await services.platformStore.updateProfile(
+      user.id,
+      { defaultCurrency: action.value, onboardingStep: "ranking" },
+      new Date()
+    );
+    await ctx.telegram.answerCallbackQuery({
+      callbackQueryId: query.id,
+      text: `${action.value} selected`
+    });
+    await postRankingQuestion(ctx);
+    return;
+  }
+  await services.platformStore.updateProfile(
+    user.id,
+    { rankingMode: action.value, onboardingStep: "airlines" },
+    new Date()
+  );
+  await ctx.telegram.answerCallbackQuery({
+    callbackQueryId: query.id,
+    text: `${titleCase(action.value)} selected`
+  });
+  await postAirlineQuestion(ctx);
+}
+
+export function parseProfileCallback(
+  data: string | undefined
+):
+  | { type: "currency"; value: string }
+  | { type: "ranking"; value: TravellerProfile["rankingMode"] }
+  | null {
+  const currency = /^captain-profile:currency:([A-Z]{3})$/u.exec(data ?? "");
+  if (currency?.[1]) return { type: "currency", value: currency[1] };
+  const ranking = /^captain-profile:ranking:(cheapest|balanced|fastest)$/u.exec(data ?? "");
+  return ranking?.[1]
+    ? { type: "ranking", value: ranking[1] as TravellerProfile["rankingMode"] }
+    : null;
+}
+
+export function parseAirlinePreferences(content: string): {
+  preferredAirlineCodes: string[];
+  excludedAirlineCodes: string[];
+} | null {
+  if (/^\/?skip$/iu.test(content.trim())) {
+    return { preferredAirlineCodes: [], excludedAirlineCodes: [] };
+  }
+  const upper = content.toUpperCase();
+  const preferredPart = /\bPREFER(?:RED)?\s+(.+?)(?=\s*(?:;?\s*\b(?:AVOID|EXCLUDE)\b|$))/u.exec(upper)?.[1] ?? "";
+  const excludedPart = /\b(?:AVOID|EXCLUDE)\s+(.+)$/u.exec(upper)?.[1] ?? "";
+  const codes = (value: string) => [...new Set(
+    [...value.replace(/\bAND\b/gu, " ").matchAll(/\b[A-Z0-9]{2,3}\b/gu)]
+      .map((match) => match[0])
+  )].slice(0, 12);
+  const preferredAirlineCodes = codes(preferredPart);
+  const excludedAirlineCodes = codes(excludedPart)
+    .filter((code) => !preferredAirlineCodes.includes(code));
+  return preferredAirlineCodes.length > 0 || excludedAirlineCodes.length > 0
+    ? { preferredAirlineCodes, excludedAirlineCodes }
+    : null;
+}
+
+async function completeOnboarding(
+  ctx: TelegramContext,
+  userId: string,
+  preferences: {
+    preferredAirlineCodes: string[];
+    excludedAirlineCodes: string[];
+  }
+): Promise<void> {
+  const services = await getCaptainServices();
+  await services.platformStore.updateProfile(
+    userId,
+    {
+      ...preferences,
+      onboardingStep: "complete",
+      onboardingCompletedAt: new Date().toISOString()
+    },
+    new Date()
+  );
+  await postWithLink(
+    ctx,
+    "Preferences set. Tell me where and roughly when you want to fly. I can track up to three Trips at a time.",
+    "Edit preferences",
+    services.auth.createAccessLink(userId, "/preferences")
+  );
+}
+
+async function postWithLink(
+  ctx: TelegramContext,
+  text: string,
+  label: string,
+  url: string
+): Promise<void> {
+  await ctx.telegram.post({
+    text,
+    link_preview_options: { is_disabled: true },
+    reply_markup: { inline_keyboard: [[{ text: label, url }]] }
+  });
+}
+
+export function repliedToTelegramMessageId(raw: Record<string, unknown>): number | null {
+  const reply = record(raw.reply_to_message);
+  const value = Number(reply?.message_id);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+function isExplanationQuestion(content: string): boolean {
+  return /\b(?:why|explain|better|recommend)\b/iu.test(content);
+}
+
+function snapshotFromPayload(payload: Record<string, unknown>): RecommendationSnapshot | null {
+  const snapshot = record(payload.snapshot);
+  return snapshot?.current && snapshot.rankingMode
+    ? snapshot as unknown as RecommendationSnapshot
+    : null;
+}
+
+export function explainRecommendation(snapshot: RecommendationSnapshot): string {
+  const current = snapshot.current;
+  const previous = snapshot.previous;
+  const currentDuration = snapshotNumber(current.snapshot, "durationSeconds");
+  const previousDuration = previous ? snapshotNumber(previous.snapshot, "durationSeconds") : 0;
+  const evidence = current.evidence[0];
+  const source = evidence ? `\nEvidence: ${evidence.url}` : "";
+  if (!previous) {
+    return [
+      `This was the first verified ${titleCase(snapshot.rankingMode)} result for the Trip.`,
+      `It was ${current.currency} ${current.priceAmount}, ${durationLabel(currentDuration)}, ${stopLabel(snapshotNumber(current.snapshot, "stops"))}.`,
+      "It passed both discovery and verification checks; it is not a claim that every fare on the web was found."
+    ].join("\n") + source;
+  }
+  const priceChange = previous.price - current.price;
+  const durationChange = previousDuration - currentDuration;
+  const comparison = snapshot.rankingMode === "cheapest"
+    ? `It saves ${formatMoney(Math.max(0, priceChange), current.currency)} (${percentage(priceChange, previous.price)}).`
+    : snapshot.rankingMode === "fastest"
+      ? `It cuts journey time by ${durationLabel(Math.max(0, durationChange))}.`
+      : [
+          "Balanced uses 50% price regret, 35% duration regret, and 15% stops, with a small preferred-airline credit.",
+          [
+            priceChange > 0 ? `${formatMoney(priceChange, current.currency)} cheaper` : "",
+            durationChange > 0 ? `${durationLabel(durationChange)} shorter` : "",
+            snapshotNumber(previous.snapshot, "stops") > snapshotNumber(current.snapshot, "stops")
+              ? "fewer stops"
+              : ""
+          ].filter(Boolean).join(", ") || "Its combined score improved by at least 10%."
+        ].join("\n");
+  return [
+    `Captain compared this alert with the exact earlier result it replaced (${previous.currency} ${previous.priceAmount}, ${durationLabel(previousDuration)}).`,
+    comparison,
+    `New result: ${current.currency} ${current.priceAmount}, ${durationLabel(currentDuration)}, ${stopLabel(snapshotNumber(current.snapshot, "stops"))}.`
+  ].join("\n") + source;
+}
+
+function snapshotNumber(snapshot: Record<string, unknown>, key: string): number {
+  const value = Number(snapshot[key]);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function formatMoney(value: number, currency: string): string {
+  return new Intl.NumberFormat("en", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 2
+  }).format(value);
+}
+
+function durationLabel(seconds: number): string {
+  if (seconds <= 0) return "unknown duration";
+  const hours = Math.floor(seconds / 3_600);
+  const minutes = Math.round((seconds % 3_600) / 60);
+  return `${hours}h ${minutes}m`;
+}
+
+function stopLabel(value: number): string {
+  return value === 0 ? "nonstop" : `${value} stop${value === 1 ? "" : "s"}`;
+}
+
+function percentage(change: number, previous: number): string {
+  return previous > 0 ? `${Math.max(0, Math.round(change / previous * 100))}%` : "an improvement";
+}
+
+function titleCase(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 function privateHumanMessage(message: TelegramMessage): boolean {
   return message.chat.type === "private" && Boolean(message.from && !message.from.isBot);
 }
@@ -415,7 +839,7 @@ async function postTripPlanResult(
   result: TripPlanResult
 ): Promise<void> {
   const services = await getCaptainServices();
-  const message = result.status === "needs_input"
+  let message = result.status === "needs_input"
     ? result.prompt
     : result.status === "awaiting_confirmation"
       ? result.confirmation

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { MemoryCaptainPlatformStore } from "@agents/flight-store";
-import { TripNotFoundError } from "@agents/flight-domain";
-import { TripService } from "../services/trips/service.js";
+import { TripLimitError, TripNotFoundError } from "@agents/flight-domain";
+import {
+  ManualRefreshLimitError,
+  TripService
+} from "../services/trips/service.js";
 import { defaultTestBrief } from "./support.js";
 
 describe("Trip service", () => {
@@ -11,10 +14,10 @@ describe("Trip service", () => {
     const store = new MemoryCaptainPlatformStore();
     const owner = await store.ensureTelegramUser({ telegramUserId: 1, telegramChatId: 1, username: null, firstName: "Ada", lastName: null }, now);
     const other = await store.ensureTelegramUser({ telegramUserId: 2, telegramChatId: 2, username: null, firstName: "Grace", lastName: null }, now);
-    const service = new TripService({ store, liveMode: false, now: () => now });
+    const service = new TripService({ store, now: () => now });
     const created = await service.create(owner.id, { title: "New York", brief: defaultTestBrief(), cadenceHours: 6 });
     expect(created.created).toBe(true);
-    expect(created.searchCombinations).toBe(3);
+    expect(created.searchCombinations).toBe(1);
     const duplicate = await service.create(owner.id, { title: "New York", brief: defaultTestBrief(), cadenceHours: 6 });
     expect(duplicate.created).toBe(false);
     expect(duplicate.trip.id).toBe(created.trip.id);
@@ -22,5 +25,125 @@ describe("Trip service", () => {
     await expect(service.action(other.id, created.trip.id, { type: "pause", expectedVersion: 1 })).rejects.toBeInstanceOf(TripNotFoundError);
     const paused = await service.action(owner.id, created.trip.id, { type: "pause", expectedVersion: 1 });
     expect(paused).toMatchObject({ status: "paused", version: 2 });
+  });
+
+  it("limits manual refreshes independently of automatic checks", async () => {
+    let now = new Date("2026-08-01T12:00:00Z");
+    const store = new MemoryCaptainPlatformStore();
+    const owner = await store.ensureTelegramUser({
+      telegramUserId: 1,
+      telegramChatId: 1,
+      username: null,
+      firstName: "Ada",
+      lastName: null
+    }, now);
+    const service = new TripService({ store, now: () => now });
+    const created = await service.create(owner.id, {
+      title: "New York",
+      brief: defaultTestBrief(),
+      cadenceHours: 6
+    });
+    const refreshed = await service.action(owner.id, created.trip.id, {
+      type: "refresh",
+      expectedVersion: 1
+    });
+    await expect(service.action(owner.id, created.trip.id, {
+      type: "refresh",
+      expectedVersion: refreshed.version
+    })).rejects.toBeInstanceOf(ManualRefreshLimitError);
+    now = new Date(now.getTime() + 6 * 3_600_000);
+    await expect(service.action(owner.id, created.trip.id, {
+      type: "refresh",
+      expectedVersion: refreshed.version
+    })).resolves.toMatchObject({ status: "tracking" });
+  });
+
+  it("updates one Trip brief, restarts its search, and records the change", async () => {
+    const now = new Date("2026-08-01T12:00:00Z");
+    const store = new MemoryCaptainPlatformStore();
+    const owner = await store.ensureTelegramUser({
+      telegramUserId: 1,
+      telegramChatId: 1,
+      username: null,
+      firstName: "Ada",
+      lastName: null
+    }, now);
+    const service = new TripService({ store, now: () => now });
+    const created = await service.create(owner.id, {
+      title: "New York",
+      brief: defaultTestBrief(),
+      cadenceHours: 6
+    });
+    const updated = await service.update(owner.id, created.trip.id, {
+      expectedVersion: created.trip.version,
+      brief: defaultTestBrief({
+        destinationAirports: ["CDG"],
+        currency: "EUR",
+        maximumPrice: 850,
+        context: "Arrive before dinner"
+      })
+    });
+
+    expect(updated).toMatchObject({
+      id: created.trip.id,
+      status: "tracking",
+      version: created.trip.version + 1,
+      brief: {
+        destinationAirports: ["CDG"],
+        currency: "EUR",
+        maximumPrice: 850
+      }
+    });
+    await expect(store.getWatch(owner.id, created.trip.id)).resolves.toMatchObject({
+      status: "active",
+      nextCheckAt: now.toISOString()
+    });
+    await expect(store.listTripActivity(owner.id, created.trip.id)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ eventType: "trip_brief_updated" }),
+        expect.objectContaining({ eventType: "trip_created" })
+      ])
+    );
+  });
+
+  it("tracks three Trips without replacement and rejects a fourth", async () => {
+    const now = new Date("2026-08-01T12:00:00Z");
+    const store = new MemoryCaptainPlatformStore();
+    const owner = await store.ensureTelegramUser({
+      telegramUserId: 1,
+      telegramChatId: 1,
+      username: null,
+      firstName: "Ada",
+      lastName: null
+    }, now);
+    const service = new TripService({ store, now: () => now });
+    for (const [title, destination] of [
+      ["Anambra", "ANA"],
+      ["Paris", "CDG"],
+      ["New York", "JFK"]
+    ] as const) {
+      await service.create(owner.id, {
+        title,
+        brief: defaultTestBrief({ destinationAirports: [destination] }),
+        cadenceHours: 6
+      });
+    }
+    expect((await service.list(owner.id)).filter((trip) => trip.status === "tracking"))
+      .toHaveLength(3);
+    await expect(service.create(owner.id, {
+      title: "Nairobi",
+      brief: defaultTestBrief({ destinationAirports: ["NBO"] }),
+      cadenceHours: 6
+    })).rejects.toBeInstanceOf(TripLimitError);
+    const tracked = (await service.list(owner.id)).filter((trip) => trip.status === "tracking");
+    await service.action(owner.id, tracked[0]!.id, {
+      type: "cancel",
+      expectedVersion: tracked[0]!.version
+    });
+    await expect(service.create(owner.id, {
+      title: "Nairobi",
+      brief: defaultTestBrief({ destinationAirports: ["NBO"] }),
+      cadenceHours: 6
+    })).resolves.toMatchObject({ created: true });
   });
 });

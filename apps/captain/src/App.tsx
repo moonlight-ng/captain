@@ -1,1029 +1,1006 @@
-import { useEffect, useRef, useState } from "react";
-import { Liveline, type LivelinePoint } from "liveline";
+import { useEffect, useMemo, useState } from "react";
 
 import {
-  agentAction,
-  createAgent,
-  getCompactTripDashboard,
-  getFlightDetails,
-  getTripDashboard,
-  getWorkspace,
-  listAgents
+  ApiError,
+  accessHref,
+  getProfile,
+  getSession,
+  getTrip,
+  initializeAccessToken,
+  tripAction,
+  updateProfile,
+  updateTripBrief
 } from "./api";
-import {
-  EMPTY_PREFERENCES,
-  briefSubtitle,
-  defaultBrief,
-  formatCompactDateRange,
-  formatDate,
-  formatDuration,
-  formatProcessingTime,
-  formatTimestamp,
-  flightDetailsFromDashboardFlight,
-  sortAndFilterFlights,
-  validateBrief,
-  workspaceFromTripDashboard,
-  type AgentSummary,
-  type BrowsePreferences,
-  type CadenceHours,
-  type FlightAgentBrief,
-  type FlightDetails,
-  type FlightItem,
-  type TrackingWindowDays,
-  type Workspace
+import type {
+  RankingMode,
+  TravellerProfile,
+  TripPayload,
+  VerifiedOffer
 } from "./domain";
+import { airlineGroups } from "./airline-groups";
 
-type Screen = "loading" | "home" | "brief" | "review" | "starting" | "workspace" | "settings" | "detail" | "dashboard-error";
-type WorkspaceTab = "Flights" | "Browse";
-type SettingsPanel = "menu" | "brief" | "activity";
-type TrackingNoticeState = { readonly message: string; readonly open: boolean } | null;
-const STARTUP_STAGES = ["Reading your brief", "Preparing the flight search", "Opening your workspace"] as const;
-const TRACKING_NOTICE_VISIBLE_MS = 2_280;
-const TRACKING_NOTICE_EXIT_MS = 120;
-const NEW_USER_FLIGHT_HELP_DELAY_MS = 1_000;
-const IDLE_MIC_PROMPT_DELAY_MS = 8_000;
-
-type VoiceRecognitionResult = {
-  readonly isFinal: boolean;
-  readonly 0?: { readonly transcript: string };
+type Tab = "flights" | "airlines" | "browse";
+const tabLabels: Record<Tab, string> = {
+  flights: "Options",
+  airlines: "Airlines",
+  browse: "Flights"
 };
-
-type VoiceRecognition = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onstart: (() => void) | null;
-  onresult: ((event: { readonly results: ArrayLike<VoiceRecognitionResult> }) => void) | null;
-  onerror: ((event: { readonly error: string }) => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-};
-
-type VoiceRecognitionConstructor = new () => VoiceRecognition;
 
 export function App() {
-  const [screen, setScreen] = useState<Screen>("loading");
-  const [agents, setAgents] = useState<AgentSummary[]>([]);
-  const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [dashboardAccess, setDashboardAccess] = useState<{
-    readonly tripId: string;
-    readonly token: string;
-    readonly compact: boolean;
-  } | null>(null);
-  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("Flights");
-  const [draftBrief, setDraftBrief] = useState<FlightAgentBrief>(() => defaultBrief());
-  const [briefEditing, setBriefEditing] = useState(false);
-  const [startupStage, setStartupStage] = useState(0);
-  const [settingsPanel, setSettingsPanel] = useState<SettingsPanel>("menu");
-  const [selectedFlight, setSelectedFlight] = useState<FlightDetails | null>(null);
-  const [filterOpen, setFilterOpen] = useState(false);
-  const [draftPreferences, setDraftPreferences] = useState<BrowsePreferences>(EMPTY_PREFERENCES);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [trackingNotice, setTrackingNotice] = useState<TrackingNoticeState>(null);
-  const trackingNoticeCloseTimer = useRef<number | null>(null);
-  const trackingNoticeRemovalTimer = useRef<number | null>(null);
+  const [profile, setProfile] = useState<TravellerProfile | null>(null);
+  const [tripData, setTripData] = useState<TripPayload | null>(null);
+  const [displayName, setDisplayName] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [error, setError] = useState("");
+  const [tab, setTab] = useState<Tab>("flights");
+  const [airlineFilter, setAirlineFilter] = useState("");
+  const preferencesPage = window.location.pathname === "/preferences";
 
-  useEffect(() => {
-    void initialize();
-  }, []);
-
-  useEffect(() => () => {
-    if (trackingNoticeCloseTimer.current !== null) window.clearTimeout(trackingNoticeCloseTimer.current);
-    if (trackingNoticeRemovalTimer.current !== null) window.clearTimeout(trackingNoticeRemovalTimer.current);
-  }, []);
-
-  useEffect(() => {
-    if (!workspace || ["home", "brief", "review", "starting"].includes(screen)) return;
-    const interval = window.setInterval(() => {
-      void refreshWorkspace(workspace.agent.key, false);
-    }, workspace.agent.latestCheck?.status === "running" || workspace.agent.status === "queued" ? 2_500 : 15_000);
-    return () => window.clearInterval(interval);
-  }, [workspace?.agent.key, workspace?.agent.latestCheck?.status, workspace?.agent.status, screen, filterOpen, dashboardAccess?.token]);
-
-  async function initialize() {
-    setError(null);
+  async function load() {
+    setLoading(true);
+    setError("");
     try {
-      const routeKey = agentKeyFromPath();
-      const dashboardToken = dashboardTokenFromLocation();
-      if (isCompactDashboardPath() && dashboardToken) {
-        await openCompactTripDashboard(dashboardToken);
-      } else if (routeKey) {
-        if (dashboardToken) await openTripDashboard(routeKey, dashboardToken);
-        else await openAgent(routeKey, false);
-      } else if (isCompactDashboardPath()) {
-        setScreen("dashboard-error");
-      } else {
-        setAgents(await listAgents());
-        setScreen("home");
-      }
-    } catch (cause) {
-      setError(errorMessage(cause));
-      setScreen(dashboardTokenFromLocation() ? "dashboard-error" : "home");
-    }
-  }
-
-  async function refreshAgents() {
-    try {
-      setAgents(await listAgents());
-    } catch (cause) {
-      setError(errorMessage(cause));
-    }
-  }
-
-  async function openAgent(key: string, navigate = true) {
-    setDashboardAccess(null);
-    setBusy(true);
-    setError(null);
-    try {
-      const next = await getWorkspace(key);
-      setWorkspace(next);
-      setDraftPreferences(next.agent.browsePreferences);
-      setWorkspaceTab("Flights");
-      const settingsTarget = settingsTargetFromLocation();
-      if (settingsTarget) {
-        setSettingsPanel(settingsTarget);
-        setScreen("settings");
-      } else {
-        setScreen("workspace");
-      }
-      if (navigate) {
-        const path = settingsTarget
-          ? `/trips/${key}?settings=${settingsTarget === "menu" ? "1" : settingsTarget}`
-          : `/trips/${key}`;
-        window.history.pushState({}, "", path);
-      }
-    } catch (cause) {
-      setError(errorMessage(cause));
-      setWorkspace(null);
-      setScreen("home");
-      if (agentKeyFromPath() === key) window.history.replaceState({}, "", "/");
-      try {
-        setAgents(await listAgents());
-      } catch {
-        // Preserve the original workspace error; the home screen can retry.
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function openTripDashboard(tripId: string, token: string) {
-    setBusy(true);
-    setError(null);
-    try {
-      const next = workspaceFromTripDashboard(await getTripDashboard(tripId, token));
-      setDashboardAccess({ tripId, token, compact: false });
-      setWorkspace(next);
-      setDraftPreferences(next.agent.browsePreferences);
-      setWorkspaceTab("Flights");
-      setScreen("workspace");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function openCompactTripDashboard(token: string) {
-    setBusy(true);
-    setError(null);
-    try {
-      const next = workspaceFromTripDashboard(await getCompactTripDashboard(token));
-      setDashboardAccess({ tripId: next.agent.key, token, compact: true });
-      setWorkspace(next);
-      setDraftPreferences(next.agent.browsePreferences);
-      setWorkspaceTab("Flights");
-      setScreen("workspace");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function refreshWorkspace(key = workspace?.agent.key, showError = true) {
-    if (!key) return;
-    try {
-      const loaded = dashboardAccess?.tripId === key
-        ? workspaceFromTripDashboard(dashboardAccess.compact
-            ? await getCompactTripDashboard(dashboardAccess.token)
-            : await getTripDashboard(key, dashboardAccess.token))
-        : await getWorkspace(key);
-      const next = dashboardAccess?.tripId === key && workspace
-        ? { ...loaded, agent: { ...loaded.agent, browsePreferences: workspace.agent.browsePreferences } }
-        : loaded;
-      setWorkspace(next);
-      if (!filterOpen) setDraftPreferences(next.agent.browsePreferences);
-    } catch (cause) {
-      if (showError) setError(errorMessage(cause));
-    }
-  }
-
-  function startBrief(request = "") {
-    const brief = defaultBrief();
-    setDraftBrief(request.trim() ? { ...brief, context: request.trim() } : brief);
-    setBriefEditing(false);
-    setError(null);
-    setScreen("brief");
-  }
-
-  async function startNewAgent() {
-    if (validateBrief(draftBrief).length > 0) return;
-    setBusy(true);
-    setError(null);
-    setStartupStage(0);
-    setScreen("starting");
-    const timers = [
-      window.setTimeout(() => setStartupStage(1), 900),
-      window.setTimeout(() => setStartupStage(2), 1_900)
-    ];
-    try {
-      const [agent] = await Promise.all([
-        createAgent(draftBrief),
-        new Promise((resolve) => window.setTimeout(resolve, 3_000))
+      initializeAccessToken();
+      const session = await getSession();
+      const requestedTripId = new URLSearchParams(window.location.search).get("trip") ?? undefined;
+      const [nextProfile, nextTrip] = await Promise.all([
+        getProfile(),
+        getTrip(requestedTripId)
       ]);
-      await openAgent(agent.key);
-      await refreshAgents();
+      setDisplayName(session.displayName);
+      setProfile(nextProfile);
+      setTripData(nextTrip);
+      setAuthenticated(true);
     } catch (cause) {
-      setError(errorMessage(cause));
-      setScreen("review");
+      setAuthenticated(false);
+      if (!(cause instanceof ApiError && cause.status === 401)) {
+        setError("Captain couldn’t load this page. Please try the latest link from Telegram.");
+      }
     } finally {
-      timers.forEach(window.clearTimeout);
-      setBusy(false);
+      setLoading(false);
     }
   }
 
-  async function performAction(
-    action: Parameters<typeof agentAction>[1],
-    success?: () => void
-  ) {
-    if (!workspace || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const agent = await agentAction(workspace.agent, action);
-      setWorkspace((current) => current ? { ...current, agent } : current);
-      await refreshWorkspace(agent.key, false);
-      success?.();
-    } catch (cause) {
-      setError(errorMessage(cause));
-      await refreshWorkspace(workspace.agent.key, false);
-    } finally {
-      setBusy(false);
-    }
+  useEffect(() => {
+    void load();
+  }, []);
+
+  if (loading) return <CenteredState title="Opening Captain…" detail="Loading your Trip." />;
+  if (!authenticated) {
+    return (
+      <CenteredState
+        title="Open Captain from Telegram"
+        detail={error || "Use Open trip or Agent settings from Captain in Telegram."}
+      />
+    );
+  }
+  if (preferencesPage && profile) {
+    return (
+      <Preferences
+        profile={profile}
+        tripData={tripData}
+        displayName={displayName}
+        trackingError={error}
+        onSaved={setProfile}
+        onTripChanged={load}
+        onTripError={setError}
+        onBack={() => { window.location.href = accessHref("/trip", tripData?.trip?.id); }}
+      />
+    );
   }
 
-  async function openFlight(flight: FlightItem) {
-    if (!workspace) return;
-    if (dashboardAccess) {
-      setSelectedFlight(flightDetailsFromDashboardFlight(flight));
-      setScreen("detail");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      setSelectedFlight(await getFlightDetails(workspace.agent.key, flight.id));
-      setScreen("detail");
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function leaveWorkspace() {
-    window.history.pushState({}, "", "/");
-    setWorkspace(null);
-    setDashboardAccess(null);
-    setSelectedFlight(null);
-    setScreen("home");
-    await refreshAgents();
-  }
-
-  function showTrackingNotice(message: string) {
-    if (trackingNoticeCloseTimer.current !== null) window.clearTimeout(trackingNoticeCloseTimer.current);
-    if (trackingNoticeRemovalTimer.current !== null) window.clearTimeout(trackingNoticeRemovalTimer.current);
-    setTrackingNotice({ message, open: true });
-    trackingNoticeCloseTimer.current = window.setTimeout(() => {
-      setTrackingNotice((current) => current ? { ...current, open: false } : current);
-      trackingNoticeCloseTimer.current = null;
-    }, TRACKING_NOTICE_VISIBLE_MS);
-    trackingNoticeRemovalTimer.current = window.setTimeout(() => {
-      setTrackingNotice(null);
-      trackingNoticeRemovalTimer.current = null;
-    }, TRACKING_NOTICE_VISIBLE_MS + TRACKING_NOTICE_EXIT_MS);
-  }
-
+  const trip = tripData?.trip ?? null;
+  const offers = tripData?.offers ?? [];
   return (
-    <main className="app-stage">
-      <AppViewport>
-        {error && <ErrorNotice message={error} onClose={() => setError(null)} />}
-        {trackingNotice && <TrackingNotice message={trackingNotice.message} open={trackingNotice.open} />}
-        {screen === "loading" && <LoadingScreen />}
-        {screen === "dashboard-error" && <DashboardErrorScreen />}
-        {screen === "home" && (
-          <HomeScreen agents={agents} busy={busy} onStart={startBrief} onOpen={(key) => void openAgent(key)} />
-        )}
-        {screen === "brief" && (
-          <BriefScreen
-            brief={draftBrief}
-            editing={briefEditing}
-            busy={busy}
-            onBrief={setDraftBrief}
-            onBack={() => setScreen(briefEditing ? "settings" : "home")}
-            onContinue={() => {
-              if (briefEditing) {
-                void performAction({ type: "update_brief", brief: draftBrief }, () => {
-                  setSettingsPanel("brief");
-                  setScreen("settings");
-                });
-              } else {
-                setScreen("review");
-              }
-            }}
-          />
-        )}
-        {screen === "review" && (
-          <ReviewScreen brief={draftBrief} busy={busy} onBack={() => setScreen("brief")} onStart={() => void startNewAgent()} />
-        )}
-        {screen === "starting" && <StartingScreen stage={startupStage} />}
-        {screen === "workspace" && workspace && (
-          <WorkspaceScreen
-            workspace={workspace}
-            tab={workspaceTab}
-            busy={busy}
-            onTab={setWorkspaceTab}
-            onHome={() => void leaveWorkspace()}
-            onSettings={() => { setSettingsPanel("menu"); setScreen("settings"); }}
-            onBrowse={() => setWorkspaceTab("Browse")}
-            onOpenFlight={(flight) => void openFlight(flight)}
-            onRetain={(flight) => void performAction({ type: "retain_flight", flightKey: flight.id }, () => {
-              showTrackingNotice(`${flight.marketingAirline} is now being tracked`);
-            })}
-            onDismiss={(flight) => void performAction({ type: "dismiss_flight", flightKey: flight.id }, () => {
-              showTrackingNotice(`${flight.marketingAirline} is no longer being tracked`);
-            })}
-            onFilters={() => {
-              setDraftPreferences(workspace.agent.browsePreferences);
-              setFilterOpen(true);
-            }}
-            onClearFilters={() => {
-              if (dashboardAccess) {
-                setWorkspace((current) => current ? {
-                  ...current,
-                  agent: { ...current.agent, browsePreferences: EMPTY_PREFERENCES }
-                } : current);
-              } else {
-                void performAction({
-                  type: "set_browse_preferences",
-                  preferences: EMPTY_PREFERENCES
-                });
-              }
-            }}
-            readOnly={Boolean(dashboardAccess)}
-          />
-        )}
-        {screen === "settings" && workspace && (
-          <SettingsScreen
-            workspace={workspace}
-            busy={busy}
-            panel={settingsPanel}
-            onPanel={setSettingsPanel}
-            onClose={() => setScreen("workspace")}
-            onPause={() => void performAction({ type: workspace.agent.status === "paused" ? "resume" : "pause" })}
-            onRun={() => void performAction({ type: "run" })}
-            onCadence={(cadenceHours) => void performAction({ type: "set_cadence", cadenceHours })}
-            onTrackingWindow={(trackingWindowDays) => void performAction({ type: "set_tracking_window", trackingWindowDays })}
-            onEditBrief={() => {
-              setDraftBrief(workspace.agent.brief);
-              setBriefEditing(true);
-              setScreen("brief");
-            }}
-          />
-        )}
-        {screen === "detail" && workspace && selectedFlight && (
-          <FlightDetailScreen
-            details={selectedFlight}
-            busy={busy}
-            onBack={() => setScreen("workspace")}
-            onRetain={() => void performAction({ type: "retain_flight", flightKey: selectedFlight.flight.id }, async () => {
-              setSelectedFlight(await getFlightDetails(workspace.agent.key, selectedFlight.flight.id));
-              showTrackingNotice(`${selectedFlight.flight.marketingAirline} is now being tracked`);
-            })}
-            onDismiss={() => void performAction({ type: "dismiss_flight", flightKey: selectedFlight.flight.id }, () => {
-              setScreen("workspace");
-              showTrackingNotice(selectedFlight.flight.reviewState === "retained" || selectedFlight.flight.reviewState === "promoted"
-                ? `${selectedFlight.flight.marketingAirline} is no longer being tracked`
-                : `${selectedFlight.flight.marketingAirline} was dismissed`);
-            })}
-            readOnly={Boolean(dashboardAccess)}
-          />
-        )}
-        {workspace && (
-          <FilterSheet
-            open={filterOpen}
-            preferences={draftPreferences}
-            flights={workspace.browseFlights}
-            onPreferences={setDraftPreferences}
-            onClose={() => setFilterOpen(false)}
-            onApply={() => {
-              if (dashboardAccess) {
-                setWorkspace((current) => current ? {
-                  ...current,
-                  agent: { ...current.agent, browsePreferences: draftPreferences }
-                } : current);
-                setFilterOpen(false);
-              } else {
-                void performAction(
-                  { type: "set_browse_preferences", preferences: draftPreferences },
-                  () => setFilterOpen(false)
-                );
-              }
-            }}
-          />
-        )}
-      </AppViewport>
+    <main className="shell">
+      <header className="topbar">
+        <a className="brand" href={accessHref("/trip", trip?.id)} aria-label="Captain home">
+          <span className="brand-mark">C</span>
+          <span>Captain</span>
+        </a>
+        <div className="top-actions">
+          <span className="name">{displayName}</span>
+          <a className="quiet-link" href={accessHref("/preferences", trip?.id)}>Setting</a>
+        </div>
+      </header>
+
+      {!trip ? (
+        <section className="empty-hero">
+          <p className="eyebrow">No active Trip</p>
+          <h1>Tell Captain where you want to go.</h1>
+          <p>Return to Telegram to create a Trip. Captain can track up to three at once.</p>
+        </section>
+      ) : (
+        <>
+          <section className="trip-heading">
+            <div>
+              {trip.status === "paused" && <p className="eyebrow">Tracking paused</p>}
+              <h1>{routeLabel(trip)}</h1>
+              <p className="trip-meta">
+                {dateLabel(trip.brief.departureWindow.start)} · {label(trip.brief.cabin)} · {trip.brief.currency}
+              </p>
+            </div>
+          </section>
+
+          {tripData?.watch?.delayReason && (
+            <div className="notice notice-delay">
+              <strong>Tracking is delayed.</strong> {tripData.watch.delayReason} Your last verified results remain below.
+            </div>
+          )}
+          {error && <div className="notice">{error}</div>}
+
+          <nav className="tabs" aria-label="Trip results">
+            {(["flights", "airlines", "browse"] as Tab[]).map((item) => (
+              <button
+                key={item}
+                className={tab === item ? "active" : ""}
+                onClick={() => setTab(item)}
+              >
+                {tabLabels[item]}
+                {item === "browse" && offers.length > 0 ? <span>{offers.length}</span> : null}
+              </button>
+            ))}
+          </nav>
+
+          <section className="workspace">
+            {tab === "flights" && (
+              <FlightsTab offers={offers} profile={profile!} />
+            )}
+            {tab === "airlines" && (
+              <AirlinesTab
+                offers={offers}
+                onChoose={(airline) => {
+                  setAirlineFilter(airline);
+                  setTab("browse");
+                }}
+              />
+            )}
+            {tab === "browse" && (
+              <BrowseTab
+                offers={offers}
+                airlineFilter={airlineFilter}
+                onFilter={setAirlineFilter}
+              />
+            )}
+          </section>
+        </>
+      )}
     </main>
   );
 }
 
-function HomeScreen(props: {
-  readonly agents: AgentSummary[];
-  readonly busy: boolean;
-  readonly onStart: (request?: string) => void;
-  readonly onOpen: (key: string) => void;
-}) {
-  const [request, setRequest] = useState("");
-  const [showFlightHelp, setShowFlightHelp] = useState(false);
-  const [showMicPrompt, setShowMicPrompt] = useState(false);
-  const [listening, setListening] = useState(false);
-  const [voiceError, setVoiceError] = useState<string | null>(null);
-  const flightHelpTimer = useRef<number | null>(null);
-  const micPromptTimer = useRef<number | null>(null);
-  const hasResponded = useRef(false);
-  const recognition = useRef<VoiceRecognition | null>(null);
-  const voiceTranscript = useRef("");
-  const placeholderCount = Math.max(0, 3 - props.agents.length);
-
-  function clearFollowUpTimers() {
-    if (flightHelpTimer.current !== null) window.clearTimeout(flightHelpTimer.current);
-    if (micPromptTimer.current !== null) window.clearTimeout(micPromptTimer.current);
-    flightHelpTimer.current = null;
-    micPromptTimer.current = null;
-  }
-
-  function markResponded() {
-    if (hasResponded.current) return;
-    hasResponded.current = true;
-    clearFollowUpTimers();
-  }
-
-  useEffect(() => {
-    if (props.agents.length === 0) {
-      flightHelpTimer.current = window.setTimeout(() => {
-        if (!hasResponded.current) setShowFlightHelp(true);
-      }, NEW_USER_FLIGHT_HELP_DELAY_MS);
-    }
-    micPromptTimer.current = window.setTimeout(() => {
-      if (!hasResponded.current) setShowMicPrompt(true);
-    }, IDLE_MIC_PROMPT_DELAY_MS);
-
-    return () => {
-      clearFollowUpTimers();
-      if (recognition.current) {
-        recognition.current.onend = null;
-        recognition.current.stop();
-        recognition.current = null;
-      }
-    };
-  }, [props.agents.length]);
-
-  function updateRequest(value: string) {
-    setRequest(value);
-    setVoiceError(null);
-    if (value.trim()) markResponded();
-  }
-
-  function submitRequest() {
-    const trimmed = request.trim();
-    if (!trimmed || props.busy) return;
-    markResponded();
-    props.onStart(trimmed);
-  }
-
-  function toggleVoiceInput() {
-    markResponded();
-    setVoiceError(null);
-    if (recognition.current && listening) {
-      recognition.current.stop();
-      return;
-    }
-
-    const voiceWindow = window as typeof window & {
-      SpeechRecognition?: VoiceRecognitionConstructor;
-      webkitSpeechRecognition?: VoiceRecognitionConstructor;
-    };
-    const Recognition = voiceWindow.SpeechRecognition ?? voiceWindow.webkitSpeechRecognition;
-    if (!Recognition) {
-      setVoiceError("Voice input isn’t supported here. Type your request instead.");
-      return;
-    }
-
-    const nextRecognition = new Recognition();
-    recognition.current = nextRecognition;
-    voiceTranscript.current = "";
-    nextRecognition.continuous = false;
-    nextRecognition.interimResults = true;
-    nextRecognition.lang = navigator.language || "en-GB";
-    nextRecognition.onstart = () => setListening(true);
-    nextRecognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .map((result) => result[0]?.transcript ?? "")
-        .join(" ")
-        .trim();
-      voiceTranscript.current = transcript;
-      setRequest(transcript);
-    };
-    nextRecognition.onerror = (event) => {
-      voiceTranscript.current = "";
-      setListening(false);
-      setVoiceError(event.error === "not-allowed"
-        ? "Microphone access is off. Allow it or type your request instead."
-        : "I couldn’t hear that. Try the mic again or type your request.");
-    };
-    nextRecognition.onend = () => {
-      const transcript = voiceTranscript.current.trim();
-      setListening(false);
-      recognition.current = null;
-      if (transcript) props.onStart(transcript);
-    };
-    nextRecognition.start();
-  }
-
+function FlightsTab({ offers, profile }: { offers: VerifiedOffer[]; profile: TravellerProfile }) {
+  const recommendations = useMemo(() => ({
+    cheapest: rankOffers(offers, "cheapest", profile.preferredAirlineCodes)[0],
+    balanced: rankOffers(offers, "balanced", profile.preferredAirlineCodes)[0],
+    fastest: rankOffers(offers, "fastest", profile.preferredAirlineCodes)[0]
+  }), [offers, profile.preferredAirlineCodes]);
+  if (offers.length === 0) return <ResultsEmpty />;
   return (
-    <section className={`screen home-screen ${props.agents.length > 0 ? "has-agent" : ""}`} data-screen="home">
-      {props.agents.length > 0 && <div className="home-atmosphere" aria-hidden="true" />}
-      <div className="home-content live-home-content">
-        <div className="home-intro captain-intro">
-          <div className="captain-messages" aria-live="polite">
-            <h1>Aye aye, where to?</h1>
-            {showFlightHelp && <p className="captain-follow-up fade-up">I can help you find and book a flight.</p>}
-            {showMicPrompt && <p className="captain-follow-up fade-up">Use the mic to describe your request</p>}
-          </div>
-          <form className="captain-composer" onSubmit={(event) => { event.preventDefault(); submitRequest(); }}>
-            <label className="sr-only" htmlFor="captain-request">Describe your trip</label>
-            <input
-              id="captain-request"
-              autoComplete="off"
-              disabled={props.busy || listening}
-              placeholder={listening ? "Listening…" : "Describe your trip"}
-              value={request}
-              onChange={(event) => updateRequest(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  submitRequest();
-                }
-              }}
+    <>
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Verified recommendations</p>
+          <h2>Your strongest options</h2>
+        </div>
+        <p>Captain’s current preference is <strong>{profile.rankingMode}</strong>.</p>
+      </div>
+      <div className="recommendation-grid">
+        {(["cheapest", "balanced", "fastest"] as RankingMode[]).map((mode) => {
+          const offer = recommendations[mode];
+          return offer ? (
+            <RecommendationCard
+              key={mode}
+              offer={offer}
+              mode={mode}
+              selected={profile.rankingMode === mode}
+              offers={offers}
             />
-            {request.trim() && !listening && (
-              <button className="captain-send" type="submit" aria-label="Send request" disabled={props.busy}>
-                <ArrowUpIcon />
-              </button>
-            )}
-            <button
-              className={`captain-mic ${listening ? "listening" : ""}`}
-              type="button"
-              aria-label={listening ? "Stop listening" : "Describe your request with the microphone"}
-              aria-pressed={listening}
-              disabled={props.busy}
-              onClick={toggleVoiceInput}
-            >
-              <MicrophoneIcon />
-            </button>
-          </form>
-          {voiceError && <p className="captain-voice-error" role="alert">{voiceError}</p>}
-          <button className="captain-form-link" disabled={props.busy} onClick={() => props.onStart()}>Fill in a trip brief instead</button>
-        </div>
-        {props.agents.length > 0 && <h2 className="home-trip-heading">Your Trips</h2>}
-        <div className="agent-card-list" aria-label="Trips">
-          {props.agents.map((agent) => (
-            <button className="agent-home-card live-agent-card" key={agent.key} onClick={() => props.onOpen(agent.key)}>
-              <span>
-                <strong>{agent.brief.originAirports.join("/")} <span>→</span> {agent.brief.destinationAirports.join("/")}</strong>
-                <small>{homeTripDates(agent.brief)}</small>
-              </span>
-              <span className="agent-card-meta">
-                <span className="agent-home-label"><i className={`status-dot ${agent.status === "paused" ? "paused" : "active"}`} />{formatProcessingTime(agent.processingTimeMs)}</span>
-                <ChevronRightIcon />
-              </span>
-            </button>
-          ))}
-          {Array.from({ length: placeholderCount }, (_, index) => (
-            <div className="agent-home-card live-agent-card agent-home-placeholder" aria-hidden="true" key={`agent-placeholder-${index}`}>
-              <span className="agent-placeholder-copy"><i /><i /></span>
-              <span className="agent-placeholder-mark" />
-            </div>
-          ))}
-        </div>
+          ) : null;
+        })}
       </div>
-    </section>
+      <p className="set-note">
+        These are the best among Captain’s currently verified results—not every fare available on the web.
+      </p>
+    </>
   );
 }
 
-function BriefScreen(props: {
-  readonly brief: FlightAgentBrief;
-  readonly editing: boolean;
-  readonly busy: boolean;
-  readonly onBrief: (brief: FlightAgentBrief) => void;
-  readonly onBack: () => void;
-  readonly onContinue: () => void;
+function RecommendationCard({
+  offer,
+  mode,
+  selected,
+  offers
+}: {
+  offer: VerifiedOffer;
+  mode: RankingMode;
+  selected: boolean;
+  offers: VerifiedOffer[];
 }) {
-  const errors = validateBrief(props.brief);
-  const brief = props.brief;
-  function update<Key extends keyof FlightAgentBrief>(key: Key, value: FlightAgentBrief[Key]) {
-    props.onBrief({ ...brief, [key]: value });
-  }
   return (
-    <section className="screen column-screen live-brief-screen" data-screen="brief">
-      <header className="simple-header">
-        <IconButton label="Go back" onClick={props.onBack}><ChevronLeftIcon /></IconButton>
-        <strong>{props.editing ? "Edit brief" : "Trip brief"}</strong>
-      </header>
-      <div className="scroll-content structured-brief">
-        <div className="brief-heading fade-up">
-          <h2>Where would you like to go?</h2>
-          <p>Add airports and travel dates.</p>
-        </div>
-        <FormSection label="Route">
-          <div className="form-grid two">
-            <Field label="From">
-              <input value={brief.originAirports.join(", ")} onChange={(event) => update("originAirports", airportList(event.target.value))} placeholder="LHR, LGW" />
-            </Field>
-            <Field label="To">
-              <input value={brief.destinationAirports.join(", ")} onChange={(event) => update("destinationAirports", airportList(event.target.value))} placeholder="JFK" />
-            </Field>
-          </div>
-          <SegmentedControl
-            value={brief.tripType}
-            options={[{ value: "round_trip", label: "Return" }, { value: "one_way", label: "One way" }]}
-            onChange={(tripType) => update("tripType", tripType as FlightAgentBrief["tripType"])}
-          />
-        </FormSection>
-        <FormSection label="Travel window">
-          <div className="form-grid two">
-            <Field label="Earliest departure"><input type="date" value={brief.departureWindow.start} onInput={(event) => update("departureWindow", { ...brief.departureWindow, start: event.currentTarget.value })} /></Field>
-            <Field label="Latest departure"><input type="date" value={brief.departureWindow.end} onInput={(event) => update("departureWindow", { ...brief.departureWindow, end: event.currentTarget.value })} /></Field>
-          </div>
-          {brief.tripType === "round_trip" && brief.stayNights && (
-            <div className="form-grid three">
-              <NumberField label="Minimum nights" value={brief.stayNights.minimum} min={1} max={30} onChange={(value) => update("stayNights", { ...brief.stayNights!, minimum: value })} />
-              <NumberField label="Preferred" value={brief.stayNights.preferred} min={1} max={30} onChange={(value) => update("stayNights", { ...brief.stayNights!, preferred: value })} />
-              <NumberField label="Maximum" value={brief.stayNights.maximum} min={1} max={30} onChange={(value) => update("stayNights", { ...brief.stayNights!, maximum: value })} />
-            </div>
-          )}
-        </FormSection>
-        <FormSection label="Travellers & comfort">
-          <div className="form-grid three">
-            <NumberField label="Adults" value={brief.travellers.adults} min={1} max={9} onChange={(adults) => update("travellers", { ...brief.travellers, adults })} />
-            <NumberField label="Children" value={brief.travellers.childrenAges.length} min={0} max={8} onChange={(children) => update("travellers", { ...brief.travellers, childrenAges: Array.from({ length: children }, (_, index) => brief.travellers.childrenAges[index] ?? 10) })} />
-            <NumberField label="Infants" value={brief.travellers.infants} min={0} max={4} onChange={(infants) => update("travellers", { ...brief.travellers, infants })} />
-          </div>
-          {brief.travellers.childrenAges.length > 0 && (
-            <div className="child-age-row">
-              {brief.travellers.childrenAges.map((age, index) => (
-                <NumberField key={index} label={`Child ${index + 1} age`} value={age} min={2} max={17} onChange={(value) => {
-                  const ages = [...brief.travellers.childrenAges];
-                  ages[index] = value;
-                  update("travellers", { ...brief.travellers, childrenAges: ages });
-                }} />
-              ))}
-            </div>
-          )}
-          <div className="form-grid two">
-            <Field label="Cabin"><select value={brief.cabin} onChange={(event) => update("cabin", event.target.value as FlightAgentBrief["cabin"])}><option value="economy">Economy</option><option value="premium_economy">Premium economy</option><option value="business">Business</option><option value="first">First</option></select></Field>
-            <Field label="Maximum stops"><select value={brief.maxStops} onChange={(event) => update("maxStops", Number(event.target.value))}><option value={0}>Direct only</option><option value={1}>One stop</option><option value={2}>Two stops</option></select></Field>
-          </div>
-        </FormSection>
-        <FormSection label="Price & signals">
-          <div className="form-grid two">
-            <Field label="Currency"><input maxLength={3} value={brief.currency} onChange={(event) => update("currency", event.target.value.toUpperCase())} /></Field>
-            <Field label="Maximum total fare"><input type="number" min={1} value={brief.maximumPrice ?? ""} placeholder="Open" onChange={(event) => update("maximumPrice", event.target.value ? Number(event.target.value) : null)} /></Field>
-          </div>
-          <Field label="Preferred airline codes"><input value={brief.preferredAirlines.join(", ")} placeholder="BA, VS" onChange={(event) => update("preferredAirlines", tokenList(event.target.value))} /></Field>
-          <Field label="Exclude airline codes"><input value={brief.excludedAirlines.join(", ")} placeholder="Optional" onChange={(event) => update("excludedAirlines", tokenList(event.target.value))} /></Field>
-          <Field label="Additional context"><textarea value={brief.context} placeholder="Timing, accessibility or other preferences" onChange={(event) => update("context", event.target.value)} /></Field>
-        </FormSection>
-        {errors.length > 0 && <div className="validation-card" role="alert">{errors.map((item) => <p key={item}>{item}</p>)}</div>}
+    <article className={`recommendation-card ${selected ? "selected" : ""}`}>
+      <div className="card-top">
+        <span className="mode-label">{label(mode)}</span>
+        {selected && <span className="pill">Your preference</span>}
       </div>
-      <footer className="single-action-footer">
-        <button className="primary-action" disabled={errors.length > 0 || props.busy} onClick={props.onContinue}>{props.editing ? "Save brief" : "Review brief"}</button>
-      </footer>
-    </section>
-  );
-}
-
-function ReviewScreen(props: { readonly brief: FlightAgentBrief; readonly busy: boolean; readonly onBack: () => void; readonly onStart: () => void }) {
-  const brief = props.brief;
-  return (
-    <section className="screen column-screen" data-screen="review">
-      <header className="simple-header"><IconButton label="Back to brief" onClick={props.onBack}><ChevronLeftIcon /></IconButton><strong>Review brief</strong></header>
-      <div className="scroll-content review-content">
-        <div className="review-intro fade-up"><SectionLabel>Your trip</SectionLabel><h2>Ready to start tracking?</h2><p>{briefSubtitle(brief)}. {brief.tripType === "round_trip" ? `${brief.stayNights?.preferred ?? 0} nights` : "One way"}, {cabinLabel(brief.cabin).toLowerCase()}.</p></div>
-        <div className="review-list">
-          <ReviewRow label="Route" value={`${brief.originAirports.join("/")} → ${brief.destinationAirports.join("/")}`} />
-          <ReviewRow label="Dates" value={brief.departureWindow.start === brief.departureWindow.end ? formatDate(brief.departureWindow.start) : `${formatDate(brief.departureWindow.start)}–${formatDate(brief.departureWindow.end)}`} />
-          <ReviewRow label="Travellers" value={`${brief.travellers.adults} adult${brief.travellers.adults === 1 ? "" : "s"}${brief.travellers.childrenAges.length ? ` · ${brief.travellers.childrenAges.length} children` : ""}`} />
-          <ReviewRow label="Cabin" value={cabinLabel(brief.cabin)} />
-          <ReviewRow label="Stops" value={brief.maxStops === 0 ? "Direct only" : `Up to ${brief.maxStops} stop${brief.maxStops === 1 ? "" : "s"}`} />
-          <ReviewRow label="Budget" value={brief.maximumPrice ? `${brief.currency} ${brief.maximumPrice}` : "Open"} />
-        </div>
-        <p className="quiet-copy">Captain searches immediately, then every six hours until you pause the Trip.</p>
+      <strong className="price">{money(offer)}</strong>
+      <p className="airline">{offer.primaryAirlineCode}{isMixed(offer) ? " · Mixed" : ""}</p>
+      <div className="metrics">
+        <span>{duration(offer)}</span>
+        <span>{stops(offer)}</span>
       </div>
-      <footer className="single-action-footer"><button className="primary-action" disabled={props.busy} onClick={props.onStart}>Start Trip</button></footer>
-    </section>
-  );
-}
-
-function StartingScreen({ stage }: { readonly stage: number }) {
-  return <section className="screen starting-screen" data-screen="starting" aria-live="polite"><div className="agent-orbit" aria-hidden="true"><span /><i /></div><div className="starting-copy" key={stage}><p>Starting your Trip</p><h2>{STARTUP_STAGES[stage] ?? STARTUP_STAGES[0]}</h2></div><div className="stage-dots" aria-hidden="true">{STARTUP_STAGES.map((_, index) => <span className={index <= stage ? "active" : ""} key={index} />)}</div></section>;
-}
-
-function WorkspaceScreen(props: {
-  readonly workspace: Workspace;
-  readonly tab: WorkspaceTab;
-  readonly busy: boolean;
-  readonly onTab: (tab: WorkspaceTab) => void;
-  readonly onHome: () => void;
-  readonly onSettings: () => void;
-  readonly onBrowse: () => void;
-  readonly onOpenFlight: (flight: FlightItem) => void;
-  readonly onRetain: (flight: FlightItem) => void;
-  readonly onDismiss: (flight: FlightItem) => void;
-  readonly onFilters: () => void;
-  readonly onClearFilters: () => void;
-  readonly readOnly?: boolean;
-}) {
-  const { workspace } = props;
-  const flights = sortAndFilterFlights(workspace.browseFlights, workspace.agent.browsePreferences);
-  const activeFilters = countFilters(workspace.agent.browsePreferences);
-  const browseView = props.tab === "Browse";
-  return (
-    <section className="screen column-screen workspace-screen" data-screen="workspace">
-      <div className="workspace-atmosphere" aria-hidden="true" />
-      <header className="workspace-header">{props.readOnly ? <span className="icon-button" aria-hidden="true" /> : <IconButton label="Back home" onClick={props.onHome}><ChevronLeftIcon /></IconButton>}<div><strong>{workspaceTitle(workspace.agent.brief)}</strong></div>{props.readOnly ? <span className="settings-button" aria-hidden="true" /> : <button className="settings-button" aria-label="Open settings" onClick={props.onSettings}><SettingsIcon /></button>}</header>
-      <nav className="workspace-menu" aria-label="Flight workspace">{(["Flights", "Browse"] as const).map((tab) => <button className={props.tab === tab ? "active" : ""} aria-pressed={props.tab === tab} key={tab} onClick={() => props.onTab(tab)}>{tab}</button>)}</nav>
-      <div className="scroll-content workspace-content">
-        {!browseView ? (
-          <section className="saved-view">
-            {workspace.reviewFlights.length === 0 ? (
-              <div className="empty-state"><div className="empty-mark" aria-hidden="true"><PlaneIcon /></div><h2>No selected flights yet</h2><p>Flights selected by Captain or you will appear here.</p><button className="primary-pill" onClick={props.onBrowse}>Browse flights</button></div>
-            ) : (
-              <div className="flight-list">{workspace.reviewFlights.map((flight) => <FlightCard key={flight.id} flight={flight} onOpen={() => props.onOpenFlight(flight)} action={props.readOnly ? <SelectionBadge flight={flight} /> : <button className="card-icon-action" aria-label="Remove from review" disabled={props.busy} onClick={(event) => { event.stopPropagation(); props.onDismiss(flight); }}><CloseIcon /></button>} />)}</div>
-            )}
-          </section>
-        ) : (
-          <section className="browse-view">
-            <div className="browse-toolbar"><button className={`sort-filter-button ${activeFilters ? "active" : ""}`} onClick={props.onFilters}><span className="sort-filter-title"><FilterIcon /><strong>Sort &amp; filter</strong></span><span className="sort-filter-summary"><span>{sortLabel(workspace.agent.browsePreferences.sort)}</span>{activeFilters > 0 && <b>{activeFilters}</b>}<ChevronRightIcon /></span></button></div>
-            {activeFilters > 0 && <div className="active-filter-row" aria-label="Active filters">{filterChips(workspace.agent.browsePreferences).map((chip) => <span key={chip}>{chip}</span>)}<button disabled={props.busy} onClick={props.onClearFilters}>Clear all</button></div>}
-            {flights.length === 0 ? (
-              <div className="empty-state compact"><div className="empty-mark" aria-hidden="true"><SearchIcon /></div><h2>{workspace.agent.latestCheck?.status === "failed" ? "Fares unavailable" : workspace.browseFlights.length === 0 ? "Search in progress" : "No matches"}</h2><p>{workspace.agent.latestCheck?.status === "failed" ? "Captain will retry automatically." : workspace.browseFlights.length === 0 ? "Captain is building the first set of options." : "Adjust the current filters to see more flights."}</p></div>
-            ) : (
-              <div className="flight-list">{flights.map((flight) => {
-                const selected = flight.reviewState === "promoted" || flight.reviewState === "retained";
-                const action = selected
-                  ? <SelectionBadge flight={flight} />
-                  : props.readOnly
-                    ? null
-                    : <button className="card-icon-action" aria-label={`Track ${flight.marketingAirline} flight`} disabled={props.busy} onClick={(event) => { event.stopPropagation(); props.onRetain(flight); }}><TrackIcon /></button>;
-                return <FlightCard key={flight.id} flight={flight} onOpen={() => props.onOpenFlight(flight)} action={action} />;
-              })}</div>
-            )}
-          </section>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function SelectionBadge({ flight }: { readonly flight: FlightItem }) {
-  return <span className="review-badge"><i />{flight.reviewState === "retained" ? "Selected" : "Captain pick"}</span>;
-}
-
-function FlightCard(props: { readonly flight: FlightItem; readonly onOpen: () => void; readonly action: React.ReactNode }) {
-  const { flight } = props;
-  const change = flight.changePercent;
-  return (
-    <article className="flight-card live-flight-card" tabIndex={0} role="button" aria-label={`${flight.marketingAirline}, ${flight.latest.route}, ${currency(flight.latest.price, flight.latest.currency)}`} onClick={props.onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onOpen(); } }}>
-      <div className="flight-card-heading"><span className="airline-monogram">{flight.marketingAirlineCode}</span><span><strong>{flight.marketingAirline}</strong><small>{flight.latest.route}</small></span>{props.action}</div>
-      <div className="flight-card-journey"><div className="flight-times"><strong>{time(flight.latest.departure)}</strong><i /><strong>{time(flight.latest.arrival)}</strong></div><div className="flight-price"><strong>{currency(flight.latest.price, flight.latest.currency)}</strong>{change !== null && Math.abs(change) >= 0.1 && <span className={change < 0 ? "price-down" : "price-up"}>{change > 0 ? "+" : ""}{change.toFixed(1)}%</span>}</div></div>
-      <div className="flight-card-foot"><span>{formatDate(flight.travelDate)}</span><span>{flight.latest.stops === 0 ? "Direct" : `${flight.latest.stops} stop${flight.latest.stops === 1 ? "" : "s"}`}</span><span>{formatDuration(flight.latest.durationSeconds)}</span><ChevronRightIcon /></div>
+      <p className="why">{whyLabel(mode, offer, offers)}</p>
+      <EvidenceLink offer={offer} />
     </article>
   );
 }
 
-function SettingsScreen(props: {
-  readonly workspace: Workspace;
-  readonly busy: boolean;
-  readonly panel: SettingsPanel;
-  readonly onPanel: (panel: SettingsPanel) => void;
-  readonly onClose: () => void;
-  readonly onPause: () => void;
-  readonly onRun: () => void;
-  readonly onCadence: (cadence: CadenceHours) => void;
-  readonly onTrackingWindow: (value: TrackingWindowDays) => void;
-  readonly onEditBrief: () => void;
+function AirlinesTab({
+  offers,
+  onChoose
+}: {
+  offers: VerifiedOffer[];
+  onChoose: (airline: string) => void;
 }) {
+  const groups = useMemo(() => airlineGroups(offers), [offers]);
+  if (groups.length === 0) return <ResultsEmpty />;
   return (
-    <section className="screen column-screen settings-screen" data-screen="settings">
-      <header className="simple-header"><IconButton label={props.panel === "menu" ? "Close settings" : "Back to settings"} onClick={props.panel === "menu" ? props.onClose : () => props.onPanel("menu")}>{props.panel === "menu" ? <CloseIcon /> : <ChevronLeftIcon />}</IconButton><strong>{settingsTitle(props.panel)}</strong></header>
-      <div className="scroll-content settings-content">
-        {props.panel === "menu" && <SettingsMenu workspace={props.workspace} busy={props.busy} onPanel={props.onPanel} onPause={props.onPause} onRun={props.onRun} onCadence={props.onCadence} onTrackingWindow={props.onTrackingWindow} />}
-        {props.panel === "brief" && <BriefSettings brief={props.workspace.agent.brief} onEdit={props.onEditBrief} />}
-        {props.panel === "activity" && <ActivitySettings workspace={props.workspace} />}
+    <>
+      <div className="section-heading">
+        <div><p className="eyebrow">By primary airline</p><h2>Compare airlines</h2></div>
+        <p>Mixed itineraries count once under their primary marketing airline.</p>
       </div>
-    </section>
+      <div className="airline-grid">
+        {groups.map((group) => (
+          <button className="airline-card" key={group.airline} onClick={() => onChoose(group.airline)}>
+            <div className="airline-monogram">{group.airline.slice(0, 2)}</div>
+            <div className="airline-card-title">
+              <strong>{group.airline}</strong>
+              {group.mixed && <span className="pill">Mixed</span>}
+            </div>
+            {group.mixed && (
+              <p className="carrier-list">
+                Carriers: {[...new Set(group.offers.flatMap((offer) => offer.participatingAirlineCodes))].join(", ")}
+              </p>
+            )}
+            <dl>
+              <div><dt>Lowest fare</dt><dd>{money(group.cheapest)}</dd></div>
+              <div><dt>Shortest</dt><dd>{duration(group.fastest)}</dd></div>
+              <div><dt>Stops</dt><dd>{group.stopMix}</dd></div>
+              <div><dt>Results</dt><dd>{group.offers.length}</dd></div>
+            </dl>
+            <p>Checked {relativeTime(group.latestVerified)}</p>
+          </button>
+        ))}
+      </div>
+    </>
   );
 }
 
-function SettingsMenu(props: { readonly workspace: Workspace; readonly busy: boolean; readonly onPanel: (panel: SettingsPanel) => void; readonly onPause: () => void; readonly onRun: () => void; readonly onCadence: (value: CadenceHours) => void; readonly onTrackingWindow: (value: TrackingWindowDays) => void }) {
-  const check = props.workspace.agent.latestCheck;
-  const { agent } = props.workspace;
-  const tracking = agent.trackingWindowDays;
+function BrowseTab({
+  offers,
+  airlineFilter,
+  onFilter
+}: {
+  offers: VerifiedOffer[];
+  airlineFilter: string;
+  onFilter: (value: string) => void;
+}) {
+  const airlines = [...new Set(offers.map((offer) => offer.primaryAirlineCode))].sort();
+  const visible = offers
+    .filter((offer) => !airlineFilter || offer.primaryAirlineCode === airlineFilter)
+    .sort((left, right) => left.price - right.price || left.itineraryKey.localeCompare(right.itineraryKey));
+  if (offers.length === 0) return <ResultsEmpty />;
   return (
-    <div className="settings-index">
-      <section className="settings-status">
-        <div className="settings-status-line"><span><i className={`status-dot ${agent.status === "paused" ? "paused" : "active"}`} /><strong>{agent.status === "paused" ? "Trip paused" : check?.status === "running" ? "Checking flights" : "Trip active"}</strong></span><button className="switch-control" role="switch" aria-label="Trip active" aria-checked={agent.status !== "paused"} disabled={props.busy} onClick={props.onPause}><i /></button></div>
-        <button className="check-now-action" disabled={props.busy || agent.status === "paused" || check?.status === "running"} onClick={props.onRun}>{check?.status === "running" ? "Checking now…" : "Check now"}</button>
-      </section>
-      <div className="brief-detail-card settings-search-summary">
-        <DetailRow label="Last check" value={formatTimestamp(agent.lastCheckAt)} />
-        <DetailRow label="Options" value={`${props.workspace.browseFlights.length} available`} />
-        <DetailRow label="Sources" value={workspaceSourcesLabel(props.workspace)} />
+    <>
+      <div className="browse-bar">
+        <div><p className="eyebrow">Verified results only</p><h2>Browse flights</h2></div>
+        <label>
+          Airline
+          <select value={airlineFilter} onChange={(event) => onFilter(event.target.value)}>
+            <option value="">All airlines</option>
+            {airlines.map((airline) => <option value={airline} key={airline}>{airline}</option>)}
+          </select>
+        </label>
       </div>
-      <SectionLabel>Automation</SectionLabel>
-      <SettingChoice title="Search frequency" detail="How often Captain refreshes fares for this Trip."><div className="cadence-options">{([1, 6, 12, 24] as CadenceHours[]).map((value) => <button className={agent.cadenceHours === value ? "selected" : ""} aria-pressed={agent.cadenceHours === value} disabled={props.busy} key={value} onClick={() => props.onCadence(value)}>{value}h</button>)}</div></SettingChoice>
-      <SettingChoice title="Track selected flights" detail="Default tracking period after you save a flight."><div className="tracking-options">{([7, 14, 30, null] as TrackingWindowDays[]).map((value) => <button className={tracking === value ? "selected" : ""} aria-pressed={tracking === value} disabled={props.busy} key={value ?? "trip"} onClick={() => props.onTrackingWindow(value)}>{value === null ? "Until trip" : `${value}d`}</button>)}</div></SettingChoice>
-      <SectionLabel>Trip</SectionLabel>
-      <SettingsLink icon={<BriefIcon />} title="Brief" detail={briefSubtitle(agent.brief)} onClick={() => props.onPanel("brief")} />
-      <SettingsLink icon={<ActivityIcon />} title="Activity" detail={latestActivitySummary(props.workspace)} onClick={() => props.onPanel("activity")} />
+      <div className="offer-list">
+        {visible.map((offer) => <OfferRow offer={offer} key={offer.id} />)}
+      </div>
+      <p className="set-note">Captain shows up to 20 verified results. This is not an exhaustive market listing.</p>
+    </>
+  );
+}
+
+function OfferRow({ offer }: { offer: VerifiedOffer }) {
+  return (
+    <article className="offer-row">
+      <div className="carrier">
+        <span className="airline-monogram">{offer.primaryAirlineCode.slice(0, 2)}</span>
+        <div>
+          <strong>{offer.primaryAirlineCode}</strong>
+          <p>{isMixed(offer) ? `Mixed · ${offer.participatingAirlineCodes.join(", ")}` : "Primary airline"}</p>
+        </div>
+      </div>
+      <div className="route">
+        <strong>{offer.snapshot.route || "Verified itinerary"}</strong>
+        <p>{(offer.snapshot.flightNumbers ?? []).join(" · ")}</p>
+      </div>
+      <div className="metrics compact">
+        <span>{duration(offer)}</span>
+        <span>{stops(offer)}</span>
+      </div>
+      <div className="fare">
+        <strong>{money(offer)}</strong>
+        <span>1 adult total</span>
+      </div>
+      <div className="evidence-cell">
+        <EvidenceLink offer={offer} />
+        <span>Checked {relativeTime(offer.verifiedAt)}</span>
+      </div>
+    </article>
+  );
+}
+
+function EvidenceLink({ offer }: { offer: VerifiedOffer }) {
+  const evidence = offer.evidence[0];
+  return evidence ? (
+    <a href={evidence.url} target="_blank" rel="noreferrer">View evidence ↗</a>
+  ) : <span>Evidence unavailable</span>;
+}
+
+function TripControls({
+  data,
+  onChanged,
+  onCancelled,
+  onError
+}: {
+  data: TripPayload;
+  onChanged: () => Promise<void>;
+  onCancelled: () => void;
+  onError: (value: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const trip = data.trip!;
+  async function act(type: "pause" | "resume" | "refresh" | "cancel") {
+    setBusy(true);
+    onError("");
+    try {
+      await tripAction(type, trip.id, trip.version);
+      if (type === "cancel") {
+        onCancelled();
+        return;
+      }
+      await onChanged();
+    } catch (cause) {
+      const retry = cause instanceof ApiError && cause.status === 429;
+      onError(retry
+        ? "Manual refresh is available once every six hours. Captain will keep checking automatically."
+        : "That action didn’t complete. Reload and try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="trip-controls">
+      <button disabled={busy} onClick={() => void act(trip.status === "paused" ? "resume" : "pause")}>
+        {trip.status === "paused" ? "Resume" : "Pause"}
+      </button>
+      <button className="primary" disabled={busy || trip.status === "paused"} onClick={() => void act("refresh")}>
+        Refresh
+      </button>
+      <button
+        className="danger"
+        disabled={busy}
+        onClick={() => {
+          if (window.confirm(`Stop tracking ${routeLabel(trip)}?`)) void act("cancel");
+        }}
+      >
+        Stop
+      </button>
     </div>
   );
 }
 
-function BriefSettings(props: { readonly brief: FlightAgentBrief; readonly onEdit: () => void }) {
-  const { brief } = props;
-  return <div className="settings-section"><div className="settings-section-heading"><SectionLabel>Stable search inputs</SectionLabel><button className="small-action" onClick={props.onEdit}>Edit</button></div><div className="brief-detail-card"><DetailRow label="Route" value={`${brief.originAirports.join("/")} → ${brief.destinationAirports.join("/")}`} /><DetailRow label="Window" value={`${formatDate(brief.departureWindow.start)}–${formatDate(brief.departureWindow.end)}`} /><DetailRow label="Trip" value={brief.tripType === "one_way" ? "One way" : `${brief.stayNights?.minimum}–${brief.stayNights?.maximum} nights`} /><DetailRow label="Travellers" value={`${brief.travellers.adults} adult${brief.travellers.adults === 1 ? "" : "s"}${brief.travellers.childrenAges.length ? `, ${brief.travellers.childrenAges.length} children` : ""}`} /><DetailRow label="Cabin" value={cabinLabel(brief.cabin)} /><DetailRow label="Stops" value={brief.maxStops === 0 ? "Direct" : `Up to ${brief.maxStops}`} /><DetailRow label="Budget" value={brief.maximumPrice ? currency(brief.maximumPrice, brief.currency) : "Open"} />{brief.context && <DetailRow label="Context" value={brief.context} />}</div></div>;
-}
-
-function ActivitySettings({ workspace }: { readonly workspace: Workspace }) {
-  return <div className="settings-section"><SectionLabel>Recorded events</SectionLabel><div className="activity-list">{workspace.activity.map((item) => <article key={item.id}><i className={item.kind.includes("failed") ? "error" : ""} /><span><strong>{item.message}</strong><small>{formatTimestamp(item.createdAt)}</small></span></article>)}</div>{workspace.activity.length === 0 && <p className="quiet-copy">Activity appears here as Captain works.</p>}</div>;
-}
-
-function FlightDetailScreen(props: { readonly details: FlightDetails; readonly busy: boolean; readonly onBack: () => void; readonly onRetain: () => void; readonly onDismiss: () => void; readonly readOnly?: boolean }) {
-  const { flight } = props.details;
-  const observedPrices = props.details.observations.map((observation) => observation.price);
-  const minimum = observedPrices.length ? Math.min(...observedPrices) : flight.latest.price;
-  const maximum = observedPrices.length ? Math.max(...observedPrices) : flight.latest.price;
-  const tracking = flight.reviewState === "retained" || flight.reviewState === "promoted";
-  return <section className="screen column-screen flight-detail-screen" data-screen="flight-detail"><header className="simple-header"><IconButton label="Back to flights" onClick={props.onBack}><ChevronLeftIcon /></IconButton><strong>Flight details</strong></header><div className="scroll-content flight-detail-content"><div className="flight-detail-hero"><div className="detail-airline"><span className="airline-monogram large">{flight.marketingAirlineCode}</span><span><strong>{flight.marketingAirline}</strong><small>{flight.latest.flightNumber}</small></span>{tracking && <em><i />Tracking</em>}</div><h2>{flight.latest.origin} <span>→</span> {flight.destination}</h2><p>{formatDate(flight.travelDate)} · {time(flight.latest.departure)}–{time(flight.latest.arrival)} · {flight.latest.stops === 0 ? "Direct" : `${flight.latest.stops} stop${flight.latest.stops === 1 ? "" : "s"}`}</p><div className="detail-price"><strong>{currency(flight.latest.price, flight.latest.currency)}</strong>{flight.changePercent !== null && Math.abs(flight.changePercent) >= 0.1 && <small className={flight.changePercent < 0 ? "price-down" : "price-up"}>{flight.changePercent > 0 ? "+" : ""}{flight.changePercent.toFixed(1)}%</small>}</div>{flight.promotionReason && <span className="detail-signal">{flight.promotionReason}</span>}</div><section className="detail-section"><SectionLabel>Price history</SectionLabel><PriceTimeline observations={props.details.observations} minimum={minimum} maximum={maximum} /></section><details className="detail-disclosure"><summary>Flight information <ChevronRightIcon /></summary><div className="brief-detail-card"><DetailRow label="Route" value={flight.latest.route} /><DetailRow label="Source" value={flightSourceName(flight.latest)} /><DetailRow label="Duration" value={formatDuration(flight.latest.durationSeconds)} /><DetailRow label="Cabin" value={cabinLabel(flight.latest.cabin)} /><DetailRow label="Observed" value={`${flight.observationCount} time${flight.observationCount === 1 ? "" : "s"}`} /></div></details>{props.details.research[0] && <details className="detail-disclosure"><summary>Route context <ChevronRightIcon /></summary><div className="research-card"><p>{props.details.research[0].overview ?? props.details.research[0].error}</p>{props.details.research[0].results.slice(0, 3).map((result) => <a href={result.sourceUrl} target="_blank" rel="noreferrer" key={result.sourceUrl}><strong>{result.title}</strong><span>{result.finding}</span><small>{result.sourceName}</small></a>)}</div></details>}</div>{!props.readOnly && <footer className="detail-actions"><button disabled={props.busy} onClick={props.onDismiss}>{tracking ? "Stop tracking" : "Dismiss"}</button><button className="primary-action" disabled={props.busy || tracking} onClick={props.onRetain}>{tracking ? trackingButtonLabel(flight) : "Track flight"}</button></footer>}</section>;
-}
-
-function PriceTimeline(props: { readonly observations: FlightDetails["observations"]; readonly minimum: number; readonly maximum: number }) {
-  const orderedObservations = [...props.observations].sort((left, right) => Date.parse(left.observedAt) - Date.parse(right.observedAt));
-  const currencyCode = orderedObservations.at(-1)?.currency ?? "GBP";
-  const observedPricePoints: LivelinePoint[] = orderedObservations.map((observation) => ({
-    time: Date.parse(observation.observedAt) / 1_000,
-    value: observation.price
-  }));
-  const nowSeconds = Date.now() / 1_000;
-  const latestObservedTime = observedPricePoints.at(-1)?.time ?? nowSeconds;
-  const displayTimeOffset = nowSeconds - latestObservedTime;
-  const shiftedPricePoints = observedPricePoints.map((point) => ({ ...point, time: point.time + displayTimeOffset }));
-  const chartPoints = shiftedPricePoints.length === 1
-    ? [{ time: shiftedPricePoints[0]!.time - 60, value: shiftedPricePoints[0]!.value }, shiftedPricePoints[0]!]
-    : shiftedPricePoints;
-  const observedSpanSeconds = Math.max(1, (chartPoints.at(-1)?.time ?? nowSeconds) - (chartPoints[0]?.time ?? nowSeconds));
-  const historyWindowSeconds = Math.max(90, Math.ceil(observedSpanSeconds * 1.1) + 30);
-  const latestPrice = chartPoints.at(-1)?.value ?? props.minimum;
-  const timeline = orderedObservations.map((observation, index) => ({
-    observation,
-    change: index === 0 ? null : percentChange(orderedObservations[index - 1]!.price, observation.price)
-  })).reverse();
-  return <div className="price-chart"><div className="price-chart-summary"><span><small>Low</small><strong>{currency(props.minimum, currencyCode)}</strong></span><span><small>High</small><strong>{currency(props.maximum, currencyCode)}</strong></span></div><div className="price-chart-live" role="img" aria-label={`Observed price history from ${currency(props.minimum, currencyCode)} to ${currency(props.maximum, currencyCode)}`}><Liveline data={chartPoints} value={latestPrice} theme="dark" color="#a7c49a" window={historyWindowSeconds} formatValue={(value) => currency(value, currencyCode)} formatTime={(timestamp) => formatLivelineTime(timestamp - displayTimeOffset, historyWindowSeconds)} badgeVariant="minimal" exaggerate emptyText="No price observations yet" /></div><div className="timeline-observations">{timeline.map(({ observation, change }) => <div key={observation.id}><span>{formatTimestamp(observation.observedAt)}</span><strong>{currency(observation.price, observation.currency)}{change !== null && <em className={change < 0 ? "price-down" : change > 0 ? "price-up" : ""}>{change > 0 ? "+" : ""}{change.toFixed(1)}%</em>}</strong><small>{observation.route} · {observation.flightNumber}</small><small>{flightSourceName(observation)}</small></div>)}</div></div>;
-}
-
-function formatLivelineTime(timestampSeconds: number, windowSeconds: number): string {
-  const date = new Date(timestampSeconds * 1_000);
-  return windowSeconds <= 86_400
-    ? date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
-    : date.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-}
-
-function flightSourceName(snapshot: FlightDetails["flight"]["latest"]): string {
-  return snapshot.sourceName || (snapshot.provider === "codex_web" ? "Codex web" : "Duffel");
-}
-
-function FilterSheet(props: { readonly open: boolean; readonly preferences: BrowsePreferences; readonly flights: FlightItem[]; readonly onPreferences: React.Dispatch<React.SetStateAction<BrowsePreferences>>; readonly onClose: () => void; readonly onApply: () => void }) {
-  const airlines = [...new Set(props.flights.map((flight) => flight.marketingAirline))].sort();
-  const airports = [...new Set(props.flights.flatMap((flight) => [flight.latest.origin, flight.destination]))].sort();
-  const cabins = [...new Set(props.flights.map((flight) => flight.latest.cabin))].sort();
-  const matches = sortAndFilterFlights(props.flights, props.preferences).length;
-  function update<Key extends keyof BrowsePreferences>(key: Key, value: BrowsePreferences[Key]) { props.onPreferences((current) => ({ ...current, [key]: value })); }
-  return <div className="sheet-backdrop" data-open={props.open} aria-hidden={!props.open} role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) props.onClose(); }}><section className="bottom-sheet filter-sheet" role="dialog" aria-modal={props.open} aria-label="Sort and filter flights"><header><span><strong>Sort &amp; filter</strong><small>{matches} matching flight{matches === 1 ? "" : "s"}</small></span><IconButton label="Close filters" onClick={props.onClose}><CloseIcon /></IconButton></header><div className="sheet-scroll"><FilterGroup label="Sort"><select value={props.preferences.sort} onInput={(event) => update("sort", event.currentTarget.value as BrowsePreferences["sort"])}><option value="recommended">Recommended</option><option value="price">Lowest price</option><option value="duration">Shortest duration</option><option value="departure">Earliest departure</option></select></FilterGroup><FilterGroup label="Stops"><div className="filter-choice-row">{[0, 1, 2].map((stops) => <button className={props.preferences.stops.includes(stops) ? "selected" : ""} key={stops} onClick={() => update("stops", toggle(props.preferences.stops, stops))}>{stops === 0 ? "Direct" : `${stops} stop${stops === 1 ? "" : "s"}`}</button>)}</div></FilterGroup>{airlines.length > 0 && <FilterGroup label="Airlines"><div className="filter-choice-row wrap">{airlines.map((airline) => <button className={props.preferences.airlines.includes(airline) ? "selected" : ""} key={airline} onClick={() => update("airlines", toggle(props.preferences.airlines, airline))}>{airline}</button>)}</div></FilterGroup>}{airports.length > 0 && <FilterGroup label="Airports"><div className="filter-choice-row wrap">{airports.map((airport) => <button className={props.preferences.airports.includes(airport) ? "selected" : ""} key={airport} onClick={() => update("airports", toggle(props.preferences.airports, airport))}>{airport}</button>)}</div></FilterGroup>}{cabins.length > 0 && <FilterGroup label="Cabin"><div className="filter-choice-row wrap">{cabins.map((cabin) => <button className={props.preferences.cabins.includes(cabin) ? "selected" : ""} key={cabin} onClick={() => update("cabins", toggle(props.preferences.cabins, cabin))}>{cabinLabel(cabin)}</button>)}</div></FilterGroup>}<FilterGroup label="Departure"><div className="filter-choice-row">{(["morning", "afternoon", "evening"] as const).map((period) => <button className={props.preferences.departurePeriods.includes(period) ? "selected" : ""} key={period} onClick={() => update("departurePeriods", toggle(props.preferences.departurePeriods, period))}>{period[0]!.toUpperCase() + period.slice(1)}</button>)}</div></FilterGroup><FilterGroup label="Maximum price"><input className="sheet-input" type="number" min={1} value={props.preferences.maximumPrice ?? ""} placeholder="No maximum" onChange={(event) => update("maximumPrice", event.target.value ? Number(event.target.value) : null)} /></FilterGroup></div><footer><button className="secondary-action" onClick={() => props.onPreferences(EMPTY_PREFERENCES)}>Reset</button><button className="primary-action" onClick={props.onApply}>Show {matches}</button></footer></section></div>;
-}
-
-function LoadingScreen() { return <section className="screen starting-screen"><div className="agent-orbit small" aria-hidden="true"><span /><i /></div><div className="starting-copy"><p>Captain</p><h2>Opening Trip</h2></div></section>; }
-function DashboardErrorScreen() { return <section className="screen starting-screen"><div className="empty-mark" aria-hidden="true"><PlaneIcon /></div><div className="starting-copy"><p>Captain</p><h2>This dashboard link is invalid or has expired</h2><small>Send /trips in Telegram to get a fresh link.</small></div></section>; }
-function ErrorNotice(props: { readonly message: string; readonly onClose: () => void }) {
-  const [open, setOpen] = useState(true);
-  useEffect(() => setOpen(true), [props.message]);
-  return <div className="error-notice app-notice" data-open={open} aria-hidden={!open} role="alert" onTransitionEnd={(event) => { if (event.propertyName === "opacity" && !open) props.onClose(); }}><span>{props.message}</span><button aria-label="Dismiss error" onClick={() => setOpen(false)}><CloseIcon /></button></div>;
-}
-function TrackingNotice(props: { readonly message: string; readonly open: boolean }) { return <div className="tracking-notice app-notice" data-open={props.open} aria-hidden={!props.open} role="status"><TrackIcon /><span>{props.message}</span></div>; }
-function AppViewport({ children }: { readonly children: React.ReactNode }) { return <div className="app-viewport">{children}</div>; }
-function IconButton(props: { readonly label: string; readonly onClick: () => void; readonly children: React.ReactNode }) { return <button className="icon-button" aria-label={props.label} onClick={props.onClick}>{props.children}</button>; }
-function SectionLabel({ children }: { readonly children: React.ReactNode }) { return <h3 className="section-label">{children}</h3>; }
-function FormSection(props: { readonly label: string; readonly children: React.ReactNode }) {
-  const [expanded, setExpanded] = useState(true);
-  return <section className={`form-section ${expanded ? "expanded" : "collapsed"}`}><button className="form-section-toggle" type="button" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}><span>{props.label}</span><ChevronRightIcon /></button>{expanded && <div className="form-section-content">{props.children}</div>}</section>;
-}
-function Field(props: { readonly label: string; readonly children: React.ReactNode }) { return <label className="form-field"><span>{props.label}</span>{props.children}</label>; }
-function NumberField(props: { readonly label: string; readonly value: number; readonly min: number; readonly max: number; readonly onChange: (value: number) => void }) { return <Field label={props.label}><input type="number" min={props.min} max={props.max} value={props.value} onChange={(event) => props.onChange(Number(event.target.value))} /></Field>; }
-function SegmentedControl(props: { readonly value: string; readonly options: Array<{ value: string; label: string }>; readonly onChange: (value: string) => void }) { return <div className="segmented-control">{props.options.map((option) => <button className={props.value === option.value ? "selected" : ""} aria-pressed={props.value === option.value} key={option.value} onClick={() => props.onChange(option.value)}>{option.label}</button>)}</div>; }
-function ReviewRow(props: { readonly label: string; readonly value: string }) { return <div className="review-row static"><span>{props.label}</span><strong>{props.value}</strong></div>; }
-function DetailRow(props: { readonly label: string; readonly value: string }) { return <div className="detail-row"><span>{props.label}</span><strong>{props.value}</strong></div>; }
-function SettingChoice(props: { readonly title: string; readonly detail: string; readonly children: React.ReactNode }) { return <section className="setting-choice"><span><strong>{props.title}</strong><small>{props.detail}</small></span>{props.children}</section>; }
-function SettingsLink(props: { readonly icon: React.ReactNode; readonly title: string; readonly detail: string; readonly onClick: () => void }) { return <button className="settings-index-row" onClick={props.onClick}><span className="settings-row-icon">{props.icon}</span><span><strong>{props.title}</strong><small>{props.detail}</small></span><ChevronRightIcon /></button>; }
-function FilterGroup(props: { readonly label: string; readonly children: React.ReactNode }) { return <div className="filter-group"><strong>{props.label}</strong>{props.children}</div>; }
-
-function settingsTitle(panel: SettingsPanel): string { return ({ menu: "Settings", brief: "Brief", activity: "Activity" })[panel]; }
-function workspaceSourcesLabel(workspace: Workspace): string {
-  const sourceRuns = workspace.agent.latestCheck?.sourceRuns;
-  if (sourceRuns?.length) return sourceRuns.map((source) => `${source.source === "duffel" ? "Duffel" : "Codex"} ${source.status}`).join(" · ");
-  const sources = new Set([...workspace.reviewFlights, ...workspace.browseFlights].map((flight) => flightSourceName(flight.latest)));
-  if (workspace.agent.latestCheck?.research) sources.add("Codex");
-  return [...sources].join(" · ") || "No sources yet";
-}
-function sortLabel(sort: BrowsePreferences["sort"]): string { return ({ recommended: "Recommended", price: "Lowest price", duration: "Shortest", departure: "Earliest" })[sort]; }
-function countFilters(preferences: BrowsePreferences): number { return preferences.stops.length + preferences.airlines.length + preferences.airports.length + preferences.cabins.length + preferences.departurePeriods.length + (preferences.maximumPrice === null ? 0 : 1); }
-function filterChips(preferences: BrowsePreferences): string[] { return [
-  ...preferences.stops.map((stops) => stops === 0 ? "Direct" : `${stops} stop${stops === 1 ? "" : "s"}`),
-  ...preferences.airlines,
-  ...preferences.airports,
-  ...preferences.cabins.map(cabinLabel),
-  ...preferences.departurePeriods.map((period) => period[0]!.toUpperCase() + period.slice(1)),
-  ...(preferences.maximumPrice === null ? [] : [`Up to ${preferences.maximumPrice}`])
-]; }
-function cabinLabel(cabin: FlightAgentBrief["cabin"]): string { return cabin.split("_").map((word, index) => index === 0 ? word[0]!.toUpperCase() + word.slice(1) : word).join(" "); }
-function time(value: string): string { return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
-function currency(value: number, code: string): string { return new Intl.NumberFormat("en-GB", { style: "currency", currency: code, maximumFractionDigits: 0 }).format(value); }
-function airportList(value: string): string[] { return value.toUpperCase().split(/[\s,]+/).map((item) => item.trim()).filter(Boolean); }
-function tokenList(value: string): string[] { return [...new Set(value.toUpperCase().split(/[\s,]+/).map((item) => item.trim()).filter(Boolean))]; }
-function toggle<T>(values: readonly T[], value: T): T[] { return values.includes(value) ? values.filter((item) => item !== value) : [...values, value]; }
-function percentChange(previous: number, current: number): number { return previous === 0 ? 0 : ((current - previous) / previous) * 100; }
-function homeTripDates(brief: FlightAgentBrief): string { return brief.departureWindow.start === brief.departureWindow.end ? formatDate(brief.departureWindow.start) : `${formatDate(brief.departureWindow.start)}–${formatDate(brief.departureWindow.end)}`; }
-function workspaceTitle(brief: FlightAgentBrief): string {
-  const legs = brief.legs ?? [];
-  if (brief.tripType === "multi_city" && legs.length > 0) {
-    const route = [legs[0]!.originAirports.join("/"), ...legs.map((leg) => leg.destinationAirports.join("/"))].join(" → ");
-    return `${route} · ${formatCompactDateRange(legs[0]!.departureWindow.start, legs.at(-1)!.departureWindow.start)}`;
+function Preferences({
+  profile,
+  tripData,
+  displayName,
+  trackingError,
+  onSaved,
+  onTripChanged,
+  onTripError,
+  onBack
+}: {
+  profile: TravellerProfile;
+  tripData: TripPayload | null;
+  displayName: string;
+  trackingError: string;
+  onSaved: (profile: TravellerProfile) => void;
+  onTripChanged: () => Promise<void>;
+  onTripError: (value: string) => void;
+  onBack: () => void;
+}) {
+  const [currency, setCurrency] = useState(profile.defaultCurrency);
+  const [timeZone, setTimeZone] = useState(profile.timeZone);
+  const [ranking, setRanking] = useState(profile.rankingMode);
+  const [preferred, setPreferred] = useState(profile.preferredAirlineCodes.join(", "));
+  const [excluded, setExcluded] = useState(profile.excludedAirlineCodes.join(", "));
+  const [alertsEnabled, setAlertsEnabled] = useState(profile.alertsEnabled);
+  const [maxAlerts, setMaxAlerts] = useState<1 | 2>(profile.maxAlertsPerDay);
+  const [quietHoursEnabled, setQuietHoursEnabled] = useState(profile.quietHoursEnabled);
+  const [quietStart, setQuietStart] = useState(profile.quietHoursStart);
+  const [quietEnd, setQuietEnd] = useState(profile.quietHoursEnd);
+  const [brief, setBrief] = useState(() => {
+    const current = tripData?.trip?.brief;
+    if (!current) return null;
+    return {
+      ...current,
+      context: /^Prepared from confirmed Captain Trip draft\b/iu.test(current.context)
+        ? ""
+        : current.context
+    };
+  });
+  const [tripStopped, setTripStopped] = useState(false);
+  const [saved, setSaved] = useState<"preferences" | "notifications" | "brief" | "">("");
+  const [busy, setBusy] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const codes = (value: string) => [...new Set(
+    value.toUpperCase().replace(/\bAND\b/gu, " ").match(/[A-Z0-9]{2,3}/gu) ?? []
+  )].slice(0, 12);
+  const airportCodes = (value: string) => [...new Set(
+    value.toUpperCase().match(/[A-Z]{3}/gu) ?? []
+  )].slice(0, 6);
+  async function saveProfile(
+    event: React.FormEvent,
+    section: "preferences" | "notifications"
+  ) {
+    event.preventDefault();
+    setBusy(true);
+    setSaved("");
+    setSaveError("");
+    try {
+      const next = await updateProfile({
+        defaultCurrency: currency.toUpperCase(),
+        timeZone,
+        rankingMode: ranking,
+        preferredAirlineCodes: codes(preferred),
+        excludedAirlineCodes: codes(excluded),
+        alertsEnabled,
+        maxAlertsPerDay: maxAlerts,
+        quietHoursEnabled,
+        quietHoursStart: quietStart,
+        quietHoursEnd: quietEnd
+      });
+      onSaved(next);
+      setSaved(section);
+    } catch {
+      setSaveError("Captain couldn’t save these settings. Please try again.");
+    } finally {
+      setBusy(false);
+    }
   }
-  const end = brief.tripType === "round_trip" && brief.stayNights
-    ? addIsoDays(brief.departureWindow.start, brief.stayNights.preferred)
-    : brief.departureWindow.end;
-  return `${brief.originAirports.join("/")} → ${brief.destinationAirports.join("/")} · ${formatCompactDateRange(brief.departureWindow.start, end)}`;
-}
-function latestActivitySummary(workspace: Workspace): string { const latest = workspace.activity[0]; return latest ? `${latest.message} · ${formatTimestamp(latest.createdAt)}` : "No activity yet"; }
-function trackingButtonLabel(flight: FlightItem): string { return flight.trackedUntilAt ? `Tracking until ${formatDate(flight.trackedUntilAt)}` : "Tracking"; }
-function errorMessage(cause: unknown): string { return cause instanceof Error ? cause.message : "Something went wrong"; }
-function agentKeyFromPath(): string | null { const match = /^\/(?:trips|agents)\/([^/]+)$/.exec(window.location.pathname); return match?.[1] ? decodeURIComponent(match[1]) : null; }
-function dashboardTokenFromLocation(): string | null {
-  const fragment = window.location.hash.replace(/^#/u, "");
-  return new URLSearchParams(fragment).get("access_token")
-    ?? (isCompactDashboardPath() && fragment ? fragment : null);
-}
-function isCompactDashboardPath(): boolean { return window.location.pathname === "/t"; }
-function addIsoDays(value: string, days: number): string {
-  const date = new Date(`${value}T12:00:00.000Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-function settingsTargetFromLocation(): SettingsPanel | null {
-  const value = new URLSearchParams(window.location.search).get("settings");
-  if (value === null) return null;
-  if (value === "brief" || value === "activity") return value;
-  return "menu";
+  async function saveBrief(event: React.FormEvent) {
+    event.preventDefault();
+    const trip = tripData?.trip;
+    if (!trip || !brief) return;
+    setBusy(true);
+    setSaved("");
+    setSaveError("");
+    try {
+      await updateTripBrief(trip.id, trip.version, brief);
+      setSaved("brief");
+      await onTripChanged();
+    } catch (cause) {
+      setSaveError(cause instanceof ApiError && cause.status === 409
+        ? "This Trip changed elsewhere. Reload it from Telegram before editing."
+        : "Captain couldn’t update this Trip brief. Check the fields and try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const trip = tripStopped ? null : tripData?.trip ?? null;
+  const watch = tripStopped ? null : tripData?.watch ?? null;
+  return (
+    <main className="settings-shell">
+      <header className="topbar">
+        {tripStopped
+          ? <span className="back-link inactive">Trip stopped</span>
+          : <button className="back-link" onClick={onBack}>← Trip</button>}
+        <span className="name">{displayName}</span>
+      </header>
+      <section className="settings-intro">
+        <h1>{trip ? routeLabel(trip) : "Captain"}</h1>
+        <p>{trip
+          ? dateRangeLabel(trip.brief.departureWindow.start, trip.brief.departureWindow.end)
+          : "Trip tracking has stopped. Choose another Trip from Telegram."}</p>
+      </section>
+      {trip && tripData && (
+        <details className="settings-card settings-disclosure" open>
+          <summary>
+            <span><strong>Tracking</strong></span>
+            <em>{trip.status === "paused" ? "Paused" : "Active"}</em>
+          </summary>
+          <div className="settings-body tracking-settings">
+            <dl className="settings-list">
+              <div><dt>Last check</dt><dd>{watch?.lastCheckAt ? relativeTime(watch.lastCheckAt) : "Not checked yet"}</dd></div>
+              <div><dt>Next check</dt><dd>{watch?.nextCheckAt ? scheduleTime(watch.nextCheckAt) : "Not scheduled"}</dd></div>
+              <div><dt>Verified results</dt><dd>{tripData.offers.length}</dd></div>
+              <div><dt>Schedule</dt><dd>Adaptive</dd></div>
+            </dl>
+            <p>Captain checks more often as departure approaches. Manual refresh is available once every six hours.</p>
+            {trackingError && <p className="form-error" role="alert">{trackingError}</p>}
+            <TripControls
+              data={tripData}
+              onChanged={onTripChanged}
+              onCancelled={() => setTripStopped(true)}
+              onError={onTripError}
+            />
+          </div>
+        </details>
+      )}
+      {trip && brief && (
+        <details className="settings-card settings-disclosure">
+          <summary>
+            <span><strong>Trip brief</strong></span>
+            <em>{dateLabel(brief.departureWindow.start)}</em>
+          </summary>
+          <div className="settings-body">
+            <p>Editing the brief starts a fresh verified search for this Trip.</p>
+            <form onSubmit={(event) => void saveBrief(event)}>
+              {brief.tripType === "multi_city" ? (
+                <div className="read-only-field">
+                  <span>Route</span>
+                  <strong>{routeLabel(trip)}</strong>
+                  <small>Change multi-city routes in Telegram.</small>
+                </div>
+              ) : (
+                <div className="form-grid two">
+                  <label>
+                    From
+                    <input
+                      value={brief.originAirports.join(", ")}
+                      onChange={(event) => setBrief({
+                        ...brief,
+                        originAirports: airportCodes(event.target.value)
+                      })}
+                    />
+                  </label>
+                  <label>
+                    To
+                    <input
+                      value={brief.destinationAirports.join(", ")}
+                      onChange={(event) => setBrief({
+                        ...brief,
+                        destinationAirports: airportCodes(event.target.value)
+                      })}
+                    />
+                  </label>
+                </div>
+              )}
+              {brief.tripType !== "multi_city" && (
+                <div className="form-grid two">
+                  <label>
+                    Earliest departure
+                    <input
+                      type="date"
+                      value={brief.departureWindow.start}
+                      onChange={(event) => setBrief({
+                        ...brief,
+                        departureWindow: { ...brief.departureWindow, start: event.target.value }
+                      })}
+                    />
+                  </label>
+                  <label>
+                    Latest departure
+                    <input
+                      type="date"
+                      value={brief.departureWindow.end}
+                      onChange={(event) => setBrief({
+                        ...brief,
+                        departureWindow: { ...brief.departureWindow, end: event.target.value }
+                      })}
+                    />
+                  </label>
+                </div>
+              )}
+              {brief.tripType === "round_trip" && brief.stayNights && (
+                <div className="form-grid three">
+                  {(["minimum", "preferred", "maximum"] as const).map((key) => (
+                    <label key={key}>
+                      {label(key)} nights
+                      <input
+                        type="number"
+                        min={1}
+                        max={30}
+                        value={brief.stayNights![key]}
+                        onChange={(event) => setBrief({
+                          ...brief,
+                          stayNights: {
+                            ...brief.stayNights!,
+                            [key]: Number(event.target.value)
+                          }
+                        })}
+                      />
+                    </label>
+                  ))}
+                </div>
+              )}
+              <div className="form-grid two">
+                <label>
+                  Cabin
+                  <select value={brief.cabin} onChange={(event) => setBrief({
+                    ...brief,
+                    cabin: event.target.value
+                  })}>
+                    <option value="economy">Economy</option>
+                    <option value="premium_economy">Premium economy</option>
+                    <option value="business">Business</option>
+                    <option value="first">First</option>
+                  </select>
+                </label>
+                <label>
+                  Stops
+                  <select value={brief.maxStops} onChange={(event) => setBrief({
+                    ...brief,
+                    maxStops: Number(event.target.value)
+                  })}>
+                    <option value={0}>Direct only</option>
+                    <option value={1}>Up to 1</option>
+                    <option value={2}>Up to 2</option>
+                  </select>
+                </label>
+              </div>
+              <div className="form-grid two">
+                <label>
+                  Currency
+                  <input
+                    value={brief.currency}
+                    maxLength={3}
+                    pattern="[A-Za-z]{3}"
+                    onChange={(event) => setBrief({
+                      ...brief,
+                      currency: event.target.value.toUpperCase()
+                    })}
+                  />
+                </label>
+                <label>
+                  Maximum fare
+                  <input
+                    type="number"
+                    min={1}
+                    placeholder="No maximum"
+                    value={brief.maximumPrice ?? ""}
+                    onChange={(event) => setBrief({
+                      ...brief,
+                      maximumPrice: event.target.value ? Number(event.target.value) : null
+                    })}
+                  />
+                </label>
+              </div>
+              <label>
+                Preferred airlines for this Trip
+                <input
+                  value={brief.preferredAirlines.join(", ")}
+                  placeholder="KQ, BA"
+                  onChange={(event) => setBrief({
+                    ...brief,
+                    preferredAirlines: codes(event.target.value)
+                  })}
+                />
+              </label>
+              <label>
+                Avoid airlines for this Trip
+                <input
+                  value={brief.excludedAirlines.join(", ")}
+                  placeholder="VS"
+                  onChange={(event) => setBrief({
+                    ...brief,
+                    excludedAirlines: codes(event.target.value)
+                  })}
+                />
+              </label>
+              <label>
+                Notes for Captain
+                <textarea
+                  value={brief.context}
+                  maxLength={1000}
+                  placeholder="Timing or airport constraints"
+                  onChange={(event) => setBrief({ ...brief, context: event.target.value })}
+                />
+              </label>
+              {saveError && <p className="form-error" role="alert">{saveError}</p>}
+              <button className="save-button" disabled={busy}>
+                {busy ? "Saving…" : saved === "brief" ? "Trip updated" : "Update Trip"}
+              </button>
+            </form>
+          </div>
+        </details>
+      )}
+      <details className="settings-card settings-disclosure">
+        <summary>
+          <span><strong>Notifications</strong></span>
+          <em>{alertsEnabled ? "On" : "Off"}</em>
+        </summary>
+        <div className="settings-body">
+          <form onSubmit={(event) => void saveProfile(event, "notifications")}>
+            <label className="switch-setting">
+              <span><strong>Improvement alerts</strong><small>Initial results and meaningful improvements.</small></span>
+              <input
+                type="checkbox"
+                role="switch"
+                checked={alertsEnabled}
+                onChange={(event) => setAlertsEnabled(event.target.checked)}
+              />
+            </label>
+            <label>
+              Maximum alerts in 24 hours
+              <select
+                value={maxAlerts}
+                disabled={!alertsEnabled}
+                onChange={(event) => setMaxAlerts(Number(event.target.value) as 1 | 2)}
+              >
+                <option value={1}>1 improvement alert</option>
+                <option value={2}>2 improvement alerts</option>
+              </select>
+            </label>
+            <label className="switch-setting">
+              <span><strong>Quiet hours</strong><small>Hold Telegram fare alerts during this window.</small></span>
+              <input
+                type="checkbox"
+                role="switch"
+                checked={quietHoursEnabled}
+                onChange={(event) => setQuietHoursEnabled(event.target.checked)}
+              />
+            </label>
+            <div className="form-grid two">
+              <label>
+                From
+                <input
+                  type="time"
+                  step={3600}
+                  disabled={!quietHoursEnabled}
+                  value={`${String(quietStart).padStart(2, "0")}:00`}
+                  onChange={(event) => setQuietStart(Number(event.target.value.slice(0, 2)))}
+                />
+              </label>
+              <label>
+                Until
+                <input
+                  type="time"
+                  step={3600}
+                  disabled={!quietHoursEnabled}
+                  value={`${String(quietEnd).padStart(2, "0")}:00`}
+                  onChange={(event) => setQuietEnd(Number(event.target.value.slice(0, 2)))}
+                />
+              </label>
+            </div>
+            {saveError && <p className="form-error" role="alert">{saveError}</p>}
+            <button className="save-button" disabled={busy}>
+              {busy ? "Saving…" : saved === "notifications" ? "Saved" : "Save notifications"}
+            </button>
+          </form>
+        </div>
+      </details>
+      <details className="settings-card settings-disclosure">
+        <summary>
+          <span><strong>Flight preferences</strong></span>
+          <em>{label(ranking)}</em>
+        </summary>
+        <div className="settings-body">
+          <p>Ranking and airlines apply to every tracked Trip. Default currency applies only to future Trips.</p>
+          <form onSubmit={(event) => void saveProfile(event, "preferences")}>
+          <label>
+            Default currency
+            <input value={currency} maxLength={3} pattern="[A-Za-z]{3}" onChange={(event) => setCurrency(event.target.value)} />
+            <small>Captain never converts a fare between currencies.</small>
+          </label>
+          <label>
+            Timezone
+            <input
+              value={timeZone}
+              list="captain-timezones"
+              onChange={(event) => setTimeZone(event.target.value)}
+            />
+            <datalist id="captain-timezones">
+              <option value="Africa/Lagos" />
+              <option value="Africa/Dar_es_Salaam" />
+              <option value="Europe/London" />
+              <option value="America/New_York" />
+              <option value="UTC" />
+            </datalist>
+            <small>Used to resolve “today”, “tomorrow”, and weekdays in Telegram.</small>
+          </label>
+          <fieldset>
+            <legend>How should Captain rank flights?</legend>
+            <div className="ranking-options">
+              {(["cheapest", "balanced", "fastest"] as RankingMode[]).map((mode) => (
+                <label className={ranking === mode ? "checked" : ""} key={mode}>
+                  <input type="radio" name="ranking" checked={ranking === mode} onChange={() => setRanking(mode)} />
+                  <strong>{label(mode)}</strong>
+                  <span>{mode === "balanced" ? "Fare, time and stops" : mode === "cheapest" ? "Lowest verified fare" : "Shortest journey"}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <label>
+            Preferred airlines
+            <input value={preferred} placeholder="KQ, BA" onChange={(event) => setPreferred(event.target.value)} />
+          </label>
+          <label>
+            Avoid airlines
+            <input value={excluded} placeholder="VS" onChange={(event) => setExcluded(event.target.value)} />
+            <small>Any itinerary using an avoided airline is removed.</small>
+          </label>
+          {saveError && <p className="form-error" role="alert">{saveError}</p>}
+          <button className="save-button" disabled={busy}>
+            {busy ? "Saving…" : saved === "preferences" ? "Saved" : "Save preferences"}
+          </button>
+        </form>
+        </div>
+      </details>
+      {trip && (
+        <details className="settings-card settings-disclosure">
+          <summary>
+            <span><strong>Activity</strong></span>
+            <em>{tripData?.activity.length ?? 0}</em>
+          </summary>
+          <div className="settings-body">
+            {(tripData?.activity.length ?? 0) > 0 ? (
+              <div className="activity-list">
+                {tripData!.activity.map((item) => (
+                  <article key={item.id}>
+                    <i />
+                    <span>
+                      <strong>{activityLabel(item.eventType)}</strong>
+                      <small>{timestampLabel(item.createdAt)}</small>
+                    </span>
+                  </article>
+                ))}
+              </div>
+            ) : <p>Activity appears here as Captain works.</p>}
+          </div>
+        </details>
+      )}
+    </main>
+  );
 }
 
-function ChevronLeftIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>; }
-function ChevronRightIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>; }
-function CloseIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>; }
-function FilterIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 7h16M7 12h10M10 17h4" /></svg>; }
-function SearchIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></svg>; }
-function SettingsIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 9 19.36a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.08 14H3v-4h.08A1.7 1.7 0 0 0 4.64 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63 1.7 1.7 0 0 0 10 3.08V3h4v.08A1.7 1.7 0 0 0 15 4.64a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9 1.7 1.7 0 0 0 20.92 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z" /></svg>; }
-function TrackIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><circle cx="12" cy="12" r="8" /><path d="M12 2v3M22 12h-3M12 22v-3M2 12h3" /></svg>; }
-function PlaneIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m3 11 18-7-7 18-2.5-8.5L3 11Z" /><path d="m11.5 13.5 4-4" /></svg>; }
-function MicrophoneIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" /></svg>; }
-function ArrowUpIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m12 19V5m-6 6 6-6 6 6" /></svg>; }
-function BriefIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d="M7 5h10M7 10h10M7 15h6" /><path d="M5 2.8h14a2 2 0 0 1 2 2v14.4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4.8a2 2 0 0 1 2-2Z" /></svg>; }
-function ActivityIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>; }
+function CenteredState({ title, detail }: { title: string; detail: string }) {
+  return <main className="centered"><span className="brand-mark">C</span><h1>{title}</h1><p>{detail}</p></main>;
+}
+
+function ResultsEmpty() {
+  return (
+    <div className="results-empty">
+      <span>⌁</span>
+      <h2>No verified results yet</h2>
+      <p>Captain only shows fares when two web checks agree on the route, dates, segments, airline, cabin, price, currency and evidence.</p>
+    </div>
+  );
+}
+
+function rankOffers(offers: VerifiedOffer[], mode: RankingMode, preferred: string[]): VerifiedOffer[] {
+  if (offers.length === 0) return [];
+  const minimumPrice = Math.min(...offers.map((offer) => offer.price));
+  const positiveDurations = offers.map(durationSeconds).filter((value) => value > 0);
+  const minimumDuration = positiveDurations.length ? Math.min(...positiveDurations) : 1;
+  const maximumStops = Math.max(1, ...offers.map(stopCount));
+  const score = (offer: VerifiedOffer) => {
+    if (mode === "cheapest") return offer.price;
+    if (mode === "fastest") return durationSeconds(offer);
+    const priceRegret = Math.min(1, Math.max(0, offer.price / Math.max(minimumPrice, 0.001) - 1));
+    const timeRegret = Math.min(1, Math.max(0, durationSeconds(offer) / minimumDuration - 1));
+    return Math.max(0, priceRegret * .5 + timeRegret * .35 + stopCount(offer) / maximumStops * .15
+      - (preferred.includes(offer.primaryAirlineCode) ? .05 : 0));
+  };
+  const preferredTie = (offer: VerifiedOffer) =>
+    preferred.includes(offer.primaryAirlineCode) ? 0 : 1;
+  return [...offers].sort((left, right) => {
+    if (mode === "cheapest") {
+      return left.price - right.price
+        || durationSeconds(left) - durationSeconds(right)
+        || stopCount(left) - stopCount(right)
+        || preferredTie(left) - preferredTie(right)
+        || left.itineraryKey.localeCompare(right.itineraryKey);
+    }
+    if (mode === "fastest") {
+      return durationSeconds(left) - durationSeconds(right)
+        || left.price - right.price
+        || stopCount(left) - stopCount(right)
+        || preferredTie(left) - preferredTie(right)
+        || left.itineraryKey.localeCompare(right.itineraryKey);
+    }
+    return score(left) - score(right)
+      || preferredTie(left) - preferredTie(right)
+      || left.price - right.price
+      || durationSeconds(left) - durationSeconds(right)
+      || left.itineraryKey.localeCompare(right.itineraryKey);
+  });
+}
+
+function whyLabel(mode: RankingMode, offer: VerifiedOffer, offers: VerifiedOffer[]): string {
+  if (mode === "cheapest") return `Lowest verified fare; then time and stops break ties.`;
+  if (mode === "fastest") return `Shortest summed journey time; destination stays are excluded.`;
+  const cheapest = Math.min(...offers.map((item) => item.price));
+  const premium = cheapest > 0 ? Math.round((offer.price / cheapest - 1) * 100) : 0;
+  return `${premium > 0 ? `${premium}% above the lowest fare, with` : "Combines"} time and stop trade-offs.`;
+}
+
+function routeLabel(trip: NonNullable<TripPayload["trip"]>): string {
+  const legs = trip.brief.legs ?? [];
+  return trip.brief.tripType === "multi_city" && legs.length > 0
+    ? [legs[0]!.originAirports.join("/"), ...legs.map((leg) => leg.destinationAirports.join("/"))].join(" → ")
+    : `${trip.brief.originAirports.join("/")} → ${trip.brief.destinationAirports.join("/")}`;
+}
+
+function durationSeconds(offer: VerifiedOffer): number {
+  return Number(offer.snapshot.durationSeconds) || 0;
+}
+function stopCount(offer: VerifiedOffer): number {
+  return Number(offer.snapshot.stops) || 0;
+}
+function duration(offer: VerifiedOffer): string {
+  const seconds = durationSeconds(offer);
+  return seconds ? `${Math.floor(seconds / 3600)}h ${Math.round(seconds % 3600 / 60)}m` : "Time unavailable";
+}
+function stops(offer: VerifiedOffer): string {
+  const count = stopCount(offer);
+  return count === 0 ? "Nonstop" : `${count} stop${count === 1 ? "" : "s"}`;
+}
+function isMixed(offer: VerifiedOffer): boolean {
+  return offer.participatingAirlineCodes.length > 1;
+}
+function money(offer: VerifiedOffer): string {
+  try {
+    return new Intl.NumberFormat("en", { style: "currency", currency: offer.currency }).format(offer.price);
+  } catch {
+    return `${offer.currency} ${offer.priceAmount}`;
+  }
+}
+function relativeTime(value: string): string {
+  const minutes = Math.max(0, Math.round((Date.now() - Date.parse(value)) / 60_000));
+  if (minutes < 2) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours}h ago` : dateLabel(value.slice(0, 10));
+}
+function scheduleTime(value: string): string {
+  const difference = Date.parse(value) - Date.now();
+  if (difference <= 60_000) return "Due now";
+  const minutes = Math.round(difference / 60_000);
+  if (minutes < 60) return `In ${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `In ${hours}h` : dateLabel(value.slice(0, 10));
+}
+function timestampLabel(value: string): string {
+  return new Intl.DateTimeFormat("en", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+function activityLabel(eventType: string): string {
+  const labels: Record<string, string> = {
+    trip_created: "Trip tracking started",
+    trip_brief_updated: "Trip brief updated",
+    trip_pause: "Tracking paused",
+    trip_resume: "Tracking resumed",
+    trip_refresh: "Manual check requested",
+    trip_cancel: "Tracking stopped",
+    trip_complete: "Trip completed"
+  };
+  return labels[eventType] ?? label(eventType);
+}
+function dateLabel(value: string): string {
+  return new Intl.DateTimeFormat("en", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
+    .format(new Date(`${value}T12:00:00Z`));
+}
+function dateRangeLabel(start: string, end: string): string {
+  if (start === end) return dateLabel(start);
+  return `${dateLabel(start)} – ${dateLabel(end)}`;
+}
+function label(value: string): string {
+  return value.replaceAll("_", " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
+}

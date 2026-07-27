@@ -22,9 +22,10 @@ export default defineDynamic({
 
 async function buildContext(userId: string) {
   const services = await getCaptainServices();
-  const [conversation, trips, draft] = await Promise.all([
+  const [conversation, trips, trip, draft] = await Promise.all([
     services.platformStore.getConversation(userId, 0),
-    services.trips.list(userId),
+    services.platformStore.listTrips(userId),
+    services.platformStore.getActiveTrip(userId),
     services.tripPlanning.findOpen(userId)
   ]);
   return defineInstructions({
@@ -33,9 +34,14 @@ async function buildContext(userId: string) {
       `<conversation_summary>${escapeData(conversation.summary || "No summary yet.")}</conversation_summary>`,
       `<active_trip_id>${conversation.activeTripId ?? "none"}</active_trip_id>`,
       `<active_trip_draft>${escapeData(JSON.stringify(draft))}</active_trip_draft>`,
-      `<trips>${escapeData(JSON.stringify(trips))}</trips>`,
+      `<current_trip>${escapeData(JSON.stringify(trip))}</current_trip>`,
+      `<active_trips>${escapeData(JSON.stringify(
+        trips.filter((candidate) =>
+          !["cancelled", "completed", "archived"].includes(candidate.status)
+        )
+      ))}</active_trips>`,
       "Resolve references against this structured state first. Raw chat history is intentionally omitted.",
-      "Use get_recent_context only for a genuinely referential message that cannot be resolved from the active Trip or draft. If multiple Trips plausibly match, ask which one and create nothing."
+      "Use get_recent_context only for a genuinely referential message that cannot be resolved from the active Trip or draft."
     ].join("\n\n")
   });
 }

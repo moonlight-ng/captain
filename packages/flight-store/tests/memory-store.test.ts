@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildSearchSpecs, type CreateTripInput } from "@agents/flight-domain";
 import { MemoryCaptainPlatformStore } from "../src/index.js";
@@ -24,9 +24,45 @@ async function user(store: MemoryCaptainPlatformStore, telegramUserId: number) {
 }
 
 describe("Captain platform store", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it("activates every new Telegram user", async () => {
     const store = new MemoryCaptainPlatformStore();
     await expect(user(store, 1)).resolves.toMatchObject({ status: "active", telegramUserId: 1 });
+  });
+
+  it("stores the traveller timezone used by conversational date resolution", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    const ada = await user(store, 1);
+    await expect(store.updateUserTimezone(
+      ada.id,
+      "Africa/Lagos",
+      new Date("2026-08-01T12:00:00Z")
+    )).resolves.toMatchObject({ timezone: "Africa/Lagos" });
+    await expect(store.getUser(ada.id)).resolves.toMatchObject({
+      timezone: "Africa/Lagos"
+    });
+  });
+
+  it("enforces the configured public beta capacity", async () => {
+    vi.stubEnv("CAPTAIN_BETA_USER_LIMIT", "1");
+    const store = new MemoryCaptainPlatformStore();
+    await user(store, 1);
+    await expect(user(store, 2)).rejects.toMatchObject({
+      name: "BetaCapacityError",
+      limit: 1
+    });
+  });
+
+  it("keeps new travellers out until the launch gate is explicitly opened", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    const existing = await user(store, 1);
+    vi.stubEnv("CAPTAIN_PUBLIC_BETA_ENABLED", "false");
+
+    await expect(user(store, 1)).resolves.toMatchObject({ id: existing.id });
+    await expect(user(store, 2)).rejects.toMatchObject({
+      name: "BetaLaunchGateError"
+    });
   });
 
   it("does not return history when a caller requests structured state only", async () => {
@@ -90,8 +126,9 @@ describe("Captain platform store", () => {
     await store.scheduleDueSearchRuns(new Date("2026-08-01T12:00:00Z"), 900_000, 100);
     const run = (await store.claimSearchRuns("worker-1", new Date("2026-08-01T12:00:00Z"), 180_000, 1))[0]!;
     await store.completeSearchRun("worker-1", run.id, "orq_1", [{
-      itineraryKey: "BA982|LHR|BER", provider: "duffel", providerOfferId: "off_1",
+      itineraryKey: "BA982|LHR|BER", provider: "openai_web", providerOfferId: "off_1",
       providerSearchId: "orq_1", price: 100, currency: "GBP",
+      ...verifiedMetadata("100.00", "BA"),
       expiresAt: "2026-08-01T12:30:00Z", observedAt: "2026-08-01T12:00:01Z",
       snapshot: { route: "LHR → BER", airlineCodes: ["BA"], stops: 0, durationSeconds: 7_200, segments: [] }
     }], new Date("2026-08-01T12:00:01Z"));
@@ -140,8 +177,9 @@ describe("Captain platform store", () => {
     await store.scheduleDueSearchRuns(new Date("2026-08-01T12:00:00Z"), 900_000, 100);
     const run = (await store.claimSearchRuns("worker-1", new Date("2026-08-01T12:00:00Z"), 180_000, 1))[0]!;
     await store.completeSearchRun("worker-1", run.id, "orq_1", [{
-      itineraryKey: "BA982|LHR|BER", provider: "duffel", providerOfferId: "off_1",
+      itineraryKey: "BA982|LHR|BER", provider: "openai_web", providerOfferId: "off_1",
       providerSearchId: "orq_1", price: 100, currency: "GBP",
+      ...verifiedMetadata("100.00", "BA"),
       expiresAt: "2026-08-01T12:30:00Z", observedAt: "2026-08-01T12:00:01Z",
       snapshot: { route: "LHR → BER", airlineCodes: ["BA"], stops: 0, durationSeconds: 7_200, segments: [] }
     }], new Date("2026-08-01T12:00:01Z"));
@@ -158,7 +196,7 @@ describe("Captain platform store", () => {
     const ada = await user(store, 1);
     const input: CreateTripInput = {
       ...tripInput,
-      cadenceHours: 1,
+      cadenceHours: 3,
       brief: {
         ...tripInput.brief,
         departureWindow: { start: "2026-09-10", end: "2026-09-19" }
@@ -171,13 +209,13 @@ describe("Captain platform store", () => {
       new Date("2026-08-01T12:00:00Z")
     );
 
-    expect(await store.scheduleDueSearchRuns(new Date("2026-08-01T12:00:00Z"), 900_000, 100)).toBe(6);
+    expect(await store.scheduleDueSearchRuns(new Date("2026-08-01T12:00:00Z"), 900_000, 100)).toBe(1);
     expect(await store.getWatch(ada.id, created.trip.id)).toMatchObject({
       nextCheckAt: "2026-08-02T00:00:00.000Z"
     });
   });
 
-  it("replaces current results, keeps only 25 compact offers, and preserves price-drop context", async () => {
+  it("replaces current results, keeps only 20 compact offers, and preserves price-drop context", async () => {
     const store = new MemoryCaptainPlatformStore();
     const ada = await user(store, 1);
     const specs = buildSearchSpecs(tripInput.brief, false);
@@ -190,11 +228,12 @@ describe("Captain platform store", () => {
       "orq_1",
       Array.from({ length: 40 }, (_, index) => ({
         itineraryKey: `BA${100 + index}|LHR|BER`,
-        provider: "duffel" as const,
+        provider: "openai_web" as const,
         providerOfferId: `old_${index}`,
         providerSearchId: "orq_1",
         price: 200 + index,
         currency: "GBP",
+        ...verifiedMetadata(`${200 + index}.00`, "BA"),
         expiresAt: "2026-08-02T12:30:00Z",
         observedAt: "2026-08-01T12:00:01Z",
         snapshot: {
@@ -206,18 +245,19 @@ describe("Captain platform store", () => {
     );
     expect(await store.evaluateTripsForSearchSpec(firstRun.searchSpecId, new Date("2026-08-01T12:00:02Z"))).toBe(1);
     const firstOffers = await store.listTripOffers(ada.id, created.trip.id, new Date("2026-08-01T12:00:03Z"));
-    expect(firstOffers).toHaveLength(25);
+    expect(firstOffers).toHaveLength(20);
     expect(firstOffers.every((offer) => !("raw" in offer.snapshot))).toBe(true);
 
     await store.scheduleDueSearchRuns(new Date("2026-08-02T00:00:00Z"), 900_000, 100);
     const secondRun = (await store.claimSearchRuns("worker-1", new Date("2026-08-02T00:00:00Z"), 180_000, 1))[0]!;
     await store.completeSearchRun("worker-1", secondRun.id, "orq_2", Array.from({ length: 3 }, (_, index) => ({
       itineraryKey: `BA${100 + index}|LHR|BER`,
-      provider: "duffel" as const,
+      provider: "openai_web" as const,
       providerOfferId: `new_${index}`,
       providerSearchId: "orq_2",
       price: 100 + index,
       currency: "GBP",
+      ...verifiedMetadata(`${100 + index}.00`, "BA"),
       expiresAt: "2026-08-02T12:30:00Z",
       observedAt: "2026-08-02T00:00:01Z",
       snapshot: {
@@ -230,4 +270,69 @@ describe("Captain platform store", () => {
     expect(await store.evaluateTripsForSearchSpec(secondRun.searchSpecId, new Date("2026-08-02T00:00:03Z"))).toBe(1);
     expect(await store.listPendingNotifications(new Date("2026-08-02T08:00:00Z"), 10)).toHaveLength(2);
   });
+
+  it("caps improvement alerts at two in a rolling 24 hours", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    const ada = await user(store, 1);
+    const input: CreateTripInput = {
+      ...tripInput,
+      cadenceHours: 3,
+      brief: {
+        ...tripInput.brief,
+        tripType: "one_way",
+        departureWindow: { start: "2026-08-05", end: "2026-08-05" },
+        stayNights: null
+      }
+    };
+    const specs = buildSearchSpecs(input.brief, false);
+    await store.createTrip(ada.id, input, specs, new Date("2026-08-01T12:00:00Z"));
+    const changes: number[] = [];
+
+    for (const [index, price] of [100, 90, 80, 70].entries()) {
+      const now = new Date(Date.parse("2026-08-01T12:00:00Z") + index * 3 * 3_600_000);
+      await store.scheduleDueSearchRuns(now, 900_000, 100);
+      const run = (await store.claimSearchRuns("worker-1", now, 180_000, 1))[0]!;
+      await store.completeSearchRun("worker-1", run.id, `orq_${index}`, [{
+        itineraryKey: "BA982|LHR|BER",
+        provider: "openai_web",
+        providerOfferId: `offer_${index}`,
+        providerSearchId: `orq_${index}`,
+        price,
+        currency: "GBP",
+        ...verifiedMetadata(`${price}.00`, "BA"),
+        expiresAt: null,
+        observedAt: now.toISOString(),
+        snapshot: {
+          route: "LHR → BER",
+          airlineCodes: ["BA"],
+          flightNumbers: ["BA982"],
+          stops: 0,
+          durationSeconds: 7_200,
+          segments: []
+        }
+      }], now);
+      changes.push(await store.evaluateTripsForSearchSpec(run.searchSpecId, now));
+    }
+
+    expect(changes).toEqual([1, 1, 1, 0]);
+    expect(await store.listPendingNotifications(
+      new Date("2026-08-01T22:00:00Z"),
+      10
+    )).toHaveLength(3);
+  });
 });
+
+function verifiedMetadata(priceAmount: string, airlineCode: string) {
+  return {
+    priceAmount,
+    fareBasis: "one_adult_total" as const,
+    primaryAirlineCode: airlineCode,
+    participatingAirlineCodes: [airlineCode],
+    evidence: [{ url: "https://ba.com/flight", title: "Verified fare", domain: "ba.com" }],
+    discoveryResponseId: "resp_discovery",
+    verificationResponseId: "resp_verification",
+    promptVersion: "test-v1",
+    model: "gpt-5.6-sol",
+    verifiedAt: "2026-08-01T12:00:01Z"
+  };
+}

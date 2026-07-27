@@ -7,9 +7,14 @@ import { requireCaptainUser } from "../lib/principal.js";
 
 export default defineTool({
   description: "Pause, resume, refresh, cancel, or complete a Trip. Refresh wakes its Watch; the orchestration worker performs the search asynchronously.",
-  inputSchema: z.object({ tripId: z.uuid(), action: tripActionSchema }).strict(),
+  inputSchema: z.object({ tripId: z.uuid().optional(), action: tripActionSchema }).strict(),
   async execute({ tripId, action }, ctx) {
     const services = await getCaptainServices();
-    return services.trips.action(requireCaptainUser(ctx), tripId, action);
+    const userId = requireCaptainUser(ctx);
+    const trip = tripId
+      ? await services.platformStore.getTrip(userId, tripId)
+      : await services.platformStore.getActiveTrip(userId);
+    if (!trip) throw new Error("No active Trip");
+    return services.trips.action(userId, trip.id, action);
   }
 });

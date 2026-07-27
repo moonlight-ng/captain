@@ -1,24 +1,18 @@
 import {
-  DisabledPilotResearchClient,
-  HttpPilotResearchClient
-} from "../bridge/pilot-client.js";
-import { MemoryCaptainPlatformStore, PostgresCaptainPlatformStore, type CaptainPlatformStore } from "@agents/flight-store";
-import { FlightAgentRunner } from "../domain/runner.js";
-import { FlightAgentService } from "../domain/service.js";
-import { DuffelClient } from "../flights/duffel-client.js";
-import { MemoryFlightAgentStore } from "../store/memory-store.js";
-import { PostgresFlightAgentStore } from "../store/postgres-store.js";
-import type { FlightAgentStore } from "../store/contracts.js";
-import { loadEnv, type CaptainEnv } from "./env.js";
-import { TripService } from "../trips/service.js";
+  MemoryCaptainPlatformStore,
+  PostgresCaptainPlatformStore,
+  type CaptainPlatformStore
+} from "@agents/flight-store";
+
+import { CaptainWebAuth } from "../auth/web-session.js";
 import { TripPlanningService } from "../trip-planning/service.js";
-import { tripDashboardUrl } from "../auth/trip-dashboard-token.js";
+import { TripService } from "../trips/service.js";
+import { loadEnv, type CaptainEnv } from "./env.js";
 
 export type CaptainServices = {
   env: CaptainEnv;
-  store: FlightAgentStore;
-  agents: FlightAgentService;
   platformStore: CaptainPlatformStore;
+  auth: CaptainWebAuth;
   trips: TripService;
   tripPlanning: TripPlanningService;
 };
@@ -35,47 +29,31 @@ export function getCaptainServices(): Promise<CaptainServices> {
 
 export async function createCaptainServices(): Promise<CaptainServices> {
   const env = loadEnv();
-  const store: FlightAgentStore = env.databaseUrl
-    ? await PostgresFlightAgentStore.connect(env.databaseUrl)
-    : new MemoryFlightAgentStore();
-  const flights = env.duffelAccessToken
-    ? new DuffelClient({
-        accessToken: env.duffelAccessToken,
-        baseUrl: env.duffelBaseUrl,
-        timeoutMs: env.duffelTimeoutMs,
-        supplierTimeoutMs: env.duffelSupplierTimeoutMs
-      })
-    : null;
-  const research = env.pilotBaseUrl && env.captainToPilotSecret
-    ? new HttpPilotResearchClient({
-        baseUrl: env.pilotBaseUrl,
-        secret: env.captainToPilotSecret
-      })
-    : new DisabledPilotResearchClient();
-  const runner = new FlightAgentRunner({ store, flights, research });
+  process.env.CAPTAIN_BETA_USER_LIMIT = String(env.betaUserLimit);
+  process.env.CAPTAIN_PUBLIC_BETA_ENABLED = String(env.publicBetaEnabled);
   const platformStore: CaptainPlatformStore = env.databaseUrl
     ? PostgresCaptainPlatformStore.connect(env.databaseUrl, 8)
     : new MemoryCaptainPlatformStore();
-  const trips = new TripService({ store: platformStore, liveMode: env.duffelLiveMode });
-  const dashboardUrlForTrip = (userId: string, tripId: string) => tripDashboardUrl({
+  const auth = new CaptainWebAuth({
     publicUrl: env.publicUrl,
-    secret: env.captainSessionSecret!,
-    userId,
-    tripId
+    secret: env.telegramBotToken ?? "captain-local-design-secret"
   });
+  const trips = new TripService({ store: platformStore });
   return {
     env,
-    store,
-    agents: new FlightAgentService({ store, runner }),
     platformStore,
+    auth,
     trips,
     tripPlanning: new TripPlanningService({
       store: platformStore,
       trips,
-      liveMode: env.duffelLiveMode,
-      model: env.aiModel,
+      model: env.tripInterpreterModel,
       apiKey: env.aiGatewayApiKey,
-      dashboardUrlForTrip
+      dashboardUrlForTrip: (userId, tripId) => {
+        const url = new URL(auth.createAccessLink(userId, "/trip"));
+        url.searchParams.set("trip", tripId);
+        return url.toString();
+      }
     })
   };
 }

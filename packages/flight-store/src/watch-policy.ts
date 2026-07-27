@@ -1,12 +1,12 @@
 import type { CompletedProviderOffer } from "./contracts.js";
 
-export const MAX_RETAINED_OFFERS_PER_SEARCH = 25;
-export const DISCOVERY_SEARCH_SPEC_LIMIT = 6;
-export const TRACKING_SEARCH_SPEC_LIMIT = 3;
+export const MAX_RETAINED_OFFERS_PER_SEARCH = 20;
+export const DISCOVERY_SEARCH_SPEC_LIMIT = 1;
+export const TRACKING_SEARCH_SPEC_LIMIT = 1;
 export const CURRENT_OFFER_RETENTION_MS = 7 * 86_400_000;
 export const PRICE_HISTORY_RETENTION_MS = 90 * 86_400_000;
 
-const CHEAPEST_OFFER_SLOTS = 15;
+const CHEAPEST_OFFER_SLOTS = 12;
 const AIRLINE_DIVERSITY_SLOTS = MAX_RETAINED_OFFERS_PER_SEARCH - CHEAPEST_OFFER_SLOTS;
 
 export function retainSearchOffers(offers: CompletedProviderOffer[]): CompletedProviderOffer[] {
@@ -60,14 +60,13 @@ export function adaptiveWatchIntervalMs(cadenceHours: number, departureStart: st
     : 0;
   const adaptiveFloor = daysUntilDeparture < 0
     ? 24
-    : daysUntilDeparture > 90
-      ? 24
-      : daysUntilDeparture > 30
+    : daysUntilDeparture > 30
         ? 12
         : daysUntilDeparture > 7
           ? 6
           : 3;
-  return Math.max(cadenceHours, adaptiveFloor) * 3_600_000;
+  void cadenceHours;
+  return adaptiveFloor * 3_600_000;
 }
 
 function compareOffers(left: CompletedProviderOffer, right: CompletedProviderOffer): number {

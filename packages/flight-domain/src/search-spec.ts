@@ -1,19 +1,27 @@
 import { createHash } from "node:crypto";
 
+import type { FlightSearchProviderId } from "./provider.js";
 import type { TripBrief } from "./trip.js";
-import { MAX_SEARCH_COMBINATIONS } from "./trip.js";
 
-export type SearchSlice = { origin: string; destination: string; departureDate: string };
+export type SearchSlice = {
+  originAirports: string[];
+  destinationAirports: string[];
+  departureStart: string;
+  departureEnd: string;
+};
 
 export type SearchSpecRequest = {
-  provider: "duffel";
-  apiVersion: "v2";
-  liveMode: boolean;
+  provider: FlightSearchProviderId;
+  apiVersion: "v1";
+  tripType: TripBrief["tripType"];
   slices: SearchSlice[];
-  passengers: Array<{ type: "adult" | "infant_without_seat" } | { age: number }>;
+  stayNights: TripBrief["stayNights"];
+  passenger: { adults: 1; childrenAges: []; infants: 0 };
   cabin: TripBrief["cabin"];
   maxConnections: number;
-  fareContext: string;
+  currency: string;
+  maximumPrice: number | null;
+  fareContext: "public_beta";
 };
 
 export type SearchSpec = {
@@ -25,7 +33,7 @@ export type SearchSpec = {
 export type SearchRun = {
   id: string;
   searchSpecId: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "deferred";
   attempt: number;
   claimedBy: string | null;
   leaseExpiresAt: string | null;
@@ -36,90 +44,35 @@ export type SearchRun = {
   error: string | null;
 };
 
-export function buildSearchSpecs(brief: TripBrief, liveMode: boolean): SearchSpec[] {
-  if (brief.tripType === "multi_city") {
-    return multiCityRequests(brief, liveMode).map((request) => {
-      const key = searchSpecKey(request);
-      return { id: key, key, request };
-    });
-  }
-  const dates = centerOut(dateRange(brief.departureWindow.start, brief.departureWindow.end));
-  const stayLengths = brief.tripType === "round_trip" && brief.stayNights
-    ? unique([brief.stayNights.preferred, brief.stayNights.minimum, brief.stayNights.maximum])
-    : [null];
-  const requests: SearchSpecRequest[] = [];
-  for (const departureDate of dates) {
-    for (const destination of brief.destinationAirports) {
-      for (const origin of brief.originAirports) {
-        for (const nights of stayLengths) {
-          const slices: SearchSlice[] = [{ origin, destination, departureDate }];
-          if (nights !== null) {
-            slices.push({ origin: destination, destination: origin, departureDate: addDays(departureDate, nights) });
-          }
-          requests.push({
-            provider: "duffel",
-            apiVersion: "v2",
-            liveMode,
-            slices,
-            passengers: [
-              ...Array.from({ length: brief.travellers.adults }, () => ({ type: "adult" as const })),
-              ...brief.travellers.childrenAges.map((age) => ({ age })),
-              ...Array.from({ length: brief.travellers.infants }, () => ({ type: "infant_without_seat" as const }))
-            ],
-            cabin: brief.cabin,
-            maxConnections: brief.maxStops,
-            fareContext: "public"
-          });
-        }
-      }
-    }
-  }
-  return requests.slice(0, MAX_SEARCH_COMBINATIONS).map((request) => {
-    const key = searchSpecKey(request);
-    return { id: key, key, request };
-  });
-}
-
-function multiCityRequests(brief: TripBrief, liveMode: boolean): SearchSpecRequest[] {
-  const requests: SearchSpecRequest[] = [];
-  const legs = brief.legs ?? [];
-  const passengers = [
-    ...Array.from({ length: brief.travellers.adults }, () => ({ type: "adult" as const })),
-    ...brief.travellers.childrenAges.map((age) => ({ age })),
-    ...Array.from({ length: brief.travellers.infants }, () => ({ type: "infant_without_seat" as const }))
-  ];
-
-  const visit = (legIndex: number, slices: SearchSlice[]): void => {
-    if (requests.length >= MAX_SEARCH_COMBINATIONS) return;
-    if (legIndex === legs.length) {
-      requests.push({
-        provider: "duffel",
-        apiVersion: "v2",
-        liveMode,
-        slices,
-        passengers,
-        cabin: brief.cabin,
-        maxConnections: brief.maxStops,
-        fareContext: "public"
-      });
-      return;
-    }
-    const leg = legs[legIndex]!;
-    const previous = slices.at(-1);
-    for (const departureDate of centerOut(dateRange(leg.departureWindow.start, leg.departureWindow.end))) {
-      if (previous && departureDate < previous.departureDate) continue;
-      for (const destination of leg.destinationAirports) {
-        for (const origin of leg.originAirports) {
-          if (previous && previous.destination !== origin) continue;
-          visit(legIndex + 1, [...slices, { origin, destination, departureDate }]);
-          if (requests.length >= MAX_SEARCH_COMBINATIONS) return;
-        }
-      }
-    }
+export function buildSearchSpecs(brief: TripBrief, _liveMode = true): SearchSpec[] {
+  const slices: SearchSlice[] = brief.tripType === "multi_city"
+    ? (brief.legs ?? []).map((leg) => ({
+        originAirports: leg.originAirports,
+        destinationAirports: leg.destinationAirports,
+        departureStart: leg.departureWindow.start,
+        departureEnd: leg.departureWindow.end
+      }))
+    : [{
+        originAirports: brief.originAirports,
+        destinationAirports: brief.destinationAirports,
+        departureStart: brief.departureWindow.start,
+        departureEnd: brief.departureWindow.end
+      }];
+  const request: SearchSpecRequest = {
+    provider: "openai_web",
+    apiVersion: "v1",
+    tripType: brief.tripType,
+    slices,
+    stayNights: brief.stayNights,
+    passenger: { adults: 1, childrenAges: [], infants: 0 },
+    cabin: brief.cabin,
+    maxConnections: brief.maxStops,
+    currency: brief.currency,
+    maximumPrice: brief.maximumPrice,
+    fareContext: "public_beta"
   };
-
-  visit(0, []);
-  return requests;
+  const key = searchSpecKey(request);
+  return [{ id: key, key, request }];
 }
 
 export function searchSpecKey(request: SearchSpecRequest): string {
@@ -135,37 +88,4 @@ export function stableJson(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
-}
-
-function dateRange(start: string, end: string): string[] {
-  const dates: string[] = [];
-  for (
-    let current = new Date(`${start}T00:00:00.000Z`);
-    current.getTime() <= Date.parse(`${end}T00:00:00.000Z`);
-    current = new Date(current.getTime() + 86_400_000)
-  ) {
-    dates.push(current.toISOString().slice(0, 10));
-  }
-  return dates;
-}
-
-function addDays(value: string, days: number): string {
-  return new Date(Date.parse(`${value}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10);
-}
-
-function centerOut<T>(values: T[]): T[] {
-  if (values.length < 3) return values;
-  const middle = Math.floor((values.length - 1) / 2);
-  const result: T[] = [];
-  for (let distance = 0; result.length < values.length; distance += 1) {
-    const before = middle - distance;
-    const after = middle + distance;
-    if (before >= 0) result.push(values[before]!);
-    if (distance > 0 && after < values.length) result.push(values[after]!);
-  }
-  return result;
-}
-
-function unique<T>(values: T[]): T[] {
-  return [...new Set(values)];
 }

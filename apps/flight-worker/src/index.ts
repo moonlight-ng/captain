@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 
 import { PostgresCaptainPlatformStore } from "@agents/flight-store";
 import { logEvent } from "@agents/observability";
-import { DuffelClient } from "@agents/provider-duffel";
+import { OpenAIWebFlightSearchProvider } from "@agents/provider-web";
 
 import { loadWorkerEnv } from "./env.js";
 import { FlightWorker } from "./worker.js";
@@ -11,8 +11,16 @@ const env = loadWorkerEnv();
 const store = PostgresCaptainPlatformStore.connect(env.databaseUrl, 6);
 const worker = new FlightWorker({
   store,
-  duffel: new DuffelClient({ accessToken: env.duffelAccessToken, baseUrl: env.duffelBaseUrl }),
+  provider: new OpenAIWebFlightSearchProvider({
+    apiKey: env.openaiApiKey,
+    baseUrl: env.openaiBaseUrl,
+    model: env.openaiModel,
+    approvedDomains: env.approvedDomains
+  }),
   telegramBotToken: env.telegramBotToken,
+  captainPublicUrl: env.captainPublicUrl,
+  trackingEnabled: env.trackingEnabled,
+  dailyResponseLimit: env.dailyResponseLimit,
   workerId: env.workerId,
   leaseMs: env.leaseMs,
   freshnessMs: env.freshnessMs,

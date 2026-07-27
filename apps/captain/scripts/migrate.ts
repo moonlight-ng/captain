@@ -9,37 +9,43 @@ if (!databaseUrl) throw new Error("DATABASE_URL is required for migrations");
 
 const sql = postgres(databaseUrl, { max: 1 });
 try {
-  // Bootstrap the migration ledger so a brand-new Captain database can be
-  // provisioned with this command alone. Migration 001 repeats these DDL
-  // statements idempotently for legacy installations.
-  await sql`create schema if not exists flight_agent`;
+  await sql`create schema if not exists captain`;
   await sql`
-    create table if not exists flight_agent.schema_migrations (
+    create table if not exists captain.schema_migrations (
       version text primary key,
       applied_at timestamptz not null default now()
     )
   `;
+  const legacyLedger = await sql<Array<{ ledger: string | null }>>`
+    select to_regclass('flight_agent.schema_migrations')::text as ledger
+  `;
+  if (legacyLedger[0]?.ledger) {
+    await sql.unsafe(`
+      insert into captain.schema_migrations (version, applied_at)
+      select version, applied_at from flight_agent.schema_migrations
+      on conflict (version) do nothing
+    `);
+  }
   const migrationDirectory = resolve("migrations");
   const files = (await readdir(migrationDirectory))
     .filter((file) => file.endsWith(".sql"))
     .sort();
   for (const file of files) {
     const applied = await sql<{ version: string }[]>`
-      select version from flight_agent.schema_migrations where version = ${file}
+      select version from captain.schema_migrations where version = ${file}
     `;
     if (applied.length > 0) continue;
     const body = await readFile(resolve(migrationDirectory, file), "utf8");
     await sql.begin(async (transaction) => {
       await transaction.unsafe(body);
       await transaction`
-        insert into flight_agent.schema_migrations (version) values (${file})
+        insert into captain.schema_migrations (version) values (${file})
         on conflict (version) do nothing
       `;
     });
     console.info(`Applied ${file}`);
   }
   await backfillTripSearchSpecs();
-  await reconcileLegacyMigration();
 } finally {
   await sql.end({ timeout: 5 });
 }
@@ -53,9 +59,8 @@ async function backfillTripSearchSpecs(): Promise<void> {
       select 1 from captain.watch_search_specs link where link.watch_id = watch.id
     )
   `;
-  const liveMode = process.env.DUFFEL_LIVE_MODE?.trim().toLowerCase() === "true";
   for (const trip of trips) {
-    const specs = buildSearchSpecs(tripBriefSchema.parse(trip.brief), liveMode);
+    const specs = buildSearchSpecs(tripBriefSchema.parse(trip.brief));
     await sql.begin(async (transaction) => {
       for (const spec of specs) {
         await transaction`
@@ -71,18 +76,4 @@ async function backfillTripSearchSpecs(): Promise<void> {
     });
   }
   if (trips.length > 0) console.info(`Backfilled search specifications for ${trips.length} Trips`);
-}
-
-async function reconcileLegacyMigration(): Promise<void> {
-  const [counts] = await sql<Array<{ agents: string; aliases: string; observations: string; migrated_observations: string }>>`
-    select
-      (select count(*)::text from flight_agent.agents) as agents,
-      (select count(*)::text from captain.legacy_agent_aliases) as aliases,
-      (select count(*)::text from flight_agent.price_observations) as observations,
-      (select count(*)::text from captain.price_observations where search_run_id is null) as migrated_observations
-  `;
-  if (!counts || counts.agents !== counts.aliases || counts.observations !== counts.migrated_observations) {
-    throw new Error(`Captain legacy migration reconciliation failed: ${JSON.stringify(counts ?? {})}`);
-  }
-  console.info(`Reconciled ${counts.agents} legacy Trips and ${counts.observations} price observations`);
 }

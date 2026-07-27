@@ -27,13 +27,13 @@ describe("efficient watch policy", () => {
     expect(new Set(retained.flatMap((offer) => offer.snapshot.airlineCodes as string[])).size).toBeGreaterThan(1);
   });
 
-  it("slows distant watches without making a configured cadence more aggressive", () => {
+  it("uses the public beta's exact adaptive 12, 6, and 3 hour schedule", () => {
     const now = new Date("2026-08-01T00:00:00Z");
-    expect(adaptiveWatchIntervalMs(1, "2027-01-15", now)).toBe(24 * 3_600_000);
+    expect(adaptiveWatchIntervalMs(1, "2027-01-15", now)).toBe(12 * 3_600_000);
     expect(adaptiveWatchIntervalMs(1, "2026-09-15", now)).toBe(12 * 3_600_000);
     expect(adaptiveWatchIntervalMs(1, "2026-08-20", now)).toBe(6 * 3_600_000);
     expect(adaptiveWatchIntervalMs(1, "2026-08-05", now)).toBe(3 * 3_600_000);
-    expect(adaptiveWatchIntervalMs(12, "2026-08-05", now)).toBe(12 * 3_600_000);
+    expect(adaptiveWatchIntervalMs(12, "2026-08-05", now)).toBe(3 * 3_600_000);
   });
 });
 
@@ -41,11 +41,21 @@ function providerOffer(index: number): CompletedProviderOffer {
   const airlineCode = ["BA", "KL", "LH", "AF", "SK"][index % 5]!;
   return {
     itineraryKey: `${airlineCode}${100 + index}|LHR|BER|${index}`,
-    provider: "duffel",
+    provider: "openai_web",
     providerOfferId: `off_${index}`,
     providerSearchId: "orq_1",
     price: 100 + index,
+    priceAmount: `${100 + index}.00`,
     currency: "GBP",
+    fareBasis: "one_adult_total",
+    primaryAirlineCode: airlineCode,
+    participatingAirlineCodes: [airlineCode],
+    evidence: [{ url: "https://example.com/flight", title: "Verified fare", domain: "example.com" }],
+    discoveryResponseId: "resp_discovery",
+    verificationResponseId: "resp_verification",
+    promptVersion: "test-v1",
+    model: "gpt-5.6-sol",
+    verifiedAt: "2026-08-01T12:00:01Z",
     expiresAt: "2026-08-01T12:30:00Z",
     observedAt: "2026-08-01T12:00:01Z",
     snapshot: {
