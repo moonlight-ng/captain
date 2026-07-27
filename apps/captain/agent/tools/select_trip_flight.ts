@@ -7,15 +7,20 @@ import { requireCaptainUser } from "../lib/principal.js";
 export default defineTool({
   description: "Save or remove one discovered flight itinerary from a Trip for the traveller. Use the exact itineraryKey returned by get_trip.",
   inputSchema: z.object({
-    tripId: z.uuid(),
+    tripId: z.uuid().optional(),
     itineraryKey: z.string().trim().min(1).max(500),
     selected: z.boolean().default(true)
   }).strict(),
   async execute({ tripId, itineraryKey, selected }, ctx) {
     const services = await getCaptainServices();
+    const userId = requireCaptainUser(ctx);
+    const trip = tripId
+      ? await services.platformStore.getTrip(userId, tripId)
+      : await services.platformStore.getActiveTrip(userId);
+    if (!trip) throw new Error("No active Trip");
     const result = await services.trips.selectFlight(
-      requireCaptainUser(ctx),
-      tripId,
+      userId,
+      trip.id,
       itineraryKey,
       selected
     );

@@ -10,7 +10,7 @@ const identityRules = {
     /captain_principal/u,
     /captain-telegram-webhook/u,
     /["'`]captain\./u,
-    /\bCAPTAIN_(?!BASE_URL\b|TO_PILOT_SECRET\b)/u,
+    /\bCAPTAIN_/u,
     /(?:service|agent_id):\s*["']captain["']/u
   ],
   captain: [
@@ -53,14 +53,8 @@ for (const app of apps) {
 // Product identities use Dancing Robots-namespaced Fly deployment identities.
 await checkDeploymentIdentity("pilot", "dr-pilot");
 await checkDeploymentIdentity("captain", "dr-captain");
-await checkEnvironmentOwnership("pilot", new Set([
-  "CAPTAIN_BASE_URL",
-  "CAPTAIN_TO_PILOT_SECRET"
-]));
-await checkEnvironmentOwnership("captain", new Set([
-  "PILOT_BASE_URL",
-  "PILOT_TO_CAPTAIN_SECRET"
-]));
+await checkEnvironmentOwnership("pilot", new Set());
+await checkEnvironmentOwnership("captain", new Set());
 
 if (failures.length > 0) {
   console.error(failures.join("\n"));

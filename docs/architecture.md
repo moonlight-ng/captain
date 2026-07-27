@@ -1,61 +1,62 @@
-# Pilot + Captain architecture
+# Captain 1.0 architecture
 
-## Deployment and data boundaries
+## Product and deployment boundaries
 
-`apps/pilot`, `apps/captain`, and `apps/flight-worker` are independently
-deployable. Pilot keeps its private Supabase project, secrets, prompt,
-tools, Telegram webhook, and `dr-pilot` Fly app. Its Markdown state uses
-the `pilot_data` volume mounted at `/data`, with memory under `/data/pilot`.
-Captain and the worker share Captain’s PostgreSQL database and public Telegram
-bot token, but run as separate processes. No app imports another app.
+`apps/captain` and `apps/flight-worker` are independently deployable and share
+Captain's PostgreSQL database and public Telegram bot token. Captain owns
+onboarding, the one-active-Trip flow, secure web sessions, and the dashboard.
+The worker owns scheduled fare research and Telegram alerts.
 
-Shared packages contain only stable cross-runtime contracts and deterministic
-logic. Pilot already consumes the shared Trip brief and observability packages;
-Captain and the worker share the full flight domain and store contracts.
+Pilot is a separate private product. It has no Captain client, flight tools,
+shared credentials, redirects, or access to Captain profiles and Trips.
 
-## Conversation and Trip flow
+## Profile, Trip, and authentication flow
 
-Captain validates Telegram’s webhook secret, resolves the Telegram user ID to
-an active Captain user, and claims a durable message idempotency key. New users
-are active by default; explicitly suspended users cannot continue. The model
-receives only that user’s recent messages, active
-Trip, and Trip list. Trip tools derive the user from signed session attributes,
-never from model or client input.
+Each Telegram traveller has one `TravellerProfile` and up to three active or
+paused Trips. A fourth Trip requires stopping or completing an existing Trip.
+Confirmed Trip currency is immutable; changing the profile default affects
+only future Trips.
 
-Trips use optimistic versions and append events for creates, updates, and
-lifecycle actions. Exact active-Trip retries are reused, preventing duplicate
-Trips from webhook retries or repeated tool execution. Ambiguous references
-must be clarified before mutation.
+Dashboard links contain a single-use login token in the URL fragment. Tokens
+expire after 15 minutes and exchange for a hashed, revocable, HttpOnly,
+SameSite session lasting 30 days. The authenticated API exposes only the
+current profile and the traveller’s selected Trip.
 
-## Search and orchestration flow
+## Search and verification flow
 
-Each Trip has one individual Watch. A Watch expands into at most 24 canonical
-SearchSpecs. The complete Duffel request—including version, live mode, ordered
-slices, passenger types or ages, cabin, connection limit, and fare context—is
-hashed. Many Watches can subscribe to one hash.
+Each Trip has one canonical `SearchSpec`. Matching Watches may share fresh
+results. The initial `openai_web` provider performs exactly two bounded OpenAI
+Responses:
 
-The always-on orchestrator checks due Watches every 60 seconds. Transactional
-leases and a global advisory lock cap active runs at four. Each worker claims
-immediately before execution and makes only one Duffel request at a time.
-Completed results are stored once as canonical itineraries, ephemeral offers,
-and append-only observations. Expired offers remain evidence but disappear
-from current results.
+1. broad discovery of at most 40 candidates;
+2. independent verification retaining at most 20 candidates.
 
-Fresh shared results can satisfy a newly created matching Trip without another
-provider call. Ranking then runs per Trip, accounting for price limits,
-excluded and preferred airlines, stops, and duration.
+Both Responses must use web search. A candidate is accepted only when the two
+passes agree on route, dates, every segment, marketing airline and flight
+number, cabin, exact one-adult fare, Trip currency, and evidence URLs. Evidence
+must appear in the API's retrieved source list and use an approved airline,
+metasearch, or OTA domain. Rejected candidates are reduced to aggregate reason
+counts and are never stored or shown.
 
-## Notifications
+The provider contract reserves `official_*` identifiers for future documented
+airline or partnership APIs. It does not permit unofficial scraping.
 
-Initial results, price drops of at least five percent, genuinely stronger new
-itineraries, and terminal Watch errors create deterministic deduplication keys.
-Non-critical messages wait through user quiet hours. Delivery is retried three
-times and uses the Captain bot only; Pilot-owned Trips continue through Pilot’s
-existing response flow and do not receive messages from the public bot.
+## Ranking and notifications
 
-## Compatibility
+Eligible offers are ranked deterministically as Cheapest, Balanced, or
+Fastest. Any itinerary using an excluded carrier is removed. Journey duration
+is the sum of each leg's elapsed flight time, excluding destination stays.
 
-Legacy Flight Agent records migrate to Trips owned by the dedicated Pilot
-principal. Legacy keys remain aliases. The former schema and
-`/internal/v1/flight-agents` routes remain read-only/compatible for one release,
-while Pilot now creates and refreshes Trips through `/internal/v1/trips`.
+Improvement alerts require a 5% price reduction, 10% journey-time reduction,
+or 10% Balanced-score improvement, with at most two improvement alerts per
+traveller in a rolling 24 hours. Each sent Telegram message ID points to an
+immutable recommendation snapshot so a quoted reply explains that exact
+historical comparison.
+
+## Public beta controls
+
+Production starts with `CAPTAIN_PUBLIC_BETA_ENABLED=false`. Existing private
+users continue to work, but new users are admitted only after the live launch
+evaluation passes and the flag is deliberately enabled. Capacity is capped at
+25 travellers. The worker has a global tracking kill switch, a 500-Responses
+daily ceiling, adaptive 12/6/3-hour checks, and six-hour manual refresh limits.

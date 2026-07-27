@@ -1,10 +1,9 @@
 import {
   formatCalendarDate,
-  addIsoDays,
   totalTravellers,
-  type Trip,
   type TripCreationReceipt,
-  type TripPlanDraft
+  type TripPlanDraft,
+  type TripStatus
 } from "@agents/flight-domain";
 
 export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
@@ -28,12 +27,14 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
           `• Return: ${formatCalendarDate(draft.plan.returnDate)}`,
           `• Stay: ${brief.stayNights!.preferred} night${brief.stayNights!.preferred === 1 ? "" : "s"}`
         ]
-      : !isMultiCity ? ["• Trip type: One-way"] : ["• Trip type: Multi-city"]),
+      : !isMultiCity
+        ? [`• Trip type: One-way${defaults.has("tripType") ? " (default)" : ""}`]
+        : ["• Trip type: Multi-city"]),
     `• Travellers: ${travellers}${defaults.has("travellers") ? " (default)" : ""}`,
     `• Cabin: ${label(brief.cabin)}${defaults.has("cabin") ? " (default)" : ""}`,
     `• Stops: ${stopLabel(brief.maxStops)}${defaults.has("maxStops") ? " (default)" : ""}`,
     `• Currency: ${brief.currency}${defaults.has("currency") ? " (default)" : ""}`,
-    `• Tracking: every ${draft.plan.input.cadenceHours} hours${defaults.has("cadenceHours") ? " (default)" : ""}`,
+    "• Tracking: adaptive — every 12, 6, or 3 hours as departure approaches",
     "",
     "Reply Yes to create it, or tell me what to change."
   ];
@@ -41,64 +42,60 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
 }
 
 export function formatTripCreationReceipt(receipt: TripCreationReceipt): string {
-  const travellers = `${receipt.travellers} traveller${receipt.travellers === 1 ? "" : "s"}`;
-  const legs = receipt.legs ?? [];
-  const isMultiCity = legs.length >= 2;
   return [
     receipt.created ? "Your Trip is saved and tracking." : "That Trip was already saved; I’m using the existing one.",
     "",
-    `• ${isMultiCity ? formatLegRoute(legs) : `${receipt.originAirports.join("/")} → ${receipt.destinationAirports.join("/")}`}`,
-    ...(isMultiCity
-      ? legs.map((leg, index) =>
-          `• Leg ${index + 1}: ${formatCalendarDate(leg.departureDate)}`
-        )
-      : [`• Depart: ${formatCalendarDate(receipt.departureDate)}`]),
-    ...(!isMultiCity && receipt.returnDate
-      ? [
-          `• Return: ${formatCalendarDate(receipt.returnDate)}`,
-          `• Stay: ${receipt.stayNights} night${receipt.stayNights === 1 ? "" : "s"}`
-        ]
-      : []),
-    `• ${travellers}, ${label(receipt.cabin)}, ${stopLabel(receipt.maxStops)}, ${receipt.currency}`,
-    `• Trip reference: ${receipt.tripId}`,
+    ...formatTripSummaryLines(receipt),
     "",
-    `Open dashboard: ${receipt.dashboardUrl}`,
+    `Open trip: ${receipt.dashboardUrl}`,
     receipt.accessHint
   ].join("\n");
 }
 
-export function formatActiveTripLocation(input: {
-  title: string;
-  tripId: string;
+export type ActiveTripFormatInput = {
   originAirports: string[];
   destinationAirports: string[];
+  legs?: Array<{
+    originAirports: string[];
+    destinationAirports: string[];
+    departureDate: string;
+  }> | undefined;
+  departureDate: string;
+  returnDate: string | null;
+  stayNights: number | null;
+  travellers: number;
+  cabin: TripCreationReceipt["cabin"];
+  maxStops: number;
+  currency: string;
+  status: TripStatus;
   dashboardUrl: string;
-}): string {
+};
+
+export function formatActiveTripLocation(input: ActiveTripFormatInput): string {
   return [
-    `It’s saved in Captain as “${input.title}” (${input.originAirports.join("/")} → ${input.destinationAirports.join("/")}).`,
-    `Trip reference: ${input.tripId}`,
-    `Open dashboard: ${input.dashboardUrl}`,
-    "Send /trips to view your saved Trips."
+    activeTripStatusLine(input.status),
+    "",
+    ...formatTripSummaryLines(input),
+    "",
+    `Open trip: ${input.dashboardUrl}`
   ].join("\n");
 }
 
-export function formatTripList(
-  trips: Trip[],
-  dashboardUrlForTrip: (tripId: string) => string
-): string {
-  return trips.map((trip) => {
-    const legs = trip.brief.legs ?? [];
-    const route = trip.brief.tripType === "multi_city" && legs.length > 0
-      ? formatLegRoute(legs)
-      : `${trip.brief.originAirports.join("/")} → ${trip.brief.destinationAirports.join("/")}`;
-    const departureDate = legs[0]?.departureWindow.start ?? trip.brief.departureWindow.start;
-    const finalDate = trip.brief.tripType === "multi_city"
-      ? legs.at(-1)?.departureWindow.start ?? departureDate
-      : trip.brief.tripType === "round_trip" && trip.brief.stayNights
-        ? addIsoDays(departureDate, trip.brief.stayNights.preferred)
-        : departureDate;
-    return `• ${route} · ${formatDateRange(departureDate, finalDate)}\n  ${dashboardUrlForTrip(trip.id)}`;
-  }).join("\n\n");
+export function formatActiveTripList(inputs: ActiveTripFormatInput[]): string {
+  return [
+    `You’re tracking ${inputs.length} Trips:`,
+    "",
+    ...inputs.flatMap((input) => {
+      const route = input.legs && input.legs.length >= 2
+        ? formatLegRoute(input.legs)
+        : `${input.originAirports.join("/")} → ${input.destinationAirports.join("/")}`;
+      return [
+        `• ${route}`,
+        `  ${formatCalendarDate(input.departureDate)} · ${label(input.status)}`,
+        `Open ${route}: ${input.dashboardUrl}`
+      ];
+    })
+  ].join("\n");
 }
 
 export function telegramDashboardMessage(message: string): {
@@ -107,13 +104,15 @@ export function telegramDashboardMessage(message: string): {
 } {
   const lines = message.split("\n");
   const links: Array<{ text: string; url: string }> = [];
-  const visibleLines = lines.filter((line, index) => {
-    const match = /^\s*(?:Open dashboard:\s*)?(https:\/\/\S+)\s*$/u.exec(line);
+  const visibleLines = lines.filter((line) => {
+    const labelled = /^\s*Open ([^:]+):\s*(https:\/\/\S+)\s*$/u.exec(line);
+    if (labelled?.[1] && labelled[2]) {
+      links.push({ text: `Open ${labelled[1]}`, url: labelled[2] });
+      return false;
+    }
+    const match = /^\s*(?:Open trip:\s*)?(https:\/\/\S+)\s*$/u.exec(line);
     if (!match?.[1]) return true;
-    const previous = [...lines.slice(0, index)].reverse().find((candidate) => candidate.trim()) ?? "";
-    const route = /^•\s+(.+?)\s+·\s+/u.exec(previous)?.[1] ?? null;
-    const label = route ? `Open ${route}` : "Open dashboard";
-    links.push({ text: [...label].slice(0, 64).join(""), url: match[1] });
+    links.push({ text: "Open trip", url: match[1] });
     return false;
   });
   return {
@@ -131,6 +130,47 @@ function label(value: string): string {
   return value.replaceAll("_", " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
 }
 
+function activeTripStatusLine(status: TripStatus): string {
+  if (status === "recommended") return "Your Trip has verified results.";
+  return `Your Trip is ${label(status).toLowerCase()}.`;
+}
+
+function formatTripSummaryLines(input: {
+  originAirports: string[];
+  destinationAirports: string[];
+  legs?: Array<{
+    originAirports: string[];
+    destinationAirports: string[];
+    departureDate: string;
+  }> | undefined;
+  departureDate: string;
+  returnDate: string | null;
+  stayNights: number | null;
+  travellers: number;
+  cabin: TripCreationReceipt["cabin"];
+  maxStops: number;
+  currency: string;
+}): string[] {
+  const travellers = `${input.travellers} traveller${input.travellers === 1 ? "" : "s"}`;
+  const legs = input.legs ?? [];
+  const isMultiCity = legs.length >= 2;
+  return [
+    `• ${isMultiCity ? formatLegRoute(legs) : `${input.originAirports.join("/")} → ${input.destinationAirports.join("/")}`}`,
+    ...(isMultiCity
+      ? legs.map((leg, index) =>
+          `• Leg ${index + 1}: ${formatCalendarDate(leg.departureDate)}`
+        )
+      : [`• Depart: ${formatCalendarDate(input.departureDate)}`]),
+    ...(!isMultiCity && input.returnDate
+      ? [
+          `• Return: ${formatCalendarDate(input.returnDate)}`,
+          `• Stay: ${input.stayNights} night${input.stayNights === 1 ? "" : "s"}`
+        ]
+      : []),
+    `• ${travellers}, ${label(input.cabin)}, ${stopLabel(input.maxStops)}, ${input.currency}`
+  ];
+}
+
 function formatLegRoute(
   legs: Array<{ originAirports: string[]; destinationAirports: string[] }>
 ): string {
@@ -139,24 +179,4 @@ function formatLegRoute(
     legs[0]!.originAirports.join("/"),
     ...legs.map((leg) => leg.destinationAirports.join("/"))
   ].join(" → ");
-}
-
-function formatDateRange(start: string, end: string): string {
-  const startDate = new Date(`${start}T12:00:00.000Z`);
-  const endDate = new Date(`${end}T12:00:00.000Z`);
-  const day = (date: Date) => date.getUTCDate();
-  const month = (date: Date) => new Intl.DateTimeFormat("en-GB", {
-    month: "short",
-    timeZone: "UTC"
-  }).format(date);
-  const startYear = startDate.getUTCFullYear();
-  const endYear = endDate.getUTCFullYear();
-  if (start === end) return `${day(startDate)} ${month(startDate)} ${startYear}`;
-  if (startYear === endYear && startDate.getUTCMonth() === endDate.getUTCMonth()) {
-    return `${day(startDate)}–${day(endDate)} ${month(endDate)} ${endYear}`;
-  }
-  if (startYear === endYear) {
-    return `${day(startDate)} ${month(startDate)}–${day(endDate)} ${month(endDate)} ${endYear}`;
-  }
-  return `${day(startDate)} ${month(startDate)} ${startYear}–${day(endDate)} ${month(endDate)} ${endYear}`;
 }

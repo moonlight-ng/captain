@@ -26,8 +26,8 @@ export const tripPlanPartialSchema = z.object({
   destinationAirports: z.array(z.string().regex(/^[A-Z]{3}$/u)).max(6),
   tripType: z.enum(["one_way", "round_trip", "multi_city"]).nullable(),
   legs: z.array(z.object({
-    originAirports: z.array(z.string().regex(/^[A-Z]{3}$/u)).min(1).max(4),
-    destinationAirports: z.array(z.string().regex(/^[A-Z]{3}$/u)).min(1).max(6),
+    originAirports: z.array(z.string().regex(/^[A-Z]{3}$/u)).max(4),
+    destinationAirports: z.array(z.string().regex(/^[A-Z]{3}$/u)).max(6),
     departureDate: isoDateSchema.nullable()
   }).strict()).max(6).default([]),
   departureDate: isoDateSchema.nullable(),
@@ -62,6 +62,72 @@ export const EMPTY_TRIP_PLAN_PARTIAL: TripPlanPartial = {
   excludedAirlines: []
 };
 
+export const tripPlanPendingFieldSchema = z.enum([
+  "originAirports",
+  "destinationAirports",
+  "departureDate",
+  "returnDate",
+  "itineraryLegs",
+  "travellers",
+  "currency",
+  "dates"
+]);
+export type TripPlanPendingField = z.infer<typeof tripPlanPendingFieldSchema>;
+
+export const tripPlanFieldSourceSchema = z.object({
+  kind: z.enum(["explicit", "inferred", "default"]),
+  messageIndex: z.number().int().min(0),
+  text: z.string().trim().max(500)
+}).strict();
+export type TripPlanFieldSource = z.infer<typeof tripPlanFieldSourceSchema>;
+
+export const tripPlanTurnOperationSchema = z.object({
+  field: z.string().trim().min(1).max(100),
+  legIndex: z.number().int().min(0).max(5).nullable(),
+  action: z.enum(["set", "clear", "reject"]),
+  reason: z.string().trim().min(1).max(200),
+  sourceText: z.string().trim().max(500)
+}).strict();
+export type TripPlanTurnOperation = z.infer<typeof tripPlanTurnOperationSchema>;
+
+export const tripPlanTurnStateSchema = z.object({
+  version: z.literal(2),
+  pendingFields: z.array(z.object({
+    field: tripPlanPendingFieldSchema,
+    legIndex: z.number().int().min(0).max(5).nullable()
+  }).strict()).max(12),
+  lastPrompt: z.string().trim().max(1_000).nullable(),
+  repeatedPromptCount: z.number().int().min(0).max(10),
+  fieldSources: z.record(z.string(), tripPlanFieldSourceSchema),
+  interpreterVersion: z.literal("trip_interpreter_v2").default("trip_interpreter_v2"),
+  parser: z.enum(["model", "deterministic", "repair"]).nullable().default(null),
+  model: z.string().trim().min(1).max(100).nullable().default(null),
+  lastIntent: z.enum([
+    "start_trip",
+    "answer_question",
+    "revise_draft",
+    "repair",
+    "confirm",
+    "cancel",
+    "unrelated"
+  ]).nullable(),
+  lastOperations: z.array(tripPlanTurnOperationSchema).max(40)
+}).strict();
+export type TripPlanTurnState = z.infer<typeof tripPlanTurnStateSchema>;
+
+export const EMPTY_TRIP_PLAN_TURN_STATE: TripPlanTurnState = {
+  version: 2,
+  pendingFields: [],
+  lastPrompt: null,
+  repeatedPromptCount: 0,
+  fieldSources: {},
+  interpreterVersion: "trip_interpreter_v2",
+  parser: null,
+  model: null,
+  lastIntent: null,
+  lastOperations: []
+};
+
 export const tripPlanDraftSchema = z.object({
   id: z.uuid(),
   userId: z.uuid(),
@@ -72,6 +138,7 @@ export const tripPlanDraftSchema = z.object({
   plan: plannedTripSchema.nullable(),
   unresolvedFields: z.array(z.string().trim().min(1)).max(24),
   inferredFields: z.record(z.string(), z.string()),
+  turnState: tripPlanTurnStateSchema,
   sourceMessageIds: z.array(z.uuid()).max(40),
   tripId: z.uuid().nullable(),
   createIdempotencyKey: z.string().trim().min(1).max(200).nullable(),
@@ -101,7 +168,7 @@ export const tripCreationReceiptSchema = z.object({
   maxStops: z.number().int().min(0).max(2),
   currency: z.string().regex(/^[A-Z]{3}$/u),
   dashboardUrl: z.url(),
-  accessHint: z.literal("Send /trips to view your saved Trips.")
+  accessHint: z.literal("Send /trips to open your Trips.")
 }).strict();
 export type TripCreationReceipt = z.infer<typeof tripCreationReceiptSchema>;
 
@@ -136,6 +203,7 @@ export type TripPlanDraftRevision = {
   plan: PlannedTrip | null;
   unresolvedFields: string[];
   inferredFields: Record<string, string>;
+  turnState: TripPlanTurnState;
   sourceMessageIds: string[];
 };
 

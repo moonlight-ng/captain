@@ -1,20 +1,24 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  DEFAULT_PROFILE,
   MAX_ACTIVE_TRIPS_PER_USER,
   TripLimitError,
   TripNotFoundError,
   TripVersionConflictError,
   EMPTY_TRIP_PLAN_PARTIAL,
+  EMPTY_TRIP_PLAN_TURN_STATE,
   type CreateTripInput,
   type OfferSnapshot,
   type TripCreationResult,
   type TripPlanDraft,
   type TripPlanDraftRevision,
+  type TravellerProfile,
+  type UpdateTravellerProfile,
+  type UpdateTripBrief,
   type SearchSpec,
   type Trip,
   type TripAction,
-  type UpdateTripInput,
   type Watch
 } from "@agents/flight-domain";
 
@@ -27,9 +31,16 @@ import type {
   ConversationContext,
   TelegramUserInput,
   TripFlightSelection,
+  TripActivity,
   TripRecommendation
 } from "./contracts.js";
-import { offerScore, recommendationSummary } from "./ranking.js";
+import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
+import {
+  meetsAlertThreshold,
+  rankOffers,
+  recommendationReasonCodes,
+  recommendationSummary
+} from "./ranking.js";
 import {
   adaptiveWatchIntervalMs,
   CURRENT_OFFER_RETENTION_MS,
@@ -40,16 +51,37 @@ import {
 
 type MemoryConversation = ConversationContext & { userId: string };
 type MemoryRun = ClaimedSearchRun & {
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "deferred";
   claimedBy: string | null;
   scheduledAt: string;
   completedAt: string | null;
   error: string | null;
 };
-type StoredNotification = CaptainNotification & { status: "pending" | "sent" | "failed"; availableAt: string; dedupKey: string; error: string | null };
+type StoredNotification = CaptainNotification & {
+  status: "pending" | "sent" | "failed";
+  availableAt: string;
+  createdAt: string;
+  dedupKey: string;
+  error: string | null;
+};
+type StoredLoginToken = {
+  userId: string;
+  redirectPath: "/trip" | "/preferences";
+  expiresAt: string;
+  consumedAt: string | null;
+};
+type StoredWebSession = {
+  userId: string;
+  expiresAt: string;
+  revokedAt: string | null;
+};
 
 export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   readonly #usersByTelegram = new Map<number, CaptainUser>();
+  readonly #profiles = new Map<string, TravellerProfile>();
+  readonly #loginTokens = new Map<string, StoredLoginToken>();
+  readonly #webSessions = new Map<string, StoredWebSession>();
+  readonly #apiUsage = new Map<string, { responses: number; webSearchCalls: number }>();
   readonly #updates = new Set<string>();
   readonly #conversations = new Map<string, MemoryConversation>();
   readonly #trips = new Map<string, Trip>();
@@ -61,6 +93,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   readonly #recommendations = new Map<string, TripRecommendation>();
   readonly #personSelections = new Map<string, Map<string, string>>();
   readonly #notifications = new Map<string, StoredNotification>();
+  readonly #tripActivity = new Map<string, TripActivity[]>();
   readonly #tripPlanDrafts = new Map<string, TripPlanDraft>();
   readonly #tripPlanConfirmations = new Map<
     string,
@@ -78,6 +111,9 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       this.#usersByTelegram.set(input.telegramUserId, updated);
       return clone(updated);
     }
+    if (!publicBetaEnabled()) throw new BetaLaunchGateError();
+    const betaLimit = positiveInteger(process.env.CAPTAIN_BETA_USER_LIMIT, 25);
+    if (this.#usersByTelegram.size >= betaLimit) throw new BetaCapacityError(betaLimit);
     const user: CaptainUser = {
       id: randomUUID(),
       status: "active",
@@ -100,6 +136,177 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
 
   async getUser(userId: string): Promise<CaptainUser | null> {
     return clone([...this.#usersByTelegram.values()].find((user) => user.id === userId) ?? null);
+  }
+
+  async updateUserTimezone(userId: string, timeZone: string, _now: Date): Promise<CaptainUser> {
+    const entry = [...this.#usersByTelegram.entries()]
+      .find(([, user]) => user.id === userId);
+    if (!entry) throw new Error("User not found");
+    const updated = { ...entry[1], timezone: timeZone };
+    this.#usersByTelegram.set(entry[0], updated);
+    return clone(updated);
+  }
+
+  async countUsers(): Promise<number> {
+    return this.#usersByTelegram.size;
+  }
+
+  async deleteUser(userId: string): Promise<void> {
+    for (const [telegramId, user] of this.#usersByTelegram) {
+      if (user.id === userId) this.#usersByTelegram.delete(telegramId);
+    }
+    this.#profiles.delete(userId);
+    this.#conversations.delete(userId);
+    for (const [hash, token] of this.#loginTokens) if (token.userId === userId) this.#loginTokens.delete(hash);
+    for (const [hash, session] of this.#webSessions) if (session.userId === userId) this.#webSessions.delete(hash);
+    const tripIds = new Set(
+      [...this.#trips.values()].filter((trip) => trip.userId === userId).map((trip) => trip.id)
+    );
+    for (const tripId of tripIds) {
+      this.#trips.delete(tripId);
+      this.#recommendations.delete(tripId);
+      this.#personSelections.delete(tripId);
+      this.#tripActivity.delete(tripId);
+    }
+    for (const [watchId, watch] of this.#watches) {
+      if (tripIds.has(watch.tripId)) {
+        this.#watches.delete(watchId);
+        this.#watchSpecs.delete(watchId);
+      }
+    }
+    for (const [id, notification] of this.#notifications) if (notification.userId === userId) this.#notifications.delete(id);
+    for (const [id, draft] of this.#tripPlanDrafts) if (draft.userId === userId) this.#tripPlanDrafts.delete(id);
+  }
+
+  async getProfile(userId: string): Promise<TravellerProfile | null> {
+    return clone(this.#profiles.get(userId) ?? null);
+  }
+
+  async ensureProfile(userId: string, now: Date): Promise<TravellerProfile> {
+    const existing = this.#profiles.get(userId);
+    if (existing) return clone(existing);
+    if (!await this.getUser(userId)) throw new Error("User not found");
+    const timestamp = now.toISOString();
+    const profile: TravellerProfile = {
+      userId,
+      ...DEFAULT_PROFILE,
+      preferredAirlineCodes: [],
+      excludedAirlineCodes: [],
+      onboardingCompletedAt: null,
+      onboardingStep: "currency",
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    this.#profiles.set(userId, profile);
+    return clone(profile);
+  }
+
+  async updateProfile(
+    userId: string,
+    input: UpdateTravellerProfile & {
+      onboardingStep?: TravellerProfile["onboardingStep"];
+      onboardingCompletedAt?: string | null;
+    },
+    now: Date
+  ): Promise<TravellerProfile> {
+    const current = await this.ensureProfile(userId, now);
+    const updated: TravellerProfile = {
+      ...current,
+      ...(input.defaultCurrency !== undefined ? { defaultCurrency: input.defaultCurrency } : {}),
+      ...(input.rankingMode !== undefined ? { rankingMode: input.rankingMode } : {}),
+      ...(input.preferredAirlineCodes !== undefined
+        ? { preferredAirlineCodes: clone(input.preferredAirlineCodes) }
+        : {}),
+      ...(input.excludedAirlineCodes !== undefined
+        ? { excludedAirlineCodes: clone(input.excludedAirlineCodes) }
+        : {}),
+      ...(input.alertsEnabled !== undefined ? { alertsEnabled: input.alertsEnabled } : {}),
+      ...(input.maxAlertsPerDay !== undefined ? { maxAlertsPerDay: input.maxAlertsPerDay } : {}),
+      ...(input.quietHoursEnabled !== undefined
+        ? { quietHoursEnabled: input.quietHoursEnabled }
+        : {}),
+      ...(input.quietHoursStart !== undefined ? { quietHoursStart: input.quietHoursStart } : {}),
+      ...(input.quietHoursEnd !== undefined ? { quietHoursEnd: input.quietHoursEnd } : {}),
+      ...(input.onboardingStep !== undefined ? { onboardingStep: input.onboardingStep } : {}),
+      ...(input.onboardingCompletedAt !== undefined
+        ? { onboardingCompletedAt: input.onboardingCompletedAt }
+        : {}),
+      updatedAt: now.toISOString()
+    };
+    this.#profiles.set(userId, updated);
+    const activeTrips = [...this.#trips.values()]
+      .filter((trip) => trip.userId === userId && isActiveTripStatus(trip.status));
+    for (const active of activeTrips) {
+      const watch = [...this.#watches.values()].find((candidate) => candidate.tripId === active.id);
+      if (watch) {
+        for (const specId of this.#watchSpecs.get(watch.id) ?? []) {
+          await this.evaluateTripsForSearchSpec(specId, now);
+        }
+      }
+    }
+    return clone(updated);
+  }
+
+  async createLoginToken(
+    userId: string,
+    tokenHash: string,
+    redirectPath: "/trip" | "/preferences",
+    expiresAt: Date,
+    now: Date
+  ): Promise<void> {
+    if (!await this.getUser(userId)) throw new Error("User not found");
+    this.#loginTokens.set(tokenHash, {
+      userId,
+      redirectPath,
+      expiresAt: expiresAt.toISOString(),
+      consumedAt: null
+    });
+    void now;
+  }
+
+  async consumeLoginToken(tokenHash: string, now: Date) {
+    const token = this.#loginTokens.get(tokenHash);
+    if (!token || token.consumedAt || token.expiresAt <= now.toISOString()) return null;
+    token.consumedAt = now.toISOString();
+    return { userId: token.userId, redirectPath: token.redirectPath };
+  }
+
+  async createWebSession(userId: string, tokenHash: string, expiresAt: Date, now: Date): Promise<void> {
+    if (!await this.getUser(userId)) throw new Error("User not found");
+    this.#webSessions.set(tokenHash, { userId, expiresAt: expiresAt.toISOString(), revokedAt: null });
+    void now;
+  }
+
+  async resolveWebSession(tokenHash: string, now: Date): Promise<string | null> {
+    const session = this.#webSessions.get(tokenHash);
+    return session && !session.revokedAt && session.expiresAt > now.toISOString() ? session.userId : null;
+  }
+
+  async revokeWebSession(tokenHash: string, now: Date): Promise<void> {
+    const session = this.#webSessions.get(tokenHash);
+    if (session) session.revokedAt = now.toISOString();
+  }
+
+  async revokeUserSessions(userId: string, now: Date): Promise<void> {
+    for (const session of this.#webSessions.values()) {
+      if (session.userId === userId) session.revokedAt = now.toISOString();
+    }
+  }
+
+  async reserveDailyResponseBudget(now: Date, amount: number, limit: number): Promise<boolean> {
+    const date = now.toISOString().slice(0, 10);
+    const usage = this.#apiUsage.get(date) ?? { responses: 0, webSearchCalls: 0 };
+    if (usage.responses + amount > limit) return false;
+    usage.responses += amount;
+    this.#apiUsage.set(date, usage);
+    return true;
+  }
+
+  async recordWebSearchCalls(now: Date, count: number): Promise<void> {
+    const date = now.toISOString().slice(0, 10);
+    const usage = this.#apiUsage.get(date) ?? { responses: 0, webSearchCalls: 0 };
+    usage.webSearchCalls += Math.max(0, count);
+    this.#apiUsage.set(date, usage);
   }
 
   async claimTelegramUpdate(updateKey: string, userId: string, now: Date): Promise<boolean> {
@@ -139,6 +346,19 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     return [...this.#trips.values()].filter((trip) => trip.userId === userId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(clone);
   }
 
+  async getActiveTrip(userId: string): Promise<Trip | null> {
+    const conversation = this.#conversations.get(userId);
+    const selected = conversation?.activeTripId
+      ? this.#trips.get(conversation.activeTripId)
+      : null;
+    if (selected?.userId === userId && isActiveTripStatus(selected.status)) {
+      return clone(selected);
+    }
+    return clone([...this.#trips.values()]
+      .filter((trip) => trip.userId === userId && isActiveTripStatus(trip.status))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null);
+  }
+
   async getTrip(userId: string, tripId: string): Promise<Trip | null> {
     const trip = this.#trips.get(tripId);
     return trip?.userId === userId ? clone(trip) : null;
@@ -153,14 +373,10 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     return clone([...this.#watches.values()].find((watch) => watch.tripId === tripId) ?? null);
   }
 
-  async getTripByLegacyKey(userId: string, legacyAgentKey: string): Promise<Trip | null> {
-    return clone([...this.#trips.values()].find((trip) => trip.userId === userId && trip.legacyAgentKey === legacyAgentKey) ?? null);
-  }
-
   async createTrip(userId: string, input: CreateTripInput, specs: SearchSpec[], now: Date): Promise<TripCreationResult> {
     const duplicate = [...this.#trips.values()].find((trip) =>
       trip.userId === userId
-      && !["cancelled", "completed"].includes(trip.status)
+      && isActiveTripStatus(trip.status)
       && JSON.stringify(trip.brief) === JSON.stringify(input.brief)
     );
     if (duplicate) {
@@ -169,25 +385,63 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       await this.setActiveTrip(userId, duplicate.id, now);
       return clone({ trip: duplicate, watch: existingWatch, created: false });
     }
-    const active = [...this.#trips.values()].filter((trip) => trip.userId === userId && !["cancelled", "completed"].includes(trip.status));
+    const active = [...this.#trips.values()].filter((trip) => trip.userId === userId && isActiveTripStatus(trip.status));
     if (active.length >= MAX_ACTIVE_TRIPS_PER_USER) throw new TripLimitError();
     const timestamp = now.toISOString();
     const trip: Trip = {
-      id: randomUUID(), userId, legacyAgentKey: null, title: input.title, status: "tracking", version: 1,
-      brief: clone(input.brief), createdAt: timestamp, updatedAt: timestamp
+      id: randomUUID(), userId, title: input.title, status: "tracking", version: 1,
+      brief: clone(input.brief), archivedAt: null, archiveReason: null,
+      createdAt: timestamp, updatedAt: timestamp
     };
     const watch: Watch = {
       id: randomUUID(), tripId: trip.id, status: "active", cadenceHours: input.cadenceHours,
-      nextCheckAt: timestamp, lastCheckAt: null, createdAt: timestamp, updatedAt: timestamp
+      nextCheckAt: timestamp, lastCheckAt: null, lastManualRefreshAt: null,
+      delayedAt: null, delayReason: null,
+      createdAt: timestamp, updatedAt: timestamp
     };
     this.#trips.set(trip.id, trip);
     this.#watches.set(watch.id, watch);
     this.#setSpecs(watch.id, specs);
+    this.#recordTripActivity(trip.id, "trip_created", clone(input), now);
     await this.setActiveTrip(userId, trip.id, now);
     for (const specId of new Set(specs.map((spec) => spec.id))) {
       await this.evaluateTripsForSearchSpec(specId, now);
     }
     return clone({ trip: this.#trips.get(trip.id) ?? trip, watch, created: true });
+  }
+
+  async updateTripBrief(
+    userId: string,
+    tripId: string,
+    input: UpdateTripBrief,
+    specs: SearchSpec[],
+    now: Date
+  ): Promise<Trip> {
+    const trip = this.#requiredTrip(userId, tripId);
+    if (trip.version !== input.expectedVersion) throw new TripVersionConflictError(trip.version);
+    const updated: Trip = {
+      ...trip,
+      brief: clone(input.brief),
+      status: "tracking",
+      version: trip.version + 1,
+      updatedAt: now.toISOString()
+    };
+    this.#trips.set(tripId, updated);
+    this.#recommendations.delete(tripId);
+    const watch = [...this.#watches.values()].find((candidate) => candidate.tripId === tripId);
+    if (watch) {
+      this.#setSpecs(watch.id, specs);
+      this.#watches.set(watch.id, {
+        ...watch,
+        status: "active",
+        nextCheckAt: now.toISOString(),
+        delayedAt: null,
+        delayReason: null,
+        updatedAt: now.toISOString()
+      });
+    }
+    this.#recordTripActivity(tripId, "trip_brief_updated", clone(input.brief), now);
+    return clone(updated);
   }
 
   async createTripPlanDraft(
@@ -214,6 +468,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       plan: null,
       unresolvedFields: [],
       inferredFields: {},
+      turnState: clone(EMPTY_TRIP_PLAN_TURN_STATE),
       sourceMessageIds: sourceMessageId ? [sourceMessageId] : [],
       tripId: null,
       createIdempotencyKey: null,
@@ -333,27 +588,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     }
   }
 
-  async updateTrip(userId: string, tripId: string, input: UpdateTripInput, specs: SearchSpec[] | null, now: Date): Promise<Trip> {
-    const trip = this.#requiredTrip(userId, tripId);
-    if (trip.version !== input.expectedVersion) throw new TripVersionConflictError(trip.version);
-    const updated: Trip = {
-      ...trip,
-      ...(input.title !== undefined ? { title: input.title } : {}),
-      ...(input.brief !== undefined ? { brief: clone(input.brief), status: "tracking" as const } : {}),
-      version: trip.version + 1,
-      updatedAt: now.toISOString()
-    };
-    this.#trips.set(tripId, updated);
-    if (specs) {
-      const watch = [...this.#watches.values()].find((item) => item.tripId === tripId);
-      if (watch) {
-        this.#setSpecs(watch.id, specs);
-        this.#watches.set(watch.id, { ...watch, status: "active", nextCheckAt: now.toISOString(), updatedAt: now.toISOString() });
-      }
-    }
-    return clone(updated);
-  }
-
   async applyTripAction(userId: string, tripId: string, action: TripAction, now: Date): Promise<Trip> {
     const trip = this.#requiredTrip(userId, tripId);
     if (trip.version !== action.expectedVersion) throw new TripVersionConflictError(trip.version);
@@ -370,10 +604,17 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       this.#watches.set(watch.id, {
         ...watch, status: watchStatus,
         ...(action.type === "refresh" || action.type === "resume" ? { nextCheckAt: now.toISOString() } : {}),
+        ...(action.type === "refresh" ? { lastManualRefreshAt: now.toISOString() } : {}),
         updatedAt: now.toISOString()
       });
     }
+    this.#recordTripActivity(tripId, `trip_${action.type}`, clone(action), now);
     return clone(updated);
+  }
+
+  async listTripActivity(userId: string, tripId: string): Promise<TripActivity[]> {
+    this.#requiredTrip(userId, tripId);
+    return clone(this.#tripActivity.get(tripId) ?? []);
   }
 
   async listTripOffers(userId: string, tripId: string, now: Date): Promise<OfferSnapshot[]> {
@@ -475,7 +716,10 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const active = [...this.#runs.values()].filter((run) => run.status === "running" && run.leaseExpiresAt > now.toISOString()).length;
     const available = Math.max(0, 4 - active);
     const candidates = [...this.#runs.values()]
-      .filter((run) => run.status === "queued" || (run.status === "running" && run.leaseExpiresAt <= now.toISOString()))
+      .filter((run) =>
+        (["queued", "deferred"].includes(run.status) && run.scheduledAt <= now.toISOString())
+        || (run.status === "running" && run.leaseExpiresAt <= now.toISOString())
+      )
       .filter((run) => run.attempt < 3)
       .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt))
       .slice(0, Math.min(limit, available));
@@ -501,7 +745,13 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       this.#offers.set(stored.id, stored);
     }
     for (const watch of this.#watchesForSpec(run.searchSpecId)) {
-      this.#watches.set(watch.id, { ...watch, lastCheckAt: now.toISOString(), updatedAt: now.toISOString() });
+      this.#watches.set(watch.id, {
+        ...watch,
+        lastCheckAt: now.toISOString(),
+        delayedAt: null,
+        delayReason: null,
+        updatedAt: now.toISOString()
+      });
     }
     void providerRequestId;
   }
@@ -527,6 +777,23 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         this.#runs.delete(runId);
       }
     }
+    const archivedBefore = now.getTime() - 90 * 86_400_000;
+    for (const [tripId, trip] of this.#trips) {
+      if (trip.status !== "archived" || !trip.archivedAt || Date.parse(trip.archivedAt) >= archivedBefore) {
+        continue;
+      }
+      this.#trips.delete(tripId);
+      this.#recommendations.delete(tripId);
+      this.#personSelections.delete(tripId);
+      for (const [watchId, watch] of this.#watches) {
+        if (watch.tripId !== tripId) continue;
+        this.#watches.delete(watchId);
+        this.#watchSpecs.delete(watchId);
+      }
+      for (const [notificationId, notification] of this.#notifications) {
+        if (notification.tripId === tripId) this.#notifications.delete(notificationId);
+      }
+    }
   }
 
   async failSearchRun(workerId: string, runId: string, error: string, retryAfterMs: number | null, now: Date): Promise<void> {
@@ -547,35 +814,88 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     }
   }
 
+  async deferSearchRun(workerId: string, runId: string, until: Date, reason: string, now: Date): Promise<void> {
+    const run = this.#runs.get(runId);
+    if (!run || run.claimedBy !== workerId || run.status !== "running") {
+      throw new Error("Search run lease is not owned by this worker");
+    }
+    this.#runs.set(runId, {
+      ...run,
+      status: "deferred",
+      attempt: Math.max(0, run.attempt - 1),
+      claimedBy: null,
+      leaseExpiresAt: "",
+      scheduledAt: until.toISOString(),
+      completedAt: null,
+      error: reason
+    });
+    for (const watch of this.#watchesForSpec(run.searchSpecId)) {
+      this.#watches.set(watch.id, {
+        ...watch,
+        delayedAt: now.toISOString(),
+        delayReason: reason,
+        updatedAt: now.toISOString()
+      });
+    }
+    void now;
+  }
+
   async evaluateTripsForSearchSpec(searchSpecId: string, now: Date): Promise<number> {
     const tripIds = new Set(this.#watchesForSpec(searchSpecId).map((watch) => watch.tripId));
     let changed = 0;
     for (const tripId of tripIds) {
       const trip = this.#trips.get(tripId)!;
       const offers = await this.listTripOffers(trip.userId, trip.id, now);
-      const ranked = offers.map((offer) => ({ offer, score: offerScore(trip.brief, offer) }))
-        .filter((item) => Number.isFinite(item.score))
-        .sort((a, b) => a.score - b.score || a.offer.price - b.offer.price);
+      const profile = await this.ensureProfile(trip.userId, now);
+      const ranked = rankOffers(trip.brief, profile, offers);
       const best = ranked[0];
-      if (!best) continue;
+      if (!best) {
+        this.#recommendations.delete(trip.id);
+        continue;
+      }
       const previous = this.#recommendations.get(trip.id);
+      const comparison = previous
+        ? rankOffers(trip.brief, profile, [...offers, previous.snapshot.current])
+        : [];
+      const previousRanked = previous
+        ? comparison.find((candidate) => candidate.offer.id === previous.snapshot.current.id) ?? {
+            offer: previous.snapshot.current,
+            score: previous.score
+          }
+        : null;
+      const comparableBest = comparison.find((candidate) => candidate.offer.id === best.offer.id) ?? best;
+      const reasonCodes = recommendationReasonCodes(
+        profile.rankingMode,
+        best.offer,
+        previous?.snapshot.current ?? null
+      );
       const recommendation: TripRecommendation = {
         tripId: trip.id, offerId: best.offer.id, searchSpecId: best.offer.searchSpecId,
         itineraryKey: best.offer.itineraryKey,
         score: best.score, price: best.offer.price, currency: best.offer.currency,
-        summary: recommendationSummary(best.offer), observedAt: best.offer.observedAt
+        summary: recommendationSummary(best.offer), observedAt: best.offer.observedAt,
+        rankingMode: profile.rankingMode,
+        snapshot: {
+          current: clone(best.offer),
+          previous: previous?.snapshot.current ? clone(previous.snapshot.current) : null,
+          rankingMode: profile.rankingMode,
+          reasonCodes,
+          createdAt: now.toISOString()
+        }
       };
       this.#recommendations.set(trip.id, recommendation);
-      const kind = !previous
-        ? "initial_results"
-        : best.offer.price <= previous.price * 0.95
-          ? "price_drop"
-          : previous.itineraryKey !== best.offer.itineraryKey && best.score < previous.score
-            ? "new_best"
-            : null;
+      const qualifies = meetsAlertThreshold(profile.rankingMode, comparableBest, previousRanked);
+      const kind = !profile.alertsEnabled
+        ? null
+        : !previous
+          ? "initial_results"
+          : qualifies && profile.rankingMode === "cheapest"
+            ? "price_drop"
+            : qualifies
+              ? "new_best"
+              : null;
       if (kind) {
-        this.#enqueueNotification(trip, kind, recommendation, previous, now);
-        changed += 1;
+        if (this.#enqueueNotification(trip, kind, recommendation, previous, now)) changed += 1;
       }
       if (trip.status === "tracking") {
         this.#trips.set(trip.id, { ...trip, status: "recommended", version: trip.version + 1, updatedAt: now.toISOString() });
@@ -591,9 +911,13 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       .map(clone);
   }
 
-  async markNotificationSent(notificationId: string, now: Date): Promise<void> {
+  async markNotificationSent(notificationId: string, telegramMessageId: number, now: Date): Promise<void> {
     const notification = this.#notifications.get(notificationId);
-    if (notification) this.#notifications.set(notificationId, { ...notification, status: "sent" });
+    if (notification) this.#notifications.set(notificationId, {
+      ...notification,
+      status: "sent",
+      telegramMessageId
+    });
     void now;
   }
 
@@ -606,6 +930,20 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       status: attempts >= 3 ? "failed" : "pending",
       availableAt: new Date(now.getTime() + attempts * 300_000).toISOString()
     });
+  }
+
+  async getNotificationByTelegramMessage(
+    userId: string,
+    telegramMessageId: number
+  ): Promise<CaptainNotification | null> {
+    return clone([...this.#notifications.values()].find((notification) =>
+      notification.userId === userId && notification.telegramMessageId === telegramMessageId
+    ) ?? null);
+  }
+
+  async getRecommendation(userId: string, tripId: string): Promise<TripRecommendation | null> {
+    if (this.#trips.get(tripId)?.userId !== userId) return null;
+    return clone(this.#recommendations.get(tripId) ?? null);
   }
 
   async close(): Promise<void> {}
@@ -666,6 +1004,22 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     this.#watchSpecs.set(watchId, ids);
   }
 
+  #recordTripActivity(
+    tripId: string,
+    eventType: string,
+    payload: Record<string, unknown>,
+    now: Date
+  ): void {
+    const activity = this.#tripActivity.get(tripId) ?? [];
+    activity.unshift({
+      id: randomUUID(),
+      eventType,
+      payload,
+      createdAt: now.toISOString()
+    });
+    this.#tripActivity.set(tripId, activity.slice(0, 50));
+  }
+
   #watchesForSpec(specId: string): Watch[] {
     return [...this.#watches.values()].filter((watch) => this.#watchSpecs.get(watch.id)?.has(specId));
   }
@@ -684,11 +1038,20 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     recommendation: TripRecommendation,
     previous: TripRecommendation | undefined,
     now: Date
-  ): void {
+  ): boolean {
     const user = [...this.#usersByTelegram.values()].find((item) => item.id === trip.userId);
-    if (!user) return;
+    const profile = this.#profiles.get(trip.userId);
+    if (!user || !profile?.alertsEnabled) return false;
+    if (
+      kind !== "initial_results"
+      && [...this.#notifications.values()].filter((notification) =>
+        notification.userId === trip.userId
+        && ["price_drop", "new_best"].includes(notification.kind)
+        && Date.parse(notification.createdAt) >= now.getTime() - 86_400_000
+      ).length >= profile.maxAlertsPerDay
+    ) return false;
     const dedupKey = `${trip.id}:${kind}:${recommendation.itineraryKey}:${recommendation.price}`;
-    if ([...this.#notifications.values()].some((item) => item.dedupKey === dedupKey)) return;
+    if ([...this.#notifications.values()].some((item) => item.dedupKey === dedupKey)) return false;
     const id = randomUUID();
     this.#notifications.set(id, {
       id, userId: trip.userId, tripId: trip.id, telegramChatId: user.telegramChatId,
@@ -701,9 +1064,12 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
           dropPercent: previous.price > 0 ? Math.round((1 - recommendation.price / previous.price) * 100) : 0
         } : {})
       },
-      attempts: 0,
-      status: "pending", availableAt: deliveryTime(now, user.timezone).toISOString(), dedupKey, error: null
+      attempts: 0, telegramMessageId: null,
+      status: "pending",
+      availableAt: deliveryTime(now, user.timezone, profile).toISOString(),
+      createdAt: now.toISOString(), dedupKey, error: null
     });
+    return true;
   }
 
   #enqueueAttention(tripId: string, error: string, now: Date): void {
@@ -716,7 +1082,14 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     this.#notifications.set(id, {
       id, userId: trip.userId, tripId, telegramChatId: user.telegramChatId,
       kind: "watch_attention", payload: { tripTitle: trip.title, error }, attempts: 0,
-      status: "pending", availableAt: deliveryTime(now, user.timezone).toISOString(), dedupKey, error: null
+      telegramMessageId: null,
+      status: "pending",
+      availableAt: deliveryTime(
+        now,
+        user.timezone,
+        this.#profiles.get(trip.userId) ?? DEFAULT_PROFILE
+      ).toISOString(),
+      createdAt: now.toISOString(), dedupKey, error: null
     });
   }
 }
@@ -725,11 +1098,26 @@ function displayName(input: TelegramUserInput): string {
   return input.firstName?.trim() || (input.username ? `@${input.username}` : `traveller ${input.telegramUserId}`);
 }
 
-function deliveryTime(now: Date, timezone: string): Date {
+function deliveryTime(
+  now: Date,
+  timezone: string,
+  preferences: Pick<
+    TravellerProfile,
+    "quietHoursEnabled" | "quietHoursStart" | "quietHoursEnd"
+  >
+): Date {
+  if (!preferences.quietHoursEnabled) return now;
   try {
     const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: timezone, hour: "2-digit", hourCycle: "h23" }).format(now));
-    if (hour >= 22) return new Date(now.getTime() + (31 - hour) * 3_600_000);
-    if (hour < 7) return new Date(now.getTime() + (7 - hour) * 3_600_000);
+    const start = preferences.quietHoursStart;
+    const end = preferences.quietHoursEnd;
+    if (start === end) return now;
+    if (start > end) {
+      if (hour >= start) return new Date(now.getTime() + (24 - hour + end) * 3_600_000);
+      if (hour < end) return new Date(now.getTime() + (end - hour) * 3_600_000);
+    } else if (hour >= start && hour < end) {
+      return new Date(now.getTime() + (end - hour) * 3_600_000);
+    }
   } catch {
     // Invalid timezones fall back to immediate delivery.
   }
@@ -738,6 +1126,21 @@ function deliveryTime(now: Date, timezone: string): Date {
 
 function clone<T>(value: T): T {
   return structuredClone(value);
+}
+
+function positiveInteger(value: string | undefined, fallback: number): number {
+  const candidate = Number(value);
+  return Number.isSafeInteger(candidate) && candidate > 0 ? candidate : fallback;
+}
+
+function publicBetaEnabled(): boolean {
+  return !["0", "false", "off", "no"].includes(
+    (process.env.CAPTAIN_PUBLIC_BETA_ENABLED ?? "true").trim().toLowerCase()
+  );
+}
+
+function isActiveTripStatus(status: Trip["status"]): boolean {
+  return !["cancelled", "completed", "archived"].includes(status);
 }
 
 function reusedConfirmation(

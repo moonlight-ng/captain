@@ -1,70 +1,57 @@
-# Production rollout
+# Captain 1.0 production rollout
 
-## Where the new Captain credentials go
+## Credentials and ownership
 
-Captain and its worker use the same Captain PostgreSQL database and the same
-public Telegram bot token. They never use Pilot's Supabase project or Pilot bot
-token.
+Captain and its worker use the same Captain PostgreSQL database and public
+Telegram bot. They never receive Pilot credentials or access Pilot's database.
 
-For local setup, create ignored files from the examples:
+Create ignored local environment files from the checked-in examples:
 
 ```sh
 cp apps/captain/.env.example apps/captain/.env
 cp apps/flight-worker/.env.example apps/flight-worker/.env
 ```
 
-Put the new bot token in `TELEGRAM_BOT_TOKEN` in both files. Put the Captain
-Supabase Postgres connection string—not the project URL, anon key, or service
-role key—in `DATABASE_URL` in both files. Captain also needs
-`WORKFLOW_POSTGRES_URL` pointed at the Captain database, plus a random
-`TELEGRAM_WEBHOOK_SECRET_TOKEN` and `CAPTAIN_SESSION_SECRET`; the worker does
-not. The `.env` files are ignored by Git.
+Captain requires `DATABASE_URL`, `WORKFLOW_POSTGRES_URL`,
+`TELEGRAM_BOT_TOKEN`, and `TELEGRAM_WEBHOOK_SECRET_TOKEN`. The worker requires
+`DATABASE_URL`, `TELEGRAM_BOT_TOKEN`, `CAPTAIN_PUBLIC_URL`, and a server-side
+`OPENAI_API_KEY`.
 
-In production, install the same values as Fly secrets on their owning apps:
+Install the equivalent Fly secrets without putting their values in
+`fly.toml`, Git, or GitHub variables stored as plain text:
 
 ```sh
-fly secrets set -a dr-pilot \
-  PILOT_EVE_BASIC_PASSWORD='…' PILOT_CONCIERGE_EVENT_SECRET='…' \
-  PILOT_NOTES_SEARCH_SECRET='…' PILOT_TO_CAPTAIN_SECRET='…' \
-  CAPTAIN_TO_PILOT_SECRET='…'
-
 fly secrets set -a dr-captain \
   TELEGRAM_BOT_TOKEN='…' TELEGRAM_WEBHOOK_SECRET_TOKEN='…' \
-  DATABASE_URL='postgresql://…' WORKFLOW_POSTGRES_URL='postgresql://…' \
-  CAPTAIN_SESSION_SECRET='…' PILOT_TO_CAPTAIN_SECRET='…' \
-  CAPTAIN_TO_PILOT_SECRET='…'
+  DATABASE_URL='postgresql://…' WORKFLOW_POSTGRES_URL='postgresql://…'
 
 fly secrets set -a dr-flight-worker \
   TELEGRAM_BOT_TOKEN='…' DATABASE_URL='postgresql://…' \
-  DUFFEL_ACCESS_TOKEN='…'
+  CAPTAIN_PUBLIC_URL='https://dr-captain.fly.dev' OPENAI_API_KEY='…'
 ```
 
-Do not put the token or database password in `fly.toml`, a committed file, or
-this repository's GitHub settings as plain text. Pilot credentials belong only
-to `dr-pilot`; Captain and the worker never receive them.
+## Safe sequence
 
-## Sequence
+1. Keep `CAPTAIN_PUBLIC_BETA_ENABLED=false` and
+   `TRACKING_KILL_SWITCH=true`.
+2. Run `pnpm check`.
+3. Back up Captain's database, then run
+   `pnpm --filter @agents/captain db:migrate`. The Captain 1.0 migration is a
+   deliberate destructive cutover from the private prototype.
+4. Deploy Captain and verify `/health`, `/ready`, one-time login exchange,
+   profile editing, and account deletion.
+5. Deploy one worker. Leave tracking disabled while checking readiness and
+   logs.
+6. Run `pnpm --filter @agents/flight-worker eval:live`. Review 50 sampled
+   landing sources and rerun with
+   `pnpm --filter @agents/flight-worker eval:live -- --manual-agreement=<ratio>`.
+7. Continue only if at least 80% of corpus cases return three verified offers,
+   the 50-result manual sample reaches 90% agreement, validation rejects every
+   injected mismatch, and P95 two-pass latency is below three minutes.
+8. Turn off `TRACKING_KILL_SWITCH` for private users and observe at least one
+   full adaptive cycle.
+9. Set `CAPTAIN_PUBLIC_BETA_ENABLED=true` to admit new users, capped by
+   `CAPTAIN_BETA_USER_LIMIT=25`.
 
-1. Provision the distinct `dr-pilot`, `dr-captain`, and
-   `dr-flight-worker` apps and their separately owned secrets.
-2. Point Captain and the flight worker at Captain’s separate production
-   database. Run `pnpm --filter @agents/captain db:migrate`; stop if migration
-   reconciliation reports different legacy Trip or price-observation counts.
-3. Configure `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET_TOKEN`,
-   `CAPTAIN_SESSION_SECRET`, and both directional HMAC secrets. Captain is
-   public: every new private Telegram user is active unless explicitly
-   suspended.
-4. Deploy Captain, verify `/health` and `/ready`, and register the Captain bot
-   webhook at `/eve/v1/telegram`.
-5. Deploy one always-on worker with the same Captain `DATABASE_URL`, Duffel
-   token, and Telegram token. Verify `/ready` only after its first successful
-   orchestration tick.
-6. Switch Pilot to the Trip bridge and exercise one migrated legacy alias and
-   one newly created Trip.
-7. Open the public bot. Monitor due-work lag, provider call
-   deduplication, search retries, offer age, duplicate-Trip count, per-user
-   provider cost, and notification delivery.
-
-Do not remove the old repositories, legacy schema, aliases, or compatibility
-routes until two successful production releases and sampled price histories
-have reconciled. Checkout and live booking are explicitly deferred.
+If any launch gate fails, leave the beta closed and improve source coverage.
+Do not display unverified fares or add unofficial Skyscanner scraping.

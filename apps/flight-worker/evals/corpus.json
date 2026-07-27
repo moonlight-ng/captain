@@ -1,0 +1,98 @@
+[
+  {
+    "id": "ng-los-abv",
+    "category": "nigerian_domestic",
+    "origin": "LOS",
+    "destination": "ABV",
+    "departureDate": "2026-09-08",
+    "currency": "NGN"
+  },
+  {
+    "id": "ng-abv-los",
+    "category": "nigerian_domestic",
+    "origin": "ABV",
+    "destination": "LOS",
+    "departureDate": "2026-09-15",
+    "currency": "NGN"
+  },
+  {
+    "id": "ng-los-phc",
+    "category": "nigerian_domestic",
+    "origin": "LOS",
+    "destination": "PHC",
+    "departureDate": "2026-10-06",
+    "currency": "NGN"
+  },
+  {
+    "id": "ng-abv-kan",
+    "category": "nigerian_domestic",
+    "origin": "ABV",
+    "destination": "KAN",
+    "departureDate": "2026-10-13",
+    "currency": "NGN"
+  },
+  {
+    "id": "af-los-acc",
+    "category": "african_regional",
+    "origin": "LOS",
+    "destination": "ACC",
+    "departureDate": "2026-09-09",
+    "currency": "USD"
+  },
+  {
+    "id": "af-los-nbo",
+    "category": "african_regional",
+    "origin": "LOS",
+    "destination": "NBO",
+    "departureDate": "2026-09-16",
+    "currency": "USD"
+  },
+  {
+    "id": "af-acc-jnb",
+    "category": "african_regional",
+    "origin": "ACC",
+    "destination": "JNB",
+    "departureDate": "2026-10-07",
+    "currency": "USD"
+  },
+  {
+    "id": "af-nbo-dar",
+    "category": "african_regional",
+    "origin": "NBO",
+    "destination": "DAR",
+    "departureDate": "2026-10-14",
+    "currency": "USD"
+  },
+  {
+    "id": "lh-los-lhr",
+    "category": "long_haul",
+    "origin": "LOS",
+    "destination": "LHR",
+    "departureDate": "2026-09-10",
+    "currency": "USD"
+  },
+  {
+    "id": "lh-los-jfk",
+    "category": "long_haul",
+    "origin": "LOS",
+    "destination": "JFK",
+    "departureDate": "2026-09-17",
+    "currency": "USD"
+  },
+  {
+    "id": "lh-acc-lhr",
+    "category": "long_haul",
+    "origin": "ACC",
+    "destination": "LHR",
+    "departureDate": "2026-10-08",
+    "currency": "USD"
+  },
+  {
+    "id": "lh-nbo-jfk",
+    "category": "long_haul",
+    "origin": "NBO",
+    "destination": "JFK",
+    "departureDate": "2026-10-15",
+    "currency": "USD"
+  }
+]

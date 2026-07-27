@@ -1,89 +1,111 @@
 # Captain
 
-Captain is the public, Telegram-first travel agent. A traveller creates a
-durable **Trip**; Captain tracks its flight combinations, discovers the
-strongest current option, and sends useful updates when the first results
-arrive, a price drops materially, a better itinerary appears, or tracking
-needs attention.
+Captain is a Telegram-first flight tracker for one traveller profile and up to
+three active Trips. It researches fares but does not book, take payments, or collect
+passport data.
 
-There is deliberately no checkout or booking flow in this release. Captain
-does not collect payment, passport, identity-document, or complete passenger
-details in Telegram.
+## Product contract
 
-## Runtime split
+- `/start` sets a default currency, ranking mode, and optional preferred or
+  avoided airlines.
+- A traveller can have up to three active or paused Trips. A fourth Trip
+  requires stopping or completing one of the existing Trips.
+- Domestic Trips suggest the route country's currency. Other Trips suggest the
+  profile default. The confirmed Trip currency is fixed and Captain never
+  converts fares.
+- The dashboard has **Flights**, **Airlines**, and **Browse** views. It only
+  displays offers that pass Captain's two web checks and never describes the
+  set as exhaustive.
+- During product design, Trip and Agent settings use direct reusable links
+  containing an opaque access key. Public-beta session authentication is
+  deferred until the interaction design settles.
+- Archived Trips and their evidence are retained for 90 days. `/delete_account`
+  removes the traveller, Trip, sessions, and retained evidence.
 
-- This app owns Telegram conversations, tenant authorization, Trip APIs, the
-  compatibility UI, and the new `captain` database schema.
-- `../flight-worker` is the only new runtime that schedules or executes Trip
-  searches. Health and readiness endpoints never run searches.
-- `../../packages/flight-domain` normalizes Trips and hashes provider requests.
-- `../../packages/flight-store` leases shared runs, stores price history,
-  evaluates each Trip separately, and queues idempotent notifications.
-- The legacy `/internal/v1/flight-agents` API remains available for one
-  compatibility release. Pilot now uses `/internal/v1/trips`.
+## Architecture
 
-Each Telegram identity resolves from its 64-bit Telegram user ID. Any traveller
-can message Captain and create Trips; suspended accounts remain blocked. Every
-Trip query and mutation is scoped to the authenticated Captain user; public API
-calls use a signed short-lived session token, while Pilot uses timestamped HMAC
-requests with replay protection and idempotency keys.
+`apps/captain` owns Telegram onboarding, Trip setup, authenticated profile and
+Trip APIs, and the dashboard. `apps/flight-worker` owns scheduled searches and
+notifications. Both use `@agents/flight-store`.
+
+Trip setup uses a versioned turn interpreter. It keeps one ordered list of
+dated legs, records the pending question and field provenance, and applies
+validated draft operations instead of merging extracted fields. GPT-5.6 Luna
+handles the schema-constrained semantic pass with reasoning disabled for this
+latency-sensitive extraction role. Deterministic airport, calendar, and route
+validation either accepts that complete interpretation or replaces it with a
+complete deterministic fallback; the two results are never merged field by
+field. Terra remains the general Captain agent model. This follows OpenAI's
+[tier-aware model guidance](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6)
+and [Structured Outputs guidance](https://developers.openai.com/api/docs/guides/structured-outputs).
+
+The worker uses the provider-neutral `FlightSearchProvider` contract. The
+initial `openai_web` adapter makes two bounded OpenAI Responses:
+
+1. broad discovery of at most 40 candidates;
+2. targeted verification retaining at most 20.
+
+An offer is accepted only when both responses agree on its itinerary, fare,
+currency, cabin, and evidence URLs. Every evidence URL must occur in the
+response's actual web-search source list and match an approved airline,
+metasearch, or OTA domain. Failed candidates are not stored.
+
+Captain and Pilot are independent. Captain has no Pilot client, route,
+principal, secret, tool, or redirect. The legacy Flight Agent and Duffel
+runtime have been removed.
+
+Future provider adapters use the reserved `official_*` namespace and require
+documented airline or partnership access. Captain does not scrape unofficial
+Skyscanner endpoints; an official adapter remains blocked on
+[approved API access](https://developers.skyscanner.net/docs/getting-started/authentication).
 
 ## Local development
 
-From the monorepo root:
+Install workspace dependencies, copy `.env.example` to the ignored `.env`, and
+set Captain's database, Telegram, and Eve settings:
 
 ```sh
-corepack pnpm install
+pnpm install
+pnpm --filter @agents/captain db:migrate
 pnpm --filter @agents/captain dev:agent
-pnpm --filter @agents/flight-worker start
 ```
 
-Without `DATABASE_URL`, Captain uses an in-memory platform store. The worker
-requires PostgreSQL because it is an independent process. Copy `.env.example`
-and set a separate Captain database, Telegram bot token and webhook secret,
-Duffel token, signed bridge secrets, and a long random session secret. Set
-`WORKFLOW_POSTGRES_URL` to Captain's database as well so its Eve conversations
-never enter Pilot's database.
-
-Register Captain's Telegram webhook after its public app URL and secrets are
-configured (or pass `--delete` to remove it without discarding pending updates):
+Build the web dashboard separately with:
 
 ```sh
-pnpm --filter @agents/captain telegram:webhook
+pnpm --filter @agents/captain build:web
 ```
 
-Apply domain migrations from this directory:
+The flight worker has its own ignored `.env`. It requires:
 
-```sh
-pnpm db:migrate
-```
+- `DATABASE_URL`
+- `OPENAI_API_KEY`
+- `TELEGRAM_BOT_TOKEN`
+- `CAPTAIN_PUBLIC_URL`
 
-Migration `006_captain_platform.sql` creates the tenant, Trip, Watch, shared
-search, offer, history, notification, and audit tables. The migration command
-also builds SearchSpecs for imported legacy Trips and refuses to finish unless
-legacy Trip and price-history counts reconcile. Migration
-`007_public_captain_access.sql` activates existing waitlisted users while
-preserving explicitly suspended accounts.
+Optional worker controls include `OPENAI_FLIGHT_MODEL`,
+`FLIGHT_APPROVED_DOMAINS`, `TRACKING_KILL_SWITCH`, and
+`DAILY_RESPONSES_CEILING`. The default daily ceiling is 500 Responses.
 
-## Production defaults
+Captain uses `AI_MODEL=openai/gpt-5.6-terra` for its general agent and
+`TRIP_INTERPRETER_MODEL=openai/gpt-5.6-luna` for strict, low-latency Trip
+interpretation. Relative Telegram dates use the traveller timezone selected in
+Agent settings.
 
-- Maximum three active Trips per traveller.
-- Maximum 24 provider combinations per Trip.
-- Six SearchSpecs in the initial discovery batch, then the recommended
-  SearchSpec plus two least-recently-checked alternatives.
-- Six-hour default tracking cadence; distant departures automatically back off
-  to 12 or 24 hours, with a three-hour floor in the final week.
-- Worker orchestration every 60 seconds.
-- Shared-result freshness of 15 minutes.
-- 180-second leases, three attempts, four globally active runs, and one Duffel
-  request at a time per worker.
-- At most 25 diverse, normalized offers per provider search. Raw Duffel
-  payloads are never retained.
-- Current offers and search runs have seven-day retention; compact price
-  history has 90-day retention.
-- Quiet hours from 22:00 to 07:00 in the traveller’s timezone for non-critical
-  notifications.
+Production keeps `CAPTAIN_PUBLIC_BETA_ENABLED=false` until the live launch
+gate below passes. Existing private users continue to work while new
+travellers are held back. Set it to `true` only when opening the capped beta.
 
-Captain deploys as `dr-captain` and uses only `CAPTAIN_*` settings for its
-own runtime. `PILOT_BASE_URL`, `PILOT_TO_CAPTAIN_SECRET`, and
-`CAPTAIN_TO_PILOT_SECRET` describe the explicit bridge to Pilot.
+## Public beta limits
+
+- Maximum 25 travellers.
+- Checks every 12 hours when departure is over 30 days away, every 6 hours at
+  7–30 days, and every 3 hours in the final week.
+- Manual refresh once every 6 hours.
+- At most two improvement alerts in a rolling 24-hour period.
+- Deferred searches keep the last verified results and show delayed tracking.
+
+Public launch remains gated by the live evaluation corpus. It must demonstrate
+route/date/currency/source mismatch rejection, three or more verified options
+in at least 80% of cases, at least 90% landing-page agreement in a 50-result
+manual sample, and P95 two-pass latency below three minutes.

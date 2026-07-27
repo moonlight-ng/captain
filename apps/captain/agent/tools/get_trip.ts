@@ -5,13 +5,17 @@ import { getCaptainServices } from "../../services/app/services.js";
 import { requireCaptainUser } from "../lib/principal.js";
 
 export default defineTool({
-  description: "Get one of the current traveller's Trips and its currently valid discovered offers. Never use an ID belonging to another traveller.",
-  inputSchema: z.object({ tripId: z.uuid() }).strict(),
+  description: "List the traveller's active Trips and get verified offers for the selected or requested Trip.",
+  inputSchema: z.object({ tripId: z.uuid().optional() }).strict(),
   async execute({ tripId }, ctx) {
     const userId = requireCaptainUser(ctx);
     const services = await getCaptainServices();
-    const trip = await services.trips.get(userId, tripId);
-    if (!trip) throw new Error("Trip not found");
-    return { trip, offers: await services.trips.offers(userId, tripId) };
+    const trips = (await services.platformStore.listTrips(userId))
+      .filter((trip) => !["cancelled", "completed", "archived"].includes(trip.status));
+    const trip = tripId
+      ? trips.find((candidate) => candidate.id === tripId) ?? null
+      : await services.platformStore.getActiveTrip(userId);
+    if (!trip) return { trips, trip: null, offers: [] };
+    return { trips, trip, offers: await services.trips.offers(userId, trip.id) };
   }
 });
