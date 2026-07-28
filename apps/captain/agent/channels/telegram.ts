@@ -24,6 +24,7 @@ import {
 import {
   TripLimitError,
   type TravellerProfile,
+  type TripPlanDraft,
   type TripPlanResult
 } from "@agents/flight-domain";
 import {
@@ -36,6 +37,7 @@ import {
 import { getCaptainServices } from "../../services/app/services.js";
 import { TripPlanningService } from "../../services/trip-planning/service.js";
 import {
+  formatTripPlanConfirmation,
   telegramDashboardMessage
 } from "../../services/trip-planning/format.js";
 
@@ -46,6 +48,7 @@ const credentials = {
 };
 const pendingSessionRotations = new Map<string, PendingSessionRotation>();
 const agentProgressMessages = new Map<string, { chatId: string; messageId: string }>();
+const pendingConfirmationPosts = new Set<string>();
 const PLANNING_PROGRESS_TEXT = "Working through the route and dates…";
 const AGENT_PROGRESS_TEXT = "Working on it…";
 const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. Your saved Trip is unchanged—please try again.";
@@ -429,6 +432,9 @@ export default telegramChannel({
           request_id: request.requestId,
           session_id: ctx.session.id
         }));
+      }
+      if (limitRequests.length > 0) {
+        await recoverUndeliveredTripConfirmation(channel.telegram, ctx.session.auth.current?.attributes);
       }
       for (const request of otherRequests) {
         if (
@@ -846,33 +852,83 @@ async function postTripPlanResult(
     : result.status === "awaiting_confirmation"
       ? result.confirmation
       : result.message;
-  await services.platformStore.appendMessage(userId, "assistant", message, new Date());
   if (result.status === "awaiting_confirmation") {
-    await ctx.telegram.post({
-      text: message,
-      reply_markup: {
-        inline_keyboard: [
-          [{
-            text: "Create Trip",
-            callback_data: `captain-trip:start:${result.draft.id}:${result.draft.revision}`
-          }],
-          [{
-            text: "Edit",
-            callback_data: `captain-trip:edit:${result.draft.id}:${result.draft.revision}`
-          }, {
-            text: "Cancel",
-            callback_data: `captain-trip:cancel:${result.draft.id}:${result.draft.revision}`
-          }]
-        ]
-      }
-    });
+    await postTripConfirmationOnce(ctx.telegram, userId, result.draft, message);
     return;
   }
+  await services.platformStore.appendMessage(userId, "assistant", message, new Date());
   if (result.status === "started") {
     await postTelegramDashboardMessage(ctx, message);
     return;
   }
   await ctx.telegram.post(message);
+}
+
+async function recoverUndeliveredTripConfirmation(
+  telegram: Pick<TelegramContext["telegram"], "post">,
+  attributes: Record<string, unknown> | undefined
+): Promise<void> {
+  const userId = authUserId(attributes?.captain_user_id);
+  if (!userId) return;
+  const services = await getCaptainServices();
+  const draft = await services.tripPlanning.findOpen(userId);
+  if (draft?.status !== "awaiting_confirmation") return;
+  await postTripConfirmationOnce(
+    telegram,
+    userId,
+    draft,
+    formatTripPlanConfirmation(draft)
+  );
+}
+
+async function postTripConfirmationOnce(
+  telegram: Pick<TelegramContext["telegram"], "post">,
+  userId: string,
+  draft: TripPlanDraft,
+  message: string
+): Promise<void> {
+  const key = `${draft.id}:${draft.revision}`;
+  if (pendingConfirmationPosts.has(key)) return;
+  pendingConfirmationPosts.add(key);
+  try {
+    const services = await getCaptainServices();
+    const conversation = await services.platformStore.getConversation(userId, 8);
+    if (hasDeliveredTripConfirmation(draft, message, conversation.recentMessages)) return;
+    await telegram.post({
+      text: message,
+      reply_markup: {
+        inline_keyboard: [
+          [{
+            text: "Create Trip",
+            callback_data: `captain-trip:start:${draft.id}:${draft.revision}`
+          }],
+          [{
+            text: "Edit",
+            callback_data: `captain-trip:edit:${draft.id}:${draft.revision}`
+          }, {
+            text: "Cancel",
+            callback_data: `captain-trip:cancel:${draft.id}:${draft.revision}`
+          }]
+        ]
+      }
+    });
+    await services.platformStore.appendMessage(userId, "assistant", message, new Date());
+  } finally {
+    pendingConfirmationPosts.delete(key);
+  }
+}
+
+export function hasDeliveredTripConfirmation(
+  draft: Pick<TripPlanDraft, "updatedAt">,
+  message: string,
+  recentMessages: Array<{ role: "user" | "assistant"; content: string; createdAt: string }>
+): boolean {
+  const updatedAt = Date.parse(draft.updatedAt);
+  return recentMessages.some((candidate) =>
+    candidate.role === "assistant"
+    && candidate.content === message
+    && Date.parse(candidate.createdAt) >= updatedAt
+  );
 }
 
 async function postTelegramDashboardMessage(

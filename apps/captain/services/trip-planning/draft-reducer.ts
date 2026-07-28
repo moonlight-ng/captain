@@ -32,7 +32,7 @@ export function reduceTripDraft(input: {
       leg.originAirports.length > 0 && leg.destinationAirports.length > 0
     ));
   const canFill = (field: TripPlanPendingField): boolean =>
-    isEmpty || replaceItinerary || pending.has(field);
+    isEmpty || replaceItinerary || input.turn.correction || pending.has(field);
 
   if (input.turn.legs.length > 0) {
     if (replaceItinerary) {

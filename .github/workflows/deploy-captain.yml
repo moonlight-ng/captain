@@ -1,20 +1,12 @@
 name: Deploy Captain
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - apps/captain/**
-      - packages/conversation-core/**
-      - packages/flight-domain/**
-      - packages/flight-store/**
-      - packages/observability/**
-      - packages/telegram-core/**
-      - package.json
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - .github/workflows/deploy-captain.yml
-  workflow_dispatch:
+  workflow_run:
+    workflows: ["Captain CI"]
+    types: [completed]
+
+permissions:
+  contents: read
 
 concurrency:
   group: deploy-captain
@@ -22,9 +14,15 @@ concurrency:
 
 jobs:
   deploy:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - run: flyctl deploy . --config apps/captain/fly.toml --remote-only
         env:

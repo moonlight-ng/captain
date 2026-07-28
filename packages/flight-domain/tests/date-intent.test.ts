@@ -119,6 +119,17 @@ describe("trip date intent", () => {
     });
   });
 
+  it("resolves ordinal weekdays within a named month", () => {
+    expect(resolveTripDateIntent(
+      "First Sunday September, not August",
+      new Date("2026-07-29T00:00:00Z")
+    )).toEqual({
+      departureDate: "2026-09-06",
+      returnDate: null,
+      issue: null
+    });
+  });
+
   it("rejects invalid leap dates and past departures", () => {
     expect(resolveTripDateIntent("Depart February 29, 2026", now).issue).toContain("not a valid");
     expect(resolveTripDateIntent(

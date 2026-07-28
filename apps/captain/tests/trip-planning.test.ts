@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { MemoryCaptainPlatformStore } from "@agents/flight-store";
 import {
+  hasDeliveredTripConfirmation,
   isCaptainGreeting,
   parseTripPlanCallback
 } from "../agent/channels/telegram.js";
@@ -44,6 +45,20 @@ describe("Captain Trip planning", () => {
       revision: 3
     });
     expect(parseTripPlanCallback(`captain-trip:start:${id}:0`)).toBeNull();
+  });
+
+  it("distinguishes a delivered confirmation from an older button message", () => {
+    const draft = { updatedAt: "2026-09-01T12:00:00.000Z" };
+    expect(hasDeliveredTripConfirmation(draft, "Ready", [{
+      role: "assistant",
+      content: "Ready",
+      createdAt: "2026-09-01T11:59:59.000Z"
+    }])).toBe(false);
+    expect(hasDeliveredTripConfirmation(draft, "Ready", [{
+      role: "assistant",
+      content: "Ready",
+      createdAt: "2026-09-01T12:00:01.000Z"
+    }])).toBe(true);
   });
 
   it("routes only standalone greetings away from conversational history", () => {
@@ -513,6 +528,58 @@ describe("Captain Trip planning", () => {
         }
       }
     });
+  });
+
+  it("inherits the month when answering with an ordinal weekday", async () => {
+    const clock = new Date("2026-07-29T00:00:00Z");
+    const { planning, user } = await setup(clock);
+    const first = await planning.prepare(
+      user.id,
+      "Check for Lagos to London first week of September"
+    );
+    expect(first.status).toBe("needs_input");
+    if (first.status !== "needs_input") throw new Error("Expected a departure-date question");
+    expect(first.prompt).toBe("What date would you like to depart?");
+
+    const completed = await planning.prepare(
+      user.id,
+      "The first Sunday",
+      null,
+      first.draft.id
+    );
+    expect(completed.status).toBe("awaiting_confirmation");
+    if (completed.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(completed.draft.plan).toMatchObject({
+      departureDate: "2026-09-06",
+      input: {
+        brief: {
+          originAirports: ["LOS"],
+          destinationAirports: ["LON"],
+          tripType: "one_way"
+        }
+      }
+    });
+  });
+
+  it("applies an explicit ordinal-weekday date correction", async () => {
+    const clock = new Date("2026-07-29T00:00:00Z");
+    const { planning, user } = await setup(clock);
+    const first = await planning.prepare(
+      user.id,
+      "Check for Lagos to London on August 2"
+    );
+    expect(first.status).toBe("awaiting_confirmation");
+    if (first.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+
+    const corrected = await planning.prepare(
+      user.id,
+      "First Sunday September not August",
+      null,
+      first.draft.id
+    );
+    expect(corrected.status).toBe("awaiting_confirmation");
+    if (corrected.status !== "awaiting_confirmation") throw new Error("Expected corrected confirmation");
+    expect(corrected.draft.plan?.departureDate).toBe("2026-09-06");
   });
 
   it("does not silently create a multi-traveller Trip in the one-adult beta", async () => {

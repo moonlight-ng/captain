@@ -319,8 +319,9 @@ function bindDates(
   parser: InterpretedTripTurn["parser"],
   model: string | null
 ): InterpretedTripTurn {
-  const resolved = resolveTripDateIntent(input.request, input.now, input.timeZone);
-  const sequence = resolveTripDateSequence(input.request, input.now, input.timeZone);
+  const calendarRequest = withInheritedMonthContext(input.request, input.conversation);
+  const resolved = resolveTripDateIntent(calendarRequest, input.now, input.timeZone);
+  const sequence = resolveTripDateSequence(calendarRequest, input.now, input.timeZone);
   const pendingReturn = input.turnState.pendingFields.some((item) => item.field === "returnDate");
   const pendingDeparture = input.turnState.pendingFields.some((item) => item.field === "departureDate");
   const inheritedBareDate = !resolved.departureDate && !resolved.returnDate
@@ -476,8 +477,24 @@ function contextualNextDayReturn(request: string, prior: TripPlanPartial): strin
   return departureDate ? addIsoDays(departureDate, 1) : null;
 }
 
+function withInheritedMonthContext(request: string, conversation: string[]): string {
+  const month = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/iu;
+  if (
+    month.test(request)
+    || !/\b(?:first|second|third|fourth|last)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/iu.test(request)
+  ) {
+    return request;
+  }
+  const priorMonth = conversation
+    .slice(0, -1)
+    .reverse()
+    .map((message) => month.exec(message)?.[0] ?? null)
+    .find((value): value is string => Boolean(value));
+  return priorMonth ? `${request} of ${priorMonth}` : request;
+}
+
 function hasCorrectionCue(request: string): boolean {
-  return /\b(?:actually|change|instead|make it|correction|rather|not .+ but)\b/iu.test(request);
+  return /\b(?:actually|change|instead|make it|correction|rather|not .+ but|not\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?))\b/iu.test(request);
 }
 
 function localIsoDate(now: Date, timeZone: string): string {

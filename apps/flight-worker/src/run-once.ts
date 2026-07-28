@@ -1,4 +1,4 @@
-import postgres from "../../../packages/flight-store/node_modules/postgres/src/index.js";
+import postgres from "postgres";
 import { PostgresCaptainPlatformStore } from "@agents/flight-store";
 import { logEvent } from "@agents/observability";
 import { DuffelFlightSearchProvider } from "@agents/provider-duffel";

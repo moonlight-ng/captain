@@ -1,0 +1,66 @@
+name: Captain CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - apps/captain/**
+      - packages/conversation-core/**
+      - packages/flight-domain/**
+      - packages/flight-store/**
+      - packages/observability/**
+      - packages/telegram-core/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/codex/prompts/captain-self-improvement.md
+      - .github/workflows/captain-ci.yml
+      - .github/workflows/captain-daily-self-test.yml
+      - .github/workflows/captain-self-improvement.yml
+      - .github/workflows/deploy-captain.yml
+  push:
+    branches: [main]
+    paths:
+      - apps/captain/**
+      - packages/conversation-core/**
+      - packages/flight-domain/**
+      - packages/flight-store/**
+      - packages/observability/**
+      - packages/telegram-core/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/codex/prompts/captain-self-improvement.md
+      - .github/workflows/captain-ci.yml
+      - .github/workflows/captain-daily-self-test.yml
+      - .github/workflows/captain-self-improvement.yml
+      - .github/workflows/deploy-captain.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: captain-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check:boundaries
+      - run: pnpm --filter @agents/flight-domain test
+      - run: pnpm --filter @agents/telegram-core test
+      - run: pnpm --filter @agents/flight-store test
+      - run: pnpm --filter @agents/captain test
+      - run: pnpm --filter @agents/flight-domain typecheck
+      - run: pnpm --filter @agents/telegram-core typecheck
+      - run: pnpm --filter @agents/flight-store typecheck
+      - run: pnpm --filter @agents/captain typecheck
+      - run: pnpm --filter @agents/captain build

@@ -36,9 +36,17 @@ const WEEKDAY_INDEX: Readonly<Record<string, number>> = {
   friday: 5,
   saturday: 6
 };
+const WEEK_ORDINAL: Readonly<Record<string, number>> = {
+  first: 1,
+  second: 2,
+  third: 3,
+  fourth: 4,
+  last: -1
+};
 
 const MONTH_PATTERN = Object.keys(MONTHS).join("|");
 const WEEKDAY_PATTERN = Object.keys(WEEKDAY_INDEX).join("|");
+const WEEK_ORDINAL_PATTERN = Object.keys(WEEK_ORDINAL).join("|");
 const RELATIVE_NUMBER: Readonly<Record<string, number>> = {
   a: 1,
   an: 1,
@@ -266,6 +274,24 @@ function dateMentions(
     }));
     claimed.add(match.index);
   }
+  const ordinalWeekday = new RegExp(
+    String.raw`\b(?:the\s+)?(${WEEK_ORDINAL_PATTERN})\s+(${WEEKDAY_PATTERN})(?:\s+(?:of|in)\s+|\s+)(${MONTH_PATTERN})(?:[\s,]+(20\d{2}))?\b`,
+    "giu"
+  );
+  for (const match of request.matchAll(ordinalWeekday)) {
+    const weekdayIndex = match.index + match[0].toLowerCase().indexOf(match[2]!.toLowerCase());
+    mentions.push(resolveOrdinalWeekdayMention({
+      index: match.index,
+      ordinal: match[1]!,
+      weekday: match[2]!,
+      month: match[3]!,
+      year: match[4] ? Number(match[4]) : null,
+      now,
+      timeZone
+    }));
+    claimed.add(match.index);
+    claimed.add(weekdayIndex);
+  }
   const isoPattern = /\b(20\d{2}-\d{2}-\d{2})\b/gu;
   for (const match of request.matchAll(isoPattern)) {
     if (claimed.has(match.index)) continue;
@@ -389,6 +415,48 @@ function resolveMention(input: {
     };
   }
   return { value, index: input.index, weekday: input.weekday };
+}
+
+function resolveOrdinalWeekdayMention(input: {
+  index: number;
+  ordinal: string;
+  weekday: string;
+  month: string;
+  year: number | null;
+  now: Date;
+  timeZone: string;
+}): DateMention {
+  const month = MONTHS[input.month.toLowerCase()]!;
+  const weekday = WEEKDAY_INDEX[input.weekday.toLowerCase()]!;
+  const ordinal = WEEK_ORDINAL[input.ordinal.toLowerCase()]!;
+  const today = localToday(input.now, input.timeZone);
+  let year = input.year ?? today.getUTCFullYear();
+  let date = ordinalWeekdayDate(year, month, weekday, ordinal);
+  if (!input.year && date < today) {
+    year += 1;
+    date = ordinalWeekdayDate(year, month, weekday, ordinal);
+  }
+  return {
+    value: isoDate(date),
+    index: input.index,
+    weekday: input.weekday
+  };
+}
+
+function ordinalWeekdayDate(
+  year: number,
+  month: number,
+  weekday: number,
+  ordinal: number
+): Date {
+  if (ordinal === -1) {
+    const last = new Date(Date.UTC(year, month + 1, 0));
+    const offset = (last.getUTCDay() - weekday + 7) % 7;
+    return new Date(Date.UTC(year, month, last.getUTCDate() - offset));
+  }
+  const first = new Date(Date.UTC(year, month, 1));
+  const offset = (weekday - first.getUTCDay() + 7) % 7;
+  return new Date(Date.UTC(year, month, 1 + offset + (ordinal - 1) * 7));
 }
 
 function returnCueBefore(request: string, index: number): boolean {

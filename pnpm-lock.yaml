@@ -95,6 +95,9 @@ importers:
       '@agents/provider-web':
         specifier: workspace:*
         version: link:../../packages/provider-web
+      postgres:
+        specifier: 3.4.7
+        version: 3.4.7
       tsx:
         specifier: 4.22.4
         version: 4.22.4
