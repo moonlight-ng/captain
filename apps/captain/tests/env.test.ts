@@ -10,6 +10,8 @@ describe("Captain public environment", () => {
     vi.stubEnv("DATABASE_URL", "postgresql://captain.invalid/db");
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "telegram-token");
     vi.stubEnv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "telegram-webhook-secret");
+    vi.stubEnv("CAPTAIN_BETA_USER_LIMIT", undefined);
+    vi.stubEnv("CAPTAIN_PUBLIC_BETA_ENABLED", undefined);
     expect(loadEnv()).toMatchObject({
       mode: "production",
       betaUserLimit: 25,
