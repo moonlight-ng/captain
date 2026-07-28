@@ -487,18 +487,12 @@ export default telegramChannel({
 
 async function postCurrencyQuestion(ctx: TelegramContext): Promise<void> {
   await ctx.telegram.post({
-    text: "First, choose your default currency. I’ll suggest a local currency for domestic Trips and use this default for international Trips. Captain never converts fares.",
+    text: "First, choose USD or GBP. Captain tracks fares through Duffel and converts between USD and GBP when needed. Some airlines or routes may not appear in inventory yet.",
     reply_markup: {
-      inline_keyboard: [
-        ["USD", "GBP", "NGN"].map((currency) => ({
-          text: currency,
-          callback_data: `captain-profile:currency:${currency}`
-        })),
-        ["EUR", "KES", "TZS"].map((currency) => ({
-          text: currency,
-          callback_data: `captain-profile:currency:${currency}`
-        }))
-      ]
+      inline_keyboard: [[
+        { text: "USD", callback_data: "captain-profile:currency:USD" },
+        { text: "GBP", callback_data: "captain-profile:currency:GBP" }
+      ]]
     }
   });
 }
@@ -530,7 +524,7 @@ async function handleOnboardingText(
 ): Promise<boolean> {
   const services = await getCaptainServices();
   if (profile.onboardingStep === "currency") {
-    const currency = /^[A-Za-z]{3}$/u.test(content.trim()) ? content.trim().toUpperCase() : null;
+    const currency = /^(USD|GBP)$/iu.test(content.trim()) ? content.trim().toUpperCase() : null;
     if (!currency) {
       await postCurrencyQuestion(ctx);
       return true;
@@ -589,6 +583,14 @@ async function handleProfileCallback(
   }, new Date());
   await clearCallbackButtons(ctx, query);
   if (action.type === "currency") {
+    if (!/^(USD|GBP)$/u.test(action.value)) {
+      await ctx.telegram.answerCallbackQuery({
+        callbackQueryId: query.id,
+        text: "Choose USD or GBP"
+      });
+      await postCurrencyQuestion(ctx);
+      return;
+    }
     await services.platformStore.updateProfile(
       user.id,
       { defaultCurrency: action.value, onboardingStep: "ranking" },

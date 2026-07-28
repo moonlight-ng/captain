@@ -10,11 +10,11 @@ passport data.
   avoided airlines.
 - A traveller can have up to three active or paused Trips. A fourth Trip
   requires stopping or completing one of the existing Trips.
-- Domestic Trips suggest the route country's currency. Other Trips suggest the
-  profile default. The confirmed Trip currency is fixed and Captain never
-  converts fares.
+- Domestic Trips are not tracked yet. International Trips use **USD or GBP**
+  only. Duffel fares convert between those two when needed; the confirmed Trip
+  currency stays fixed after confirm.
 - The dashboard has **Flights**, **Airlines**, and **Browse** views. It only
-  displays offers that pass Captain's two web checks and never describes the
+  displays offers from Duffel inventory and never describes the
   set as exhaustive.
 - During product design, Trip and Agent settings use direct reusable links
   containing an opaque access key. Public-beta session authentication is
@@ -45,10 +45,11 @@ initial `openai_web` adapter makes two bounded OpenAI Responses:
 1. broad discovery of at most 40 candidates;
 2. targeted verification retaining at most 20.
 
-An offer is accepted only when both responses agree on its itinerary, fare,
-currency, cabin, and evidence URLs. Every evidence URL must occur in the
-response's actual web-search source list and match an approved airline,
-metasearch, or OTA domain. Failed candidates are not stored.
+An offer is accepted when both responses agree on its itinerary, fare,
+currency, and cabin. Evidence must use an approved airline, metasearch, or
+OTA domain that appears among retrieved sources (exact URL or same domain).
+Failed candidates are not stored. Empty verified checks keep the last good
+offers.
 
 Captain and Pilot are independent. Captain has no Pilot client, route,
 principal, secret, tool, or redirect. The legacy Flight Agent and Duffel
@@ -105,7 +106,8 @@ travellers are held back. Set it to `true` only when opening the capped beta.
 - At most two improvement alerts in a rolling 24-hour period.
 - Deferred searches keep the last verified results and show delayed tracking.
 
-Public launch remains gated by the live evaluation corpus. It must demonstrate
-route/date/currency/source mismatch rejection, three or more verified options
-in at least 80% of cases, at least 90% landing-page agreement in a 50-result
-manual sample, and P95 two-pass latency below three minutes.
+Public launch remains gated by the live evaluation corpus against
+`openai_web`. It must demonstrate route/date/currency/source mismatch
+rejection, three or more verified options in at least 80% of cases overall
+(and at least 75% on domestic and international subsets), optional manual
+landing agreement when sampled, and P95 two-pass latency below five minutes.

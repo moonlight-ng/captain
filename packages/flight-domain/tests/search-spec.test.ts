@@ -22,7 +22,7 @@ describe("shared web-search specifications", () => {
   it("produces a stable provider-neutral key", () => {
     const request = buildSearchSpecs(brief)[0]!.request;
     expect(searchSpecKey(request)).toBe(searchSpecKey({ ...request }));
-    expect(request.provider).toBe("openai_web");
+    expect(request.provider).toBe("official_duffel");
     expect(request.passenger).toEqual({ adults: 1, childrenAges: [], infants: 0 });
   });
 

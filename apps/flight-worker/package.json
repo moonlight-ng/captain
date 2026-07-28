@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "eval:live": "node --env-file-if-exists=.env --import tsx src/evaluate.ts",
+    "diagnose:search": "node --env-file-if-exists=.env --import tsx src/diagnose.ts",
     "start": "node --env-file-if-exists=.env --import tsx src/index.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
@@ -15,6 +16,7 @@
     "@agents/flight-domain": "workspace:*",
     "@agents/flight-store": "workspace:*",
     "@agents/observability": "workspace:*",
+    "@agents/provider-duffel": "workspace:*",
     "@agents/provider-web": "workspace:*",
     "tsx": "4.22.4"
   },

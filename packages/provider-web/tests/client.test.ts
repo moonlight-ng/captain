@@ -72,7 +72,7 @@ describe("OpenAI web flight provider", () => {
     expect(result.webSearchCalls).toBe(2);
   });
 
-  it("rejects a verification pass whose evidence URL changed", async () => {
+  it("retains a two-pass match when evidence URLs differ but itinerary and fare match", async () => {
     const changed = {
       ...offer,
       evidence: [{
@@ -80,6 +80,38 @@ describe("OpenAI web flight provider", () => {
         url: "https://www.flyairpeace.com/search/other"
       }]
     };
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response("discovery", [offer]))
+      .mockResolvedValueOnce(response("verification", [changed], "https://www.flyairpeace.com/search/other"));
+    const provider = new OpenAIWebFlightSearchProvider({
+      apiKey: "test",
+      approvedDomains: ["flyairpeace.com"],
+      fetch
+    });
+
+    const result = await provider.search(request);
+
+    expect(result.offers).toHaveLength(1);
+    expect(result.rejectionCounts.two_pass_mismatch ?? 0).toBe(0);
+  });
+
+  it("accepts evidence when a same-domain source was retrieved even if the exact URL differs", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response("discovery", [offer], "https://www.flyairpeace.com/home"))
+      .mockResolvedValueOnce(response("verification", [offer], "https://www.flyairpeace.com/home"));
+    const provider = new OpenAIWebFlightSearchProvider({
+      apiKey: "test",
+      approvedDomains: ["flyairpeace.com"],
+      fetch
+    });
+
+    const result = await provider.search(request);
+
+    expect(result.offers).toHaveLength(1);
+  });
+
+  it("rejects a verification pass whose fare changed", async () => {
+    const changed = { ...offer, priceAmount: "160000" };
     const fetch = vi.fn()
       .mockResolvedValueOnce(response("discovery", [offer]))
       .mockResolvedValueOnce(response("verification", [changed]));
@@ -93,6 +125,24 @@ describe("OpenAI web flight provider", () => {
 
     expect(result.offers).toEqual([]);
     expect(result.rejectionCounts.two_pass_mismatch).toBe(1);
+  });
+
+  it("retries discovery when the first pass returns no candidates", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response("discovery", []))
+      .mockResolvedValueOnce(response("retry", [offer]));
+    const provider = new OpenAIWebFlightSearchProvider({
+      apiKey: "test",
+      approvedDomains: ["flyairpeace.com"],
+      fetch
+    });
+
+    const result = await provider.search(request);
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(result.discoveryResponseId).toBe("discovery");
+    expect(result.verificationResponseId).toBe("retry");
+    expect(result.offers).toHaveLength(1);
   });
 
   it("still performs the bounded verification response when discovery is empty", async () => {
@@ -110,6 +160,53 @@ describe("OpenAI web flight provider", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(result.offers).toEqual([]);
     expect(result.verificationResponseId).toBe("verification");
+  });
+
+  it("keeps valid offers when another candidate in the same batch has invalid schema", async () => {
+    const invalid = {
+      ...offer,
+      slices: [{ ...offer.slices[0]!, segments: [{ ...offer.slices[0]!.segments[0]!, departure: "not-a-date" }] }]
+    };
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response("discovery", [invalid, offer]))
+      .mockResolvedValueOnce(response("verification", [offer]));
+    const provider = new OpenAIWebFlightSearchProvider({
+      apiKey: "test",
+      approvedDomains: ["flyairpeace.com"],
+      fetch
+    });
+
+    const result = await provider.search(request);
+
+    expect(result.offers).toHaveLength(1);
+    expect(result.rejectionCounts.invalid_schema).toBe(1);
+  });
+
+  it("coerces offset-less datetimes before validation", async () => {
+    const offsetLess = {
+      ...offer,
+      slices: [{
+        ...offer.slices[0]!,
+        segments: [{
+          ...offer.slices[0]!.segments[0]!,
+          departure: "2026-09-10T08:00:00",
+          arrival: "2026-09-10T09:10:00"
+        }]
+      }]
+    };
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response("discovery", [offsetLess]))
+      .mockResolvedValueOnce(response("verification", [offsetLess]));
+    const provider = new OpenAIWebFlightSearchProvider({
+      apiKey: "test",
+      approvedDomains: ["flyairpeace.com"],
+      fetch
+    });
+
+    const result = await provider.search(request);
+
+    expect(result.offers).toHaveLength(1);
+    expect(result.offers[0]?.slices[0]?.segments[0]?.departure).toBe("2026-09-10T08:00:00Z");
   });
 
   it.each([
@@ -162,10 +259,11 @@ describe("OpenAI web flight provider", () => {
   });
 });
 
-function response(id: string, offers: unknown[]): Response {
-  const url = offers.length > 0
-    ? (offers[0] as typeof offer).evidence[0]!.url
-    : "https://www.flyairpeace.com/";
+function response(id: string, offers: unknown[], sourceUrl?: string): Response {
+  const url = sourceUrl
+    ?? (offers.length > 0
+      ? (offers[0] as typeof offer).evidence[0]!.url
+      : "https://www.flyairpeace.com/");
   return Response.json({
     id,
     status: "completed",

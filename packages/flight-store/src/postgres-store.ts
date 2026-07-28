@@ -948,6 +948,18 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       `;
       const run = runs[0];
       if (!run) throw new Error("Search run lease is not owned by this worker");
+      // Empty verified sets keep the last good offers rather than wiping the Trip blank.
+      if (retainedOffers.length === 0) {
+        await tx`
+          update captain.watches watch set last_check_at = ${now},
+            delayed_at = ${now},
+            delay_reason = ${"No verified fares this check; keeping last results."},
+            updated_at = ${now}
+          from captain.watch_search_specs link
+          where link.watch_id = watch.id and link.search_spec_id = ${run.search_spec_id}
+        `;
+        return;
+      }
       await tx`delete from captain.offers where search_spec_id = ${run.search_spec_id}`;
       for (const offer of retainedOffers) {
         const offerId = randomUUID();
@@ -1314,6 +1326,38 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       returning *
     `;
     return rows[0] ? toTripPlanDraft(rows[0]) : null;
+  }
+
+  async enqueueInventoryGapForSearchSpec(searchSpecId: string, now: Date): Promise<number> {
+    const trips = await this.#sql<Array<{ id: string; user_id: string; title: string }>>`
+      select distinct trip.id, trip.user_id, trip.title
+      from captain.trips trip
+      join captain.watches watch on watch.trip_id = trip.id
+      join captain.watch_search_specs link on link.watch_id = watch.id
+      join captain.telegram_accounts telegram on telegram.user_id = trip.user_id
+      join captain.traveller_profiles profile on profile.user_id = trip.user_id
+      where link.search_spec_id = ${searchSpecId}
+        and profile.alerts_enabled = true
+        and trip.status not in ('cancelled', 'completed', 'archived')
+    `;
+    let queued = 0;
+    for (const trip of trips) {
+      const dedupKey = `${trip.id}:inventory_gap`;
+      const availableAt = await userDeliveryTime(this.#sql, trip.user_id, now);
+      const inserted = await this.#sql<Array<{ id: string }>>`
+        insert into captain.notifications (
+          id, user_id, trip_id, kind, dedup_key, payload, status,
+          attempts, available_at, created_at, updated_at
+        ) values (
+          ${randomUUID()}, ${trip.user_id}, ${trip.id}, 'inventory_gap', ${dedupKey},
+          ${this.#sql.json(json({ tripTitle: trip.title }))}, 'pending', 0,
+          ${availableAt}, ${now}, ${now}
+        ) on conflict (dedup_key) do nothing
+        returning id
+      `;
+      if (inserted.length === 1) queued += 1;
+    }
+    return queued;
   }
 
   async #enqueueAttentionForSpec(searchSpecId: string, error: string, now: Date): Promise<void> {

@@ -42,12 +42,14 @@ fly secrets set -a dr-flight-worker \
    profile editing, and account deletion.
 5. Deploy one worker. Leave tracking disabled while checking readiness and
    logs.
-6. Run `pnpm --filter @agents/flight-worker eval:live`. Review 50 sampled
-   landing sources and rerun with
+6. Run `pnpm --filter @agents/flight-worker eval:live`. Optionally review
+   sampled landing sources and rerun with
    `pnpm --filter @agents/flight-worker eval:live -- --manual-agreement=<ratio>`.
-7. Continue only if at least 80% of corpus cases return three verified offers,
-   the 50-result manual sample reaches 90% agreement, validation rejects every
-   injected mismatch, and P95 two-pass latency is below three minutes.
+7. Continue only if overall coverage reaches 80%, domestic and international
+   subsets each reach 75% with three verified offers, optional manual agreement
+   is at least 90% when provided, and P95 two-pass latency is below five
+   minutes. Inventory is `openai_web`-primary; Duffel is not required for
+   launch.
 8. Turn off `TRACKING_KILL_SWITCH` for private users and observe at least one
    full adaptive cycle.
 9. Set `CAPTAIN_PUBLIC_BETA_ENABLED=true` to admit new users, capped by

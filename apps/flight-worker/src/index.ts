@@ -2,21 +2,29 @@ import { createServer } from "node:http";
 
 import { PostgresCaptainPlatformStore } from "@agents/flight-store";
 import { logEvent } from "@agents/observability";
-import { OpenAIWebFlightSearchProvider } from "@agents/provider-web";
+import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
+import { OpenAIWebFlightSearchProvider, type FlightSearchProvider } from "@agents/provider-web";
 
 import { loadWorkerEnv } from "./env.js";
 import { FlightWorker } from "./worker.js";
 
 const env = loadWorkerEnv();
 const store = PostgresCaptainPlatformStore.connect(env.databaseUrl, 6);
+const provider: FlightSearchProvider = env.inventoryProvider === "openai_web"
+  ? new OpenAIWebFlightSearchProvider({
+      apiKey: env.openaiApiKey,
+      baseUrl: env.openaiBaseUrl,
+      model: env.openaiModel,
+      approvedDomains: env.approvedDomains
+    })
+  : new DuffelFlightSearchProvider({
+      accessToken: env.duffelAccessToken,
+      baseUrl: env.duffelBaseUrl
+    });
+
 const worker = new FlightWorker({
   store,
-  provider: new OpenAIWebFlightSearchProvider({
-    apiKey: env.openaiApiKey,
-    baseUrl: env.openaiBaseUrl,
-    model: env.openaiModel,
-    approvedDomains: env.approvedDomains
-  }),
+  provider,
   telegramBotToken: env.telegramBotToken,
   captainPublicUrl: env.captainPublicUrl,
   trackingEnabled: env.trackingEnabled,
@@ -50,14 +58,18 @@ const server = createServer((request, response) => {
   }
   if (request.url === "/ready") {
     response.writeHead(ready ? 200 : 503, { "content-type": "application/json" })
-      .end(JSON.stringify({ status: ready ? "ready" : "starting" }));
+      .end(JSON.stringify({ status: ready ? "ready" : "starting", provider: env.inventoryProvider }));
     return;
   }
   response.writeHead(404).end();
 });
 
 server.listen(env.port, "0.0.0.0", () => {
-  logEvent("info", "flight_worker.started", { worker_id: env.workerId, port: env.port });
+  logEvent("info", "flight_worker.started", {
+    worker_id: env.workerId,
+    port: env.port,
+    provider: env.inventoryProvider
+  });
   void tick();
 });
 
