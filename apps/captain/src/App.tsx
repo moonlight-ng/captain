@@ -210,10 +210,6 @@ function FlightsTab({ offers, profile }: { offers: VerifiedOffer[]; profile: Tra
     .sort((left, right) => Number(right === profile.rankingMode) - Number(left === profile.rankingMode));
   return (
     <>
-      <div className="section-heading preference-first">
-        <p>Captain’s current preference is <strong>{profile.rankingMode}</strong>.</p>
-        <h2>Your strongest options</h2>
-      </div>
       <div className="recommendation-grid">
         {modes.map((mode) => {
           const offer = recommendations[mode];

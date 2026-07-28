@@ -220,18 +220,6 @@ h2 { margin-bottom: 7px; font-size: var(--type-body); font-weight: 610; letter-s
   line-height: 1.45;
   text-align: right;
 }
-.section-heading.preference-first {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-}
-.section-heading.preference-first > p {
-  max-width: none;
-  margin: 0;
-  color: var(--muted);
-  text-align: left;
-}
-.section-heading.preference-first h2 { margin: 0; }
 
 .recommendation-grid, .airline-grid, .offer-list {
   display: flex;
