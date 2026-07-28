@@ -122,3 +122,87 @@ export type TripActivity = {
   payload: Record<string, unknown>;
   createdAt: string;
 };
+
+export type BrowseSort = "recommended" | "price" | "duration" | "departure";
+
+export type BrowsePreferences = {
+  sort: BrowseSort;
+  stops: number[];
+  airlines: string[];
+  airports: string[];
+  maximumPrice: number | null;
+  departurePeriods: Array<"morning" | "afternoon" | "evening">;
+};
+
+export const EMPTY_BROWSE_PREFERENCES: BrowsePreferences = {
+  sort: "recommended",
+  stops: [],
+  airlines: [],
+  airports: [],
+  maximumPrice: null,
+  departurePeriods: []
+};
+
+export function departurePeriod(value: string): "morning" | "afternoon" | "evening" {
+  const hour = new Date(value).getHours();
+  return hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
+}
+
+export function offerAirports(offer: VerifiedOffer): string[] {
+  const segments = offer.snapshot.segments ?? [];
+  if (segments.length > 0) {
+    return [...new Set(segments.flatMap((segment) => [segment.origin, segment.destination]))];
+  }
+  return [...new Set((offer.snapshot.route ?? "").match(/[A-Z]{3}/gu) ?? [])];
+}
+
+export function offerDeparture(offer: VerifiedOffer): string | null {
+  return offer.snapshot.segments?.[0]?.departure ?? null;
+}
+
+export function sortAndFilterOffers(
+  offers: readonly VerifiedOffer[],
+  preferences: BrowsePreferences
+): VerifiedOffer[] {
+  const filtered = offers.filter((offer) => {
+    const stops = Number(offer.snapshot.stops) || 0;
+    if (preferences.stops.length > 0 && !preferences.stops.includes(stops)) return false;
+    if (preferences.airlines.length > 0 && !preferences.airlines.includes(offer.primaryAirlineCode)) {
+      return false;
+    }
+    if (
+      preferences.airports.length > 0
+      && !preferences.airports.some((airport) => offerAirports(offer).includes(airport))
+    ) {
+      return false;
+    }
+    if (preferences.maximumPrice !== null && offer.price > preferences.maximumPrice) return false;
+    if (preferences.departurePeriods.length > 0) {
+      const departure = offerDeparture(offer);
+      if (!departure || !preferences.departurePeriods.includes(departurePeriod(departure))) {
+        return false;
+      }
+    }
+    return true;
+  });
+  return [...filtered].sort((left, right) => {
+    if (preferences.sort === "price") {
+      return left.price - right.price || left.itineraryKey.localeCompare(right.itineraryKey);
+    }
+    if (preferences.sort === "duration") {
+      return (Number(left.snapshot.durationSeconds) || 0) - (Number(right.snapshot.durationSeconds) || 0)
+        || left.price - right.price
+        || left.itineraryKey.localeCompare(right.itineraryKey);
+    }
+    if (preferences.sort === "departure") {
+      const leftDeparture = Date.parse(offerDeparture(left) ?? "") || Number.POSITIVE_INFINITY;
+      const rightDeparture = Date.parse(offerDeparture(right) ?? "") || Number.POSITIVE_INFINITY;
+      return leftDeparture - rightDeparture
+        || left.price - right.price
+        || left.itineraryKey.localeCompare(right.itineraryKey);
+    }
+    return left.price - right.price
+      || (Number(left.snapshot.durationSeconds) || 0) - (Number(right.snapshot.durationSeconds) || 0)
+      || left.itineraryKey.localeCompare(right.itineraryKey);
+  });
+}

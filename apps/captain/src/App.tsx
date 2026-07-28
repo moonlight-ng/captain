@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type KeyboardEvent, type ReactNode, type SetStateAction } from "react";
 
 import {
   ApiError,
@@ -11,12 +11,22 @@ import {
   updateProfile,
   updateTripBrief
 } from "./api";
-import type {
-  RankingMode,
-  TravellerProfile,
-  TripPayload,
-  VerifiedOffer
+import {
+  EMPTY_BROWSE_PREFERENCES,
+  offerAirports,
+  offerDeparture,
+  sortAndFilterOffers,
+  type BrowsePreferences,
+  type RankingMode,
+  type TravellerProfile,
+  type TripPayload,
+  type VerifiedOffer
 } from "./domain";
+import {
+  airlineLabel,
+  normalizeAirlineCode,
+  searchAirlines
+} from "./airline-catalog";
 import { airlineGroups } from "./airline-groups";
 
 type Tab = "flights" | "airlines" | "browse";
@@ -34,7 +44,9 @@ export function App() {
   const [authenticated, setAuthenticated] = useState(false);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<Tab>("flights");
-  const [airlineFilter, setAirlineFilter] = useState("");
+  const [browsePreferences, setBrowsePreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [draftPreferences, setDraftPreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
   const preferencesPage = window.location.pathname === "/preferences";
 
   async function load() {
@@ -100,8 +112,8 @@ export function App() {
           <span>Captain</span>
         </a>
         <div className="top-actions">
-          <span className="name">{displayName}</span>
-          <a className="quiet-link" href={accessHref("/preferences", trip?.id)}>Setting</a>
+          <span className="name">{agentRunningLabel(tripData?.watch, trip)}</span>
+          <a className="quiet-link" href={accessHref("/preferences", trip?.id)}>Settings</a>
         </div>
       </header>
 
@@ -151,7 +163,9 @@ export function App() {
               <AirlinesTab
                 offers={offers}
                 onChoose={(airline) => {
-                  setAirlineFilter(airline);
+                  const next = { ...EMPTY_BROWSE_PREFERENCES, airlines: [airline] };
+                  setBrowsePreferences(next);
+                  setDraftPreferences(next);
                   setTab("browse");
                 }}
               />
@@ -159,8 +173,23 @@ export function App() {
             {tab === "browse" && (
               <BrowseTab
                 offers={offers}
-                airlineFilter={airlineFilter}
-                onFilter={setAirlineFilter}
+                preferences={browsePreferences}
+                filterOpen={filterOpen}
+                draftPreferences={draftPreferences}
+                onOpenFilters={() => {
+                  setDraftPreferences(browsePreferences);
+                  setFilterOpen(true);
+                }}
+                onDraftPreferences={setDraftPreferences}
+                onCloseFilters={() => setFilterOpen(false)}
+                onApplyFilters={() => {
+                  setBrowsePreferences(draftPreferences);
+                  setFilterOpen(false);
+                }}
+                onClearFilters={() => {
+                  setBrowsePreferences(EMPTY_BROWSE_PREFERENCES);
+                  setDraftPreferences(EMPTY_BROWSE_PREFERENCES);
+                }}
               />
             )}
           </section>
@@ -177,17 +206,16 @@ function FlightsTab({ offers, profile }: { offers: VerifiedOffer[]; profile: Tra
     fastest: rankOffers(offers, "fastest", profile.preferredAirlineCodes)[0]
   }), [offers, profile.preferredAirlineCodes]);
   if (offers.length === 0) return <ResultsEmpty />;
+  const modes = (["cheapest", "balanced", "fastest"] as RankingMode[])
+    .sort((left, right) => Number(right === profile.rankingMode) - Number(left === profile.rankingMode));
   return (
     <>
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Verified recommendations</p>
-          <h2>Your strongest options</h2>
-        </div>
+      <div className="section-heading preference-first">
         <p>Captain’s current preference is <strong>{profile.rankingMode}</strong>.</p>
+        <h2>Your strongest options</h2>
       </div>
       <div className="recommendation-grid">
-        {(["cheapest", "balanced", "fastest"] as RankingMode[]).map((mode) => {
+        {modes.map((mode) => {
           const offer = recommendations[mode];
           return offer ? (
             <RecommendationCard
@@ -200,9 +228,6 @@ function FlightsTab({ offers, profile }: { offers: VerifiedOffer[]; profile: Tra
           ) : null;
         })}
       </div>
-      <p className="set-note">
-        These are the best among Captain’s currently verified results—not every fare available on the web.
-      </p>
     </>
   );
 }
@@ -218,21 +243,29 @@ function RecommendationCard({
   selected: boolean;
   offers: VerifiedOffer[];
 }) {
-  return (
-    <article className={`recommendation-card ${selected ? "selected" : ""}`}>
+  const evidence = offer.evidence[0];
+  const className = `recommendation-card ${selected ? "selected" : ""}`;
+  const body = (
+    <>
       <div className="card-top">
-        <span className="mode-label">{label(mode)}</span>
         {selected && <span className="pill">Your preference</span>}
+        <span className="mode-label">{label(mode)}</span>
       </div>
       <strong className="price">{money(offer)}</strong>
-      <p className="airline">{offer.primaryAirlineCode}{isMixed(offer) ? " · Mixed" : ""}</p>
       <div className="metrics">
+        <span className="airline">{offer.primaryAirlineCode}{isMixed(offer) ? " · Mixed" : ""}</span>
         <span>{duration(offer)}</span>
         <span>{stops(offer)}</span>
       </div>
       <p className="why">{whyLabel(mode, offer, offers)}</p>
-      <EvidenceLink offer={offer} />
-    </article>
+    </>
+  );
+  return evidence ? (
+    <a className={className} href={evidence.url} target="_blank" rel="noreferrer">
+      {body}
+    </a>
+  ) : (
+    <article className={className}>{body}</article>
   );
 }
 
@@ -247,16 +280,12 @@ function AirlinesTab({
   if (groups.length === 0) return <ResultsEmpty />;
   return (
     <>
-      <div className="section-heading">
-        <div><p className="eyebrow">By primary airline</p><h2>Compare airlines</h2></div>
-        <p>Mixed itineraries count once under their primary marketing airline.</p>
-      </div>
       <div className="airline-grid">
         {groups.map((group) => (
           <button className="airline-card" key={group.airline} onClick={() => onChoose(group.airline)}>
             <div className="airline-monogram">{group.airline.slice(0, 2)}</div>
             <div className="airline-card-title">
-              <strong>{group.airline}</strong>
+              <strong>{airlineName(group.airline, group.offers)}</strong>
               {group.mixed && <span className="pill">Mixed</span>}
             </div>
             {group.mixed && (
@@ -280,45 +309,84 @@ function AirlinesTab({
 
 function BrowseTab({
   offers,
-  airlineFilter,
-  onFilter
+  preferences,
+  filterOpen,
+  draftPreferences,
+  onOpenFilters,
+  onDraftPreferences,
+  onCloseFilters,
+  onApplyFilters,
+  onClearFilters
 }: {
   offers: VerifiedOffer[];
-  airlineFilter: string;
-  onFilter: (value: string) => void;
+  preferences: BrowsePreferences;
+  filterOpen: boolean;
+  draftPreferences: BrowsePreferences;
+  onOpenFilters: () => void;
+  onDraftPreferences: Dispatch<SetStateAction<BrowsePreferences>>;
+  onCloseFilters: () => void;
+  onApplyFilters: () => void;
+  onClearFilters: () => void;
 }) {
-  const airlines = [...new Set(offers.map((offer) => offer.primaryAirlineCode))].sort();
-  const visible = offers
-    .filter((offer) => !airlineFilter || offer.primaryAirlineCode === airlineFilter)
-    .sort((left, right) => left.price - right.price || left.itineraryKey.localeCompare(right.itineraryKey));
+  const visible = useMemo(() => sortAndFilterOffers(offers, preferences), [offers, preferences]);
+  const activeFilters = countFilters(preferences);
   if (offers.length === 0) return <ResultsEmpty />;
   return (
     <>
-      <div className="browse-bar">
-        <div><p className="eyebrow">Verified results only</p><h2>Browse flights</h2></div>
-        <label>
-          Airline
-          <select value={airlineFilter} onChange={(event) => onFilter(event.target.value)}>
-            <option value="">All airlines</option>
-            {airlines.map((airline) => <option value={airline} key={airline}>{airline}</option>)}
-          </select>
-        </label>
+      <div className="browse-toolbar">
+        <button
+          className={`sort-filter-button ${activeFilters ? "active" : ""}`}
+          onClick={onOpenFilters}
+        >
+          <span className="sort-filter-title">
+            <FilterIcon />
+            <strong>Sort &amp; filter</strong>
+          </span>
+          <span className="sort-filter-summary">
+            <span>{sortLabel(preferences.sort)}</span>
+            {activeFilters > 0 && <b>{activeFilters}</b>}
+            <ChevronRightIcon />
+          </span>
+        </button>
       </div>
-      <div className="offer-list">
-        {visible.map((offer) => <OfferRow offer={offer} key={offer.id} />)}
-      </div>
+      {activeFilters > 0 && (
+        <div className="active-filter-row" aria-label="Active filters">
+          {filterChips(preferences).map((chip) => <span key={chip}>{chip}</span>)}
+          <button onClick={onClearFilters}>Clear all</button>
+        </div>
+      )}
+      {visible.length === 0 ? (
+        <div className="results-empty compact">
+          <span>⌁</span>
+          <h2>No matches</h2>
+          <p>Adjust the current filters to see more flights.</p>
+        </div>
+      ) : (
+        <div className="offer-list">
+          {visible.map((offer) => <OfferRow offer={offer} key={offer.id} />)}
+        </div>
+      )}
       <p className="set-note">Captain shows up to 20 verified results. This is not an exhaustive market listing.</p>
+      <FilterSheet
+        open={filterOpen}
+        preferences={draftPreferences}
+        offers={offers}
+        onPreferences={onDraftPreferences}
+        onClose={onCloseFilters}
+        onApply={onApplyFilters}
+      />
     </>
   );
 }
 
 function OfferRow({ offer }: { offer: VerifiedOffer }) {
-  return (
-    <article className="offer-row">
+  const evidence = offer.evidence[0];
+  const body = (
+    <>
       <div className="carrier">
         <span className="airline-monogram">{offer.primaryAirlineCode.slice(0, 2)}</span>
         <div>
-          <strong>{offer.primaryAirlineCode}</strong>
+          <strong>{airlineName(offer.primaryAirlineCode, [offer])}</strong>
           <p>{isMixed(offer) ? `Mixed · ${offer.participatingAirlineCodes.join(", ")}` : "Primary airline"}</p>
         </div>
       </div>
@@ -326,27 +394,351 @@ function OfferRow({ offer }: { offer: VerifiedOffer }) {
         <strong>{offer.snapshot.route || "Verified itinerary"}</strong>
         <p>{(offer.snapshot.flightNumbers ?? []).join(" · ")}</p>
       </div>
-      <div className="metrics compact">
-        <span>{duration(offer)}</span>
-        <span>{stops(offer)}</span>
+      <div className="trip-stats">
+        <div className="metrics compact">
+          <span>{duration(offer)}</span>
+          <span>{stops(offer)}</span>
+        </div>
+        <span>Checked {relativeTime(offer.verifiedAt)}</span>
       </div>
       <div className="fare">
         <strong>{money(offer)}</strong>
         <span>1 adult total</span>
       </div>
-      <div className="evidence-cell">
-        <EvidenceLink offer={offer} />
-        <span>Checked {relativeTime(offer.verifiedAt)}</span>
-      </div>
-    </article>
+    </>
+  );
+  return evidence ? (
+    <a className="offer-row" href={evidence.url} target="_blank" rel="noreferrer">
+      {body}
+    </a>
+  ) : (
+    <article className="offer-row">{body}</article>
   );
 }
 
-function EvidenceLink({ offer }: { offer: VerifiedOffer }) {
-  const evidence = offer.evidence[0];
-  return evidence ? (
-    <a href={evidence.url} target="_blank" rel="noreferrer">View evidence ↗</a>
-  ) : <span>Evidence unavailable</span>;
+function FilterSheet({
+  open,
+  preferences,
+  offers,
+  onPreferences,
+  onClose,
+  onApply
+}: {
+  open: boolean;
+  preferences: BrowsePreferences;
+  offers: VerifiedOffer[];
+  onPreferences: Dispatch<SetStateAction<BrowsePreferences>>;
+  onClose: () => void;
+  onApply: () => void;
+}) {
+  const airlines = [...new Set(offers.map((offer) => offer.primaryAirlineCode))].sort();
+  const airports = [...new Set(offers.flatMap(offerAirports))].sort();
+  const hasDepartures = offers.some((offer) => offerDeparture(offer));
+  const matches = sortAndFilterOffers(offers, preferences).length;
+  function update<Key extends keyof BrowsePreferences>(key: Key, value: BrowsePreferences[Key]) {
+    onPreferences((current) => ({ ...current, [key]: value }));
+  }
+  return (
+    <div
+      className="sheet-backdrop"
+      data-open={open}
+      aria-hidden={!open}
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <section
+        className="bottom-sheet filter-sheet"
+        role="dialog"
+        aria-modal={open}
+        aria-label="Sort and filter flights"
+      >
+        <header>
+          <span>
+            <strong>Sort &amp; filter</strong>
+            <small>{matches} matching flight{matches === 1 ? "" : "s"}</small>
+          </span>
+          <button className="icon-button" aria-label="Close filters" onClick={onClose}>
+            <CloseIcon />
+          </button>
+        </header>
+        <div className="sheet-scroll">
+          <FilterGroup label="Sort">
+            <select
+              value={preferences.sort}
+              onChange={(event) => update("sort", event.target.value as BrowsePreferences["sort"])}
+            >
+              <option value="recommended">Recommended</option>
+              <option value="price">Lowest price</option>
+              <option value="duration">Shortest duration</option>
+              <option value="departure">Earliest departure</option>
+            </select>
+          </FilterGroup>
+          <FilterGroup label="Stops">
+            <div className="filter-choice-row">
+              {[0, 1, 2].map((stops) => (
+                <button
+                  className={preferences.stops.includes(stops) ? "selected" : ""}
+                  key={stops}
+                  onClick={() => update("stops", toggle(preferences.stops, stops))}
+                >
+                  {stops === 0 ? "Direct" : `${stops} stop${stops === 1 ? "" : "s"}`}
+                </button>
+              ))}
+            </div>
+          </FilterGroup>
+          {airlines.length > 0 && (
+            <FilterGroup label="Airlines">
+              <div className="filter-choice-row wrap">
+                {airlines.map((airline) => (
+                  <button
+                    className={preferences.airlines.includes(airline) ? "selected" : ""}
+                    key={airline}
+                    onClick={() => update("airlines", toggle(preferences.airlines, airline))}
+                  >
+                    {airlineName(airline, offers)}
+                  </button>
+                ))}
+              </div>
+            </FilterGroup>
+          )}
+          {airports.length > 0 && (
+            <FilterGroup label="Airports">
+              <div className="filter-choice-row wrap">
+                {airports.map((airport) => (
+                  <button
+                    className={preferences.airports.includes(airport) ? "selected" : ""}
+                    key={airport}
+                    onClick={() => update("airports", toggle(preferences.airports, airport))}
+                  >
+                    {airport}
+                  </button>
+                ))}
+              </div>
+            </FilterGroup>
+          )}
+          {hasDepartures && (
+            <FilterGroup label="Departure">
+              <div className="filter-choice-row">
+                {(["morning", "afternoon", "evening"] as const).map((period) => (
+                  <button
+                    className={preferences.departurePeriods.includes(period) ? "selected" : ""}
+                    key={period}
+                    onClick={() => update("departurePeriods", toggle(preferences.departurePeriods, period))}
+                  >
+                    {period[0]!.toUpperCase() + period.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </FilterGroup>
+          )}
+          <FilterGroup label="Maximum price">
+            <input
+              className="sheet-input"
+              type="number"
+              min={1}
+              value={preferences.maximumPrice ?? ""}
+              placeholder="No maximum"
+              onChange={(event) => update(
+                "maximumPrice",
+                event.target.value ? Number(event.target.value) : null
+              )}
+            />
+          </FilterGroup>
+        </div>
+        <footer>
+          <button className="secondary-action" onClick={() => onPreferences(EMPTY_BROWSE_PREFERENCES)}>
+            Reset
+          </button>
+          <button className="primary-action" onClick={onApply}>
+            Show {matches}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function FilterGroup({ label, children }: { label: string; children: ReactNode }) {
+  return <div className="filter-group"><strong>{label}</strong>{children}</div>;
+}
+
+function AirlineSearchSelect({
+  values,
+  placeholder,
+  onChange,
+  max = 12
+}: {
+  values: string[];
+  placeholder: string;
+  onChange: (values: string[]) => void;
+  max?: number;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const suggestions = useMemo(() => searchAirlines(query, values), [query, values]);
+
+  useEffect(() => {
+    function onPointerDown(event: MouseEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, []);
+
+  function add(code: string) {
+    const normalized = normalizeAirlineCode(code);
+    if (!normalized || values.includes(normalized) || values.length >= max) return;
+    onChange([...values, normalized]);
+    setQuery("");
+    setOpen(false);
+  }
+
+  function remove(code: string) {
+    onChange(values.filter((value) => value !== code));
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const exact = suggestions.find((airline) => airline.code === query.trim().toUpperCase())
+        ?? suggestions[0];
+      if (exact) add(exact.code);
+      else {
+        const code = normalizeAirlineCode(query);
+        if (code) add(code);
+      }
+    } else if (event.key === "Backspace" && !query && values.length > 0) {
+      remove(values.at(-1)!);
+    } else if (event.key === "Escape") {
+      setOpen(false);
+    }
+  }
+
+  return (
+    <div className="airline-search" ref={rootRef}>
+      <div className={`airline-search-field ${open ? "open" : ""}`}>
+        {values.map((code) => (
+          <button
+            type="button"
+            className="airline-chip"
+            key={code}
+            onClick={() => remove(code)}
+            aria-label={`Remove ${airlineLabel(code)}`}
+          >
+            <strong>{code}</strong>
+            <span>{airlineLabel(code)}</span>
+            <i aria-hidden="true">×</i>
+          </button>
+        ))}
+        <input
+          value={query}
+          placeholder={values.length === 0 ? placeholder : "Add another"}
+          disabled={values.length >= max}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={onKeyDown}
+        />
+      </div>
+      {open && suggestions.length > 0 && values.length < max && (
+        <ul className="airline-search-results" role="listbox">
+          {suggestions.map((airline) => (
+            <li key={airline.code}>
+              <button type="button" onClick={() => add(airline.code)}>
+                <strong>{airline.code}</strong>
+                <span>{airline.name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function sortLabel(sort: BrowsePreferences["sort"]): string {
+  return ({
+    recommended: "Recommended",
+    price: "Lowest price",
+    duration: "Shortest",
+    departure: "Earliest"
+  })[sort];
+}
+
+function countFilters(preferences: BrowsePreferences): number {
+  return preferences.stops.length
+    + preferences.airlines.length
+    + preferences.airports.length
+    + preferences.departurePeriods.length
+    + (preferences.maximumPrice === null ? 0 : 1);
+}
+
+function filterChips(preferences: BrowsePreferences): string[] {
+  return [
+    ...preferences.stops.map((stops) => stops === 0 ? "Direct" : `${stops} stop${stops === 1 ? "" : "s"}`),
+    ...preferences.airlines,
+    ...preferences.airports,
+    ...preferences.departurePeriods.map((period) => period[0]!.toUpperCase() + period.slice(1)),
+    ...(preferences.maximumPrice === null ? [] : [`Up to ${preferences.maximumPrice}`])
+  ];
+}
+
+function toggle<T>(values: readonly T[], value: T): T[] {
+  return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
+}
+
+function FilterIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+      <path d="M4 7h16M7 12h10M10 17h4" />
+    </svg>
+  );
+}
+
+function ChevronRightIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+      <path d="m6 6 12 12M18 6 6 18" />
+    </svg>
+  );
+}
+
+function airlineName(code: string, offers: VerifiedOffer[]): string {
+  for (const offer of offers) {
+    for (const segment of offer.snapshot.segments ?? []) {
+      if (segment.airlineCode === code && segment.airline.trim()) {
+        return segment.airline.trim();
+      }
+    }
+  }
+  return code;
+}
+
+function agentRunningLabel(
+  watch: TripPayload["watch"] | null | undefined,
+  trip: TripPayload["trip"] | null
+): string {
+  if (!trip) return "";
+  if (trip.status === "paused" || watch?.status === "paused") return "Paused";
+  if (watch?.nextCheckAt) {
+    const next = scheduleTime(watch.nextCheckAt);
+    return next === "Due now" ? "Checking soon" : `Next check ${next.toLowerCase()}`;
+  }
+  if (watch?.lastCheckAt) return `Checked ${relativeTime(watch.lastCheckAt)}`;
+  return "Tracking";
 }
 
 function TripControls({
@@ -424,8 +816,8 @@ function Preferences({
   const [currency, setCurrency] = useState(profile.defaultCurrency);
   const [timeZone, setTimeZone] = useState(profile.timeZone);
   const [ranking, setRanking] = useState(profile.rankingMode);
-  const [preferred, setPreferred] = useState(profile.preferredAirlineCodes.join(", "));
-  const [excluded, setExcluded] = useState(profile.excludedAirlineCodes.join(", "));
+  const [preferred, setPreferred] = useState<string[]>(profile.preferredAirlineCodes);
+  const [excluded, setExcluded] = useState<string[]>(profile.excludedAirlineCodes);
   const [alertsEnabled, setAlertsEnabled] = useState(profile.alertsEnabled);
   const [maxAlerts, setMaxAlerts] = useState<1 | 2>(profile.maxAlertsPerDay);
   const [quietHoursEnabled, setQuietHoursEnabled] = useState(profile.quietHoursEnabled);
@@ -445,14 +837,11 @@ function Preferences({
   const [saved, setSaved] = useState<"preferences" | "notifications" | "brief" | "">("");
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState("");
-  const codes = (value: string) => [...new Set(
-    value.toUpperCase().replace(/\bAND\b/gu, " ").match(/[A-Z0-9]{2,3}/gu) ?? []
-  )].slice(0, 12);
   const airportCodes = (value: string) => [...new Set(
     value.toUpperCase().match(/[A-Z]{3}/gu) ?? []
   )].slice(0, 6);
   async function saveProfile(
-    event: React.FormEvent,
+    event: FormEvent,
     section: "preferences" | "notifications"
   ) {
     event.preventDefault();
@@ -464,8 +853,8 @@ function Preferences({
         defaultCurrency: currency.toUpperCase(),
         timeZone,
         rankingMode: ranking,
-        preferredAirlineCodes: codes(preferred),
-        excludedAirlineCodes: codes(excluded),
+        preferredAirlineCodes: preferred.slice(0, 12),
+        excludedAirlineCodes: excluded.slice(0, 12),
         alertsEnabled,
         maxAlertsPerDay: maxAlerts,
         quietHoursEnabled,
@@ -480,7 +869,7 @@ function Preferences({
       setBusy(false);
     }
   }
-  async function saveBrief(event: React.FormEvent) {
+  async function saveBrief(event: FormEvent) {
     event.preventDefault();
     const trip = tripData?.trip;
     if (!trip || !brief) return;
@@ -680,24 +1069,18 @@ function Preferences({
               </div>
               <label>
                 Preferred airlines for this Trip
-                <input
-                  value={brief.preferredAirlines.join(", ")}
-                  placeholder="KQ, BA"
-                  onChange={(event) => setBrief({
-                    ...brief,
-                    preferredAirlines: codes(event.target.value)
-                  })}
+                <AirlineSearchSelect
+                  values={brief.preferredAirlines}
+                  placeholder="Search airlines"
+                  onChange={(preferredAirlines) => setBrief({ ...brief, preferredAirlines })}
                 />
               </label>
               <label>
                 Avoid airlines for this Trip
-                <input
-                  value={brief.excludedAirlines.join(", ")}
-                  placeholder="VS"
-                  onChange={(event) => setBrief({
-                    ...brief,
-                    excludedAirlines: codes(event.target.value)
-                  })}
+                <AirlineSearchSelect
+                  values={brief.excludedAirlines}
+                  placeholder="Search airlines to avoid"
+                  onChange={(excludedAirlines) => setBrief({ ...brief, excludedAirlines })}
                 />
               </label>
               <label>
@@ -825,11 +1208,19 @@ function Preferences({
           </fieldset>
           <label>
             Preferred airlines
-            <input value={preferred} placeholder="KQ, BA" onChange={(event) => setPreferred(event.target.value)} />
+            <AirlineSearchSelect
+              values={preferred}
+              placeholder="Search airlines"
+              onChange={setPreferred}
+            />
           </label>
           <label>
             Avoid airlines
-            <input value={excluded} placeholder="VS" onChange={(event) => setExcluded(event.target.value)} />
+            <AirlineSearchSelect
+              values={excluded}
+              placeholder="Search airlines to avoid"
+              onChange={setExcluded}
+            />
             <small>Any itinerary using an avoided airline is removed.</small>
           </label>
           {saveError && <p className="form-error" role="alert">{saveError}</p>}
