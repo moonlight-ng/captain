@@ -111,7 +111,7 @@ export type CaptainNotification = {
   userId: string;
   tripId: string;
   telegramChatId: number;
-  kind: "initial_results" | "price_drop" | "new_best" | "watch_attention";
+  kind: "initial_results" | "price_drop" | "new_best" | "watch_attention" | "inventory_gap";
   payload: Record<string, unknown>;
   attempts: number;
   telegramMessageId: number | null;
@@ -188,6 +188,7 @@ export interface CaptainPlatformStore {
   failSearchRun(workerId: string, runId: string, error: string, retryAfterMs: number | null, now: Date): Promise<void>;
   pruneWatchData(now: Date): Promise<void>;
   evaluateTripsForSearchSpec(searchSpecId: string, now: Date): Promise<number>;
+  enqueueInventoryGapForSearchSpec(searchSpecId: string, now: Date): Promise<number>;
   listPendingNotifications(now: Date, limit: number): Promise<CaptainNotification[]>;
   markNotificationSent(notificationId: string, telegramMessageId: number, now: Date): Promise<void>;
   markNotificationFailed(notificationId: string, error: string, now: Date): Promise<void>;

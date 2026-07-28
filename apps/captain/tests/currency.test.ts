@@ -1,38 +1,62 @@
 import { describe, expect, it } from "vitest";
 
-import { suggestedTripCurrency } from "../services/trip-planning/currency.js";
+import {
+  isDomesticRoute,
+  suggestedMaxStops,
+  suggestedTripCurrency
+} from "../services/trip-planning/currency.js";
 
 describe("Trip currency suggestions", () => {
-  it("uses the route-country currency only when every airport is domestic", () => {
+  it("keeps USD/GBP profile defaults and falls back to USD otherwise", () => {
     expect(suggestedTripCurrency({
       originAirports: ["LOS"],
       destinationAirports: ["ABV"],
       tripType: "one_way",
       legs: []
-    }, "USD")).toBe("NGN");
-  });
-
-  it("uses the profile default for international, multi-country, and unknown routes", () => {
+    }, "USD")).toBe("USD");
     expect(suggestedTripCurrency({
       originAirports: ["LOS"],
       destinationAirports: ["LHR"],
       tripType: "one_way",
       legs: []
-    }, "EUR")).toBe("EUR");
-    expect(suggestedTripCurrency({
-      originAirports: ["LOS"],
-      destinationAirports: ["LON"],
-      tripType: "multi_city",
-      legs: [
-        { originAirports: ["LOS"], destinationAirports: ["ABV"], departureDate: null },
-        { originAirports: ["ABV"], destinationAirports: ["LHR"], departureDate: null }
-      ]
     }, "GBP")).toBe("GBP");
     expect(suggestedTripCurrency({
-      originAirports: ["XYZ"],
-      destinationAirports: ["ABC"],
+      originAirports: ["LOS"],
+      destinationAirports: ["JFK"],
       tripType: "one_way",
       legs: []
-    }, "USD")).toBe("USD");
+    }, "NGN")).toBe("USD");
+  });
+});
+
+describe("Route support", () => {
+  it("detects same-country routes for default stop suggestions", () => {
+    expect(isDomesticRoute({
+      originAirports: ["LOS"],
+      destinationAirports: ["ABV"],
+      tripType: "one_way",
+      legs: []
+    })).toBe(true);
+    expect(isDomesticRoute({
+      originAirports: ["LOS"],
+      destinationAirports: ["LHR"],
+      tripType: "one_way",
+      legs: []
+    })).toBe(false);
+  });
+
+  it("defaults domestic routes to one stop and cross-border routes to two", () => {
+    expect(suggestedMaxStops({
+      originAirports: ["LOS"],
+      destinationAirports: ["ABV"],
+      tripType: "one_way",
+      legs: []
+    })).toBe(1);
+    expect(suggestedMaxStops({
+      originAirports: ["LOS"],
+      destinationAirports: ["LHR"],
+      tripType: "one_way",
+      legs: []
+    })).toBe(2);
   });
 });

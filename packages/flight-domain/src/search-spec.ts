@@ -59,7 +59,7 @@ export function buildSearchSpecs(brief: TripBrief, _liveMode = true): SearchSpec
         departureEnd: brief.departureWindow.end
       }];
   const request: SearchSpecRequest = {
-    provider: "openai_web",
+    provider: "official_duffel",
     apiVersion: "v1",
     tripType: brief.tripType,
     slices,

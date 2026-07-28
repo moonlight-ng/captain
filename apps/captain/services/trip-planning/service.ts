@@ -3,11 +3,13 @@ import {
   EMPTY_TRIP_PLAN_PARTIAL,
   EMPTY_TRIP_PLAN_TURN_STATE,
   MAX_ACTIVE_TRIPS_PER_USER,
+  SUPPORTED_CURRENCY_MESSAGE,
   addIsoDays,
   buildSearchSpecs,
   createTripSchema,
   daysBetween,
   formatCalendarDate,
+  isSupportedTripCurrency,
   stableJson,
   totalTravellers,
   type Trip,
@@ -31,7 +33,7 @@ import {
   formatTripCreationReceipt,
   formatTripPlanConfirmation
 } from "./format.js";
-import { suggestedTripCurrency } from "./currency.js";
+import { suggestedMaxStops, suggestedTripCurrency } from "./currency.js";
 import { orderedAirportCodesFromText } from "./airport-catalog.js";
 import {
   createTripTurnInterpreter,
@@ -156,8 +158,13 @@ export class TripPlanningService {
       };
     }
     if (unsupportedParty) partial.travellers = null;
+    const unsupportedCurrency = Boolean(
+      partial.currency && !isSupportedTripCurrency(partial.currency)
+    );
     const missingFields = missingTripFields(partial, dateIssue);
-    const plan = missingFields.length === 0 ? completePlan(partial, draft.id) : null;
+    const plan = missingFields.length === 0 && !unsupportedCurrency
+      ? completePlan(partial, draft.id)
+      : null;
     const activeTrips = plan
       ? (await this.#store.listTrips(userId)).filter((trip) =>
           !["cancelled", "completed", "archived"].includes(trip.status)
@@ -173,7 +180,9 @@ export class TripPlanningService {
         ? "You’re already tracking three Trips. Open /preferences, stop tracking one Trip, then reply “continue” here."
         : unsupportedParty
           ? "Captain’s beta currently tracks fares for exactly one adult. Reply “just me” to continue, or cancel this Trip."
-          : dateIssue ?? clarificationPrompt(missingFields)
+          : unsupportedCurrency
+            ? SUPPORTED_CURRENCY_MESSAGE
+            : dateIssue ?? clarificationPrompt(missingFields)
       : null;
     const repeatedPromptCount = basePrompt && priorTurnState.lastPrompt === basePrompt
       ? priorTurnState.repeatedPromptCount + 1
@@ -483,7 +492,12 @@ function inferDefaults(
   if (facts.cabin) delete inferred.cabin;
   else if (!partial.cabin) inferred.cabin = "default — economy";
   if (facts.maxStops !== null) delete inferred.maxStops;
-  else if (partial.maxStops === null) inferred.maxStops = "default — at most one stop";
+  else if (partial.maxStops === null) {
+    const stops = suggestedMaxStops(partial);
+    inferred.maxStops = stops === 1
+      ? "default — at most one stop"
+      : "default — at most two stops for this cross-border route";
+  }
   if (/\bone[ -]?way\b/iu.test(facts.sourceText)) delete inferred.tripType;
   else if (partial.tripType === "one_way" && partial.legs.length <= 1) {
     inferred.tripType = "default — one-way";
@@ -503,7 +517,7 @@ function applyDefaults(partial: TripPlanPartial, suggestedCurrency: string): voi
   partial.tripType ??= "one_way";
   partial.travellers ??= { adults: 1, childrenAges: [], infants: 0 };
   partial.cabin ??= "economy";
-  partial.maxStops ??= 1;
+  partial.maxStops ??= suggestedMaxStops(partial);
   partial.currency ??= suggestedCurrency;
 }
 

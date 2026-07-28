@@ -271,6 +271,40 @@ describe("Captain platform store", () => {
     expect(await store.listPendingNotifications(new Date("2026-08-02T08:00:00Z"), 10)).toHaveLength(2);
   });
 
+  it("keeps previous offers when a later search returns no verified fares", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    const ada = await user(store, 1);
+    const specs = buildSearchSpecs(tripInput.brief, false);
+    const created = await store.createTrip(ada.id, tripInput, specs, new Date("2026-08-01T12:00:00Z"));
+    await store.scheduleDueSearchRuns(new Date("2026-08-01T12:00:00Z"), 900_000, 100);
+    const firstRun = (await store.claimSearchRuns("worker-1", new Date("2026-08-01T12:00:00Z"), 180_000, 1))[0]!;
+    await store.completeSearchRun("worker-1", firstRun.id, "orq_1", [{
+      itineraryKey: "BA982|LHR|BER",
+      provider: "openai_web",
+      providerOfferId: "offer_1",
+      providerSearchId: "orq_1",
+      price: 199,
+      currency: "GBP",
+      ...verifiedMetadata("199.00", "BA"),
+      expiresAt: "2026-08-02T12:30:00Z",
+      observedAt: "2026-08-01T12:00:01Z",
+      snapshot: {
+        route: "LHR → BER", airlineCodes: ["BA"], flightNumbers: ["BA982"],
+        stops: 0, durationSeconds: 7_200, segments: []
+      }
+    }], new Date("2026-08-01T12:00:01Z"));
+    expect(await store.listTripOffers(ada.id, created.trip.id, new Date("2026-08-01T12:00:02Z"))).toHaveLength(1);
+
+    await store.scheduleDueSearchRuns(new Date("2026-08-02T00:00:00Z"), 900_000, 100);
+    const emptyRun = (await store.claimSearchRuns("worker-1", new Date("2026-08-02T00:00:00Z"), 180_000, 1))[0]!;
+    await store.completeSearchRun("worker-1", emptyRun.id, "orq_empty", [], new Date("2026-08-02T00:00:01Z"));
+
+    expect(await store.listTripOffers(ada.id, created.trip.id, new Date("2026-08-02T00:00:02Z"))).toHaveLength(1);
+    expect(await store.getWatch(ada.id, created.trip.id)).toMatchObject({
+      delayReason: "No verified fares this check; keeping last results."
+    });
+  });
+
   it("caps improvement alerts at two in a rolling 24 hours", async () => {
     const store = new MemoryCaptainPlatformStore();
     const ada = await user(store, 1);

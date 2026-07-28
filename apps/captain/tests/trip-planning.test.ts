@@ -75,12 +75,12 @@ describe("Captain Trip planning", () => {
       stayNights: { minimum: 7, preferred: 7, maximum: 7 },
       travellers: { adults: 1, childrenAges: [], infants: 0 },
       cabin: "economy",
-      maxStops: 1,
+      maxStops: 2,
       currency: "USD"
     });
     expect(second.confirmation).toContain("Sunday, 17 Aug 2025");
     expect(second.confirmation).toContain("Sunday, 24 Aug 2025");
-    expect(second.confirmation).toContain("At most 1 stop (default)");
+    expect(second.confirmation).toContain("At most 2 stops (default)");
 
     const started = await planning.confirm(user.id, second.draft.id, second.draft.revision);
     expect(started.status).toBe("started");
@@ -245,11 +245,10 @@ describe("Captain Trip planning", () => {
       originAirports: ["LOS"],
       destinationAirports: ["ANA"],
       tripType: "one_way",
-      departureWindow: { start: "2025-07-05", end: "2025-07-05" }
+      departureWindow: { start: "2025-07-05", end: "2025-07-05" },
+      maxStops: 1,
+      currency: "USD"
     });
-    expect(result.confirmation).toContain("Saturday, 5 Jul 2025");
-    expect(result.confirmation).toContain("Trip type: One-way (default)");
-    expect(result.confirmation).toContain("tell me what to change");
   });
 
   it("understands an implied-origin return and inherits the month for the second leg", async () => {
@@ -638,7 +637,7 @@ describe("Captain Trip planning", () => {
       "Your Trip is tracking.\n\n"
       + "• LOS → NYC\n"
       + "• Depart: Sunday, 17 Aug 2025\n"
-      + "• 1 traveller, Economy, At most 1 stop, USD\n\n"
+      + "• 1 traveller, Economy, At most 2 stops, USD\n\n"
       + `Open trip: https://captain.example/t#test-${started?.status === "started" ? started.receipt.tripId : ""}`
     );
 

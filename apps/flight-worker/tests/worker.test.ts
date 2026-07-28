@@ -118,6 +118,19 @@ describe("flight worker orchestration", () => {
     })).toContain("£10.00 less");
   });
 
+  it("states an inventory coverage gap without inventing fares", () => {
+    expect(notificationText({
+      id: "notification",
+      userId: "user",
+      tripId: "trip",
+      telegramChatId: 1,
+      kind: "inventory_gap",
+      attempts: 0,
+      telegramMessageId: null,
+      payload: { tripTitle: "Lagos to Abuja" }
+    })).toContain("doesn’t cover these airlines/routes");
+  });
+
   it("defers a run without calling the provider when the daily ceiling is reached", async () => {
     const store = new MemoryCaptainPlatformStore();
     const user = await store.ensureTelegramUser({
@@ -176,6 +189,82 @@ describe("flight worker orchestration", () => {
     expect(await store.getWatch(user.id, created.trip.id)).toMatchObject({
       delayReason: "Daily OpenAI Responses safety ceiling reached; tracking is delayed."
     });
+  });
+
+  it("queues a one-shot inventory_gap notice when a search returns no offers", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    const user = await store.ensureTelegramUser({
+      telegramUserId: 3,
+      telegramChatId: 3,
+      username: null,
+      firstName: "Ngozi",
+      lastName: null
+    }, new Date("2026-08-01T12:00:00Z"));
+    const input: CreateTripInput = {
+      title: "Lagos to Abuja",
+      cadenceHours: 6,
+      brief: {
+        originAirports: ["LOS"],
+        destinationAirports: ["ABV"],
+        tripType: "one_way",
+        departureWindow: { start: "2026-09-10", end: "2026-09-10" },
+        stayNights: null,
+        legs: [],
+        travellers: { adults: 1, childrenAges: [], infants: 0 },
+        cabin: "economy",
+        maxStops: 1,
+        currency: "USD",
+        maximumPrice: null,
+        preferredAirlines: [],
+        excludedAirlines: [],
+        context: ""
+      }
+    };
+    await store.createTrip(
+      user.id,
+      input,
+      buildSearchSpecs(input.brief, false),
+      new Date("2026-08-01T12:00:00Z")
+    );
+    const search = vi.fn(async () => ({
+      requestId: "offreq_empty",
+      discoveryResponseId: "offreq_empty",
+      verificationResponseId: "offreq_empty",
+      model: "duffel",
+      promptVersion: "official_duffel",
+      rejectionCounts: {},
+      webSearchCalls: 0,
+      offers: []
+    }));
+    const worker = new FlightWorker({
+      store,
+      provider: { provider: "official_duffel", search } as unknown as FlightSearchProvider,
+      telegramBotToken: "test",
+      captainPublicUrl: "https://captain.example.com",
+      trackingEnabled: true,
+      dailyResponseLimit: 500,
+      workerId: "worker-1",
+      leaseMs: 240_000,
+      freshnessMs: 0,
+      claimLimit: 1
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      '{"ok":true,"result":{"message_id":77}}',
+      { status: 200, headers: { "content-type": "application/json" } }
+    )));
+
+    const first = await worker.tick(new Date("2026-08-01T12:00:00Z"));
+    expect(first).toEqual({ scheduled: 1, processed: 1, notified: 1 });
+    const sent = await store.getNotificationByTelegramMessage(user.id, 77);
+    expect(sent).toMatchObject({ kind: "inventory_gap" });
+    expect(notificationText(sent!)).toContain("doesn’t cover these airlines/routes");
+
+    const specs = buildSearchSpecs(input.brief, false);
+    expect(await store.enqueueInventoryGapForSearchSpec(specs[0]!.id, new Date("2026-08-01T18:00:00Z")))
+      .toBe(0);
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(1);
+    vi.unstubAllGlobals();
   });
 });
 

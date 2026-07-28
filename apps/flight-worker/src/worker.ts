@@ -1,4 +1,4 @@
-import { createCaptainAccessLink, deriveOfferMetrics } from "@agents/flight-domain";
+import { createCaptainAccessLink, deriveOfferMetrics, INVENTORY_GAP_MESSAGE } from "@agents/flight-domain";
 import type {
   CaptainNotification,
   CaptainPlatformStore,
@@ -7,10 +7,11 @@ import type {
   RecommendationSnapshot
 } from "@agents/flight-store";
 import { logEvent } from "@agents/observability";
+import { DuffelError } from "@agents/provider-duffel";
 import type { FlightSearchProvider } from "@agents/provider-web";
 import { WebSearchProviderError } from "@agents/provider-web";
 
-const RESPONSES_PER_RUN = 2;
+const OPENAI_RESPONSES_PER_RUN = 2;
 
 export class FlightWorker {
   readonly #store: CaptainPlatformStore;
@@ -78,7 +79,8 @@ export class FlightWorker {
         processed,
         notified,
         tracking_enabled: this.#trackingEnabled,
-        worker_id: this.#workerId
+        worker_id: this.#workerId,
+        provider: this.#provider.provider
       });
       return { scheduled, processed, notified };
     } finally {
@@ -89,36 +91,42 @@ export class FlightWorker {
   async #processRun(run: ClaimedSearchRun, now: Date): Promise<void> {
     const startedAt = Date.now();
     try {
-      const reserved = await this.#store.reserveDailyResponseBudget(
-        now,
-        RESPONSES_PER_RUN,
-        this.#dailyResponseLimit
-      );
-      if (!reserved) {
-        const until = nextUtcDay(now);
-        await this.#store.deferSearchRun(
-          this.#workerId,
-          run.id,
-          until,
-          "Daily OpenAI Responses safety ceiling reached; tracking is delayed.",
-          now
+      if (this.#provider.provider === "openai_web") {
+        const reserved = await this.#store.reserveDailyResponseBudget(
+          now,
+          OPENAI_RESPONSES_PER_RUN,
+          this.#dailyResponseLimit
         );
-        logEvent("warn", "flight_worker.search_deferred", {
-          run_id: run.id,
-          reason: "daily_response_limit",
-          scheduled_at: until.toISOString()
-        });
-        return;
+        if (!reserved) {
+          const until = nextUtcDay(now);
+          await this.#store.deferSearchRun(
+            this.#workerId,
+            run.id,
+            until,
+            "Daily OpenAI Responses safety ceiling reached; tracking is delayed.",
+            now
+          );
+          logEvent("warn", "flight_worker.search_deferred", {
+            run_id: run.id,
+            reason: "daily_response_limit",
+            scheduled_at: until.toISOString()
+          });
+          return;
+        }
       }
 
       const result = await this.#provider.search(run.request);
-      await this.#store.recordWebSearchCalls(now, result.webSearchCalls);
+      if (result.webSearchCalls > 0) {
+        await this.#store.recordWebSearchCalls(now, result.webSearchCalls);
+      }
+      const completedAt = new Date();
       const offers: CompletedProviderOffer[] = result.offers.map((offer) => {
         const metrics = deriveOfferMetrics(offer.slices);
+        const providerOfferId = duffelOfferId(offer.evidence[0]?.url) ?? offer.itineraryKey;
         return {
           itineraryKey: offer.itineraryKey,
           provider: this.#provider.provider,
-          providerOfferId: offer.itineraryKey,
+          providerOfferId,
           providerSearchId: result.requestId,
           price: Number(offer.priceAmount),
           priceAmount: offer.priceAmount,
@@ -131,33 +139,48 @@ export class FlightWorker {
           verificationResponseId: result.verificationResponseId,
           promptVersion: result.promptVersion,
           model: result.model,
-          verifiedAt: now.toISOString(),
+          verifiedAt: completedAt.toISOString(),
           expiresAt: null,
-          observedAt: now.toISOString(),
+          observedAt: completedAt.toISOString(),
           snapshot: {
             route: metrics.route,
             airlineCodes: metrics.airlineCodes,
             flightNumbers: metrics.flightNumbers,
             stops: metrics.stops,
             durationSeconds: metrics.durationSeconds,
-            conditions: { fareBasis: "One-adult total shown by the cited source" },
+            conditions: {
+              fareBasis: this.#provider.provider === "official_duffel"
+                ? "One-adult Duffel total converted into Trip currency when needed"
+                : "One-adult total shown by the cited source"
+            },
             segments: metrics.segments,
             slices: offer.slices
           }
         };
       });
-      await this.#store.completeSearchRun(this.#workerId, run.id, result.requestId, offers, now);
-      const changed = await this.#store.evaluateTripsForSearchSpec(run.searchSpecId, now);
+      await this.#store.completeSearchRun(this.#workerId, run.id, result.requestId, offers, completedAt);
+      const changed = await this.#store.evaluateTripsForSearchSpec(run.searchSpecId, completedAt);
+      let inventoryGapQueued = 0;
+      if (offers.length === 0) {
+        inventoryGapQueued = await this.#store.enqueueInventoryGapForSearchSpec(
+          run.searchSpecId,
+          completedAt
+        );
+      }
       logEvent("info", "flight_worker.search_completed", {
         run_id: run.id,
         search_spec_id: run.searchSpecId,
+        provider: this.#provider.provider,
         verified_offers: offers.length,
         rejection_counts: result.rejectionCounts,
         recommendations_changed: changed,
+        inventory_gap_queued: inventoryGapQueued,
         duration_ms: Date.now() - startedAt
       });
     } catch (error) {
-      const retryAfterMs = error instanceof WebSearchProviderError ? error.retryAfterMs : null;
+      const retryAfterMs = error instanceof WebSearchProviderError || error instanceof DuffelError
+        ? error.retryAfterMs
+        : null;
       await this.#store.failSearchRun(
         this.#workerId,
         run.id,
@@ -168,7 +191,8 @@ export class FlightWorker {
       logEvent("error", "flight_worker.search_failed", {
         run_id: run.id,
         search_spec_id: run.searchSpecId,
-        error_code: error instanceof WebSearchProviderError
+        provider: this.#provider.provider,
+        error_code: error instanceof WebSearchProviderError || error instanceof DuffelError
           ? error.code
           : error instanceof Error ? error.name : "UnknownError",
         duration_ms: Date.now() - startedAt
@@ -221,6 +245,9 @@ export function notificationText(notification: CaptainNotification): string {
   if (notification.kind === "watch_attention") {
     return `Captain needs attention on ${title}. Checks have failed repeatedly; tracking will retry automatically and keep your last verified results.`;
   }
+  if (notification.kind === "inventory_gap") {
+    return `${INVENTORY_GAP_MESSAGE}\n\nTrip: ${title}`;
+  }
   const snapshot = recommendationSnapshot(notification.payload.snapshot);
   const summary = stringField(notification.payload, "summary") || "A verified flight option is ready.";
   if (notification.kind === "initial_results" || !snapshot?.previous) {
@@ -228,6 +255,12 @@ export function notificationText(notification: CaptainNotification): string {
   }
   const improvement = improvementText(snapshot);
   return `I found a better flight for ${title}: ${improvement}.\n\n${summary}\n\nReply to this alert if you want me to explain the exact comparison.`;
+}
+
+function duffelOfferId(url: string | undefined): string | null {
+  if (!url) return null;
+  const match = /\/air\/offers\/([^/?#]+)/u.exec(url);
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
 }
 
 function improvementText(snapshot: RecommendationSnapshot): string {

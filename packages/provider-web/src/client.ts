@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 
 import {
   verifiedOfferCandidateSchema,
-  webSearchBatchSchema,
   type SearchSpecRequest,
   type VerifiedOfferCandidate
 } from "@agents/flight-domain";
@@ -15,11 +14,12 @@ import type {
   WebSearchResult
 } from "./types.js";
 
-const PROMPT_VERSION = "captain-web-fares-v1";
+const PROMPT_VERSION = "captain-web-fares-v2";
 const MAX_DISCOVERY_OFFERS = 40;
 const MAX_VERIFIED_OFFERS = 20;
-const RESPONSE_TIMEOUT_MS = 180_000;
+const RESPONSE_TIMEOUT_MS = 300_000;
 const POLL_INTERVAL_MS = 2_000;
+const MAX_TOOL_CALLS = 10;
 
 const responseEnvelopeSchema = z.object({
   id: z.string(),
@@ -79,6 +79,33 @@ export class OpenAIWebFlightSearchProvider implements FlightSearchProvider {
       this.#approvedDomains,
       rejectionCounts
     );
+
+    // When discovery finds nothing, run an independent second discovery instead of
+    // "verifying" an empty list. Accept validated offers from that retry alone.
+    if (discovered.length === 0) {
+      const retry = await this.#createResponse({
+        schemaName: "flight_discovery_retry",
+        prompt: discoveryPrompt(request),
+        maximumOffers: MAX_DISCOVERY_OFFERS
+      });
+      const retried = parseAndValidateBatch(
+        retry,
+        request,
+        this.#approvedDomains,
+        rejectionCounts
+      );
+      return {
+        requestId: `${discovery.id}:${retry.id}`,
+        discoveryResponseId: discovery.id,
+        verificationResponseId: retry.id,
+        model: this.#model,
+        promptVersion: PROMPT_VERSION,
+        offers: retried.slice(0, MAX_VERIFIED_OFFERS),
+        rejectionCounts,
+        webSearchCalls: countWebSearchCalls(discovery) + countWebSearchCalls(retry)
+      };
+    }
+
     const verification = await this.#createResponse({
       schemaName: "flight_verification",
       prompt: verificationPrompt(request, discovered),
@@ -123,17 +150,16 @@ export class OpenAIWebFlightSearchProvider implements FlightSearchProvider {
       method: "POST",
       body: JSON.stringify({
         model: this.#model,
-        reasoning: { effort: "low" },
+        reasoning: { effort: "medium" },
         background: true,
         store: true,
         tools: [{
           type: "web_search",
           external_web_access: true,
-          search_context_size: "high",
-          filters: { allowed_domains: this.#approvedDomains }
+          search_context_size: "high"
         }],
         tool_choice: "required",
-        max_tool_calls: 6,
+        max_tool_calls: MAX_TOOL_CALLS,
         include: ["web_search_call.action.sources"],
         text: {
           verbosity: "low",
@@ -146,11 +172,14 @@ export class OpenAIWebFlightSearchProvider implements FlightSearchProvider {
         },
         instructions: [
           "You are the evidence-gathering component of a public flight tracker.",
+          "Search broadly, then prefer airline, metasearch, and OTA pages for evidence.",
+          "Approved evidence domains include Google Flights, Skyscanner, Kayak, Momondo, Expedia, Trip.com, Travelstart, and major carriers.",
           "Return only fares supported by pages retrieved in this response.",
           "Never infer, convert, multiply, estimate, or repair a price.",
           "If a required field is absent, omit that itinerary.",
-          "Evidence URLs must be exact retrieved HTTPS URLs.",
+          "Evidence must cite an approved airline, metasearch, or OTA domain retrieved in this response.",
           "A fare is for exactly one adult and must include taxes when the source states that.",
+          "Match the Trip currency exactly; do not convert currencies.",
           "Do not claim the result set is exhaustive."
         ].join("\n"),
         input: input.prompt
@@ -221,15 +250,21 @@ function parseAndValidateBatch(
     reject(rejections, "invalid_json");
     return [];
   }
-  const parsed = webSearchBatchSchema.safeParse(value);
-  if (!parsed.success) {
+  const record = object(value);
+  if (!record || !Array.isArray(record.offers)) {
     reject(rejections, "invalid_schema");
     return [];
   }
   const retrievedSources = sourceUrls(response);
   const offers: VerifiedOfferCandidate[] = [];
-  for (const raw of parsed.data.offers) {
-    const normalized = normalizeCandidate(raw);
+  for (const raw of record.offers) {
+    const coerced = coerceCandidate(raw);
+    const parsed = verifiedOfferCandidateSchema.safeParse(coerced);
+    if (!parsed.success) {
+      reject(rejections, "invalid_schema");
+      continue;
+    }
+    const normalized = normalizeCandidate(parsed.data);
     const rejection = validateCandidate(normalized, request, approvedDomains, retrievedSources);
     if (rejection) {
       reject(rejections, rejection);
@@ -238,6 +273,40 @@ function parseAndValidateBatch(
     offers.push(normalized);
   }
   return offers;
+}
+
+function coerceCandidate(value: unknown): unknown {
+  const record = object(value);
+  if (!record || !Array.isArray(record.slices)) return value;
+  return {
+    ...record,
+    slices: record.slices.map((slice) => {
+      const sliceRecord = object(slice);
+      if (!sliceRecord || !Array.isArray(sliceRecord.segments)) return slice;
+      return {
+        ...sliceRecord,
+        segments: sliceRecord.segments.map((segment) => {
+          const segmentRecord = object(segment);
+          if (!segmentRecord) return segment;
+          return {
+            ...segmentRecord,
+            departure: coerceDateTime(segmentRecord.departure),
+            arrival: coerceDateTime(segmentRecord.arrival)
+          };
+        })
+      };
+    })
+  };
+}
+
+function coerceDateTime(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?$/u.test(trimmed)) {
+    return `${trimmed.length === 16 ? `${trimmed}:00` : trimmed}Z`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?Z$/u.test(trimmed)) return trimmed;
+  return trimmed;
 }
 
 function normalizeCandidate(candidate: VerifiedOfferCandidate): VerifiedOfferCandidate {
@@ -299,7 +368,9 @@ function validateCandidate(
   if (!candidate.participatingAirlineCodes.includes(candidate.primaryAirlineCode)) return "segment_mismatch";
   for (const evidence of candidate.evidence) {
     if (!approvedDomain(evidence.domain, approvedDomains)) return "unapproved_source";
-    if (!retrievedSources.has(normalizeUrl(evidence.url))) return "source_not_retrieved";
+    if (!evidenceRetrieved(evidence.url, evidence.domain, retrievedSources)) {
+      return "source_not_retrieved";
+    }
   }
   return null;
 }
@@ -347,6 +418,8 @@ function validSegments(slice: VerifiedOfferCandidate["slices"][number]): boolean
 }
 
 function comparableOffer(offer: VerifiedOfferCandidate): string {
+  // Evidence URLs often change between passes (tracking params, deep links).
+  // Itinerary, fare, cabin, and currency must still match exactly.
   return JSON.stringify({
     itineraryKey: offer.itineraryKey,
     priceAmount: offer.priceAmount,
@@ -355,9 +428,27 @@ function comparableOffer(offer: VerifiedOfferCandidate): string {
     cabin: offer.cabin,
     slices: offer.slices,
     primaryAirlineCode: offer.primaryAirlineCode,
-    participatingAirlineCodes: offer.participatingAirlineCodes,
-    evidenceUrls: offer.evidence.map(({ url }) => normalizeUrl(url)).sort()
+    participatingAirlineCodes: offer.participatingAirlineCodes
   });
+}
+
+function evidenceRetrieved(
+  evidenceUrl: string,
+  evidenceDomain: string,
+  retrievedSources: Set<string>
+): boolean {
+  const normalizedEvidence = normalizeUrl(evidenceUrl);
+  if (retrievedSources.has(normalizedEvidence)) return true;
+  const domain = evidenceDomain.toLowerCase().replace(/^www\./u, "");
+  for (const source of retrievedSources) {
+    try {
+      const host = new URL(source).hostname.toLowerCase().replace(/^www\./u, "");
+      if (host === domain || host.endsWith(`.${domain}`)) return true;
+    } catch {
+      // Ignore malformed retrieved URLs.
+    }
+  }
+  return false;
 }
 
 function outputText(response: ResponseEnvelope): string {
@@ -438,10 +529,13 @@ function delay(ms: number): Promise<void> {
 function discoveryPrompt(request: SearchSpecRequest): string {
   return [
     "Find currently displayed, source-backed flight fares matching this exact Trip.",
-    "Search approved airline, metasearch, and OTA sites broadly.",
+    "Search approved airline, metasearch, and OTA sites broadly, including Google Flights when useful.",
+    "Open fare result pages when search snippets lack flight numbers or times.",
+    "Prefer itineraries within the requested maxConnections; include realistic one- and two-stop long-haul options when allowed.",
     "Return no more than 40 candidates.",
     "The price must be the displayed total for exactly one adult in the requested cabin and currency.",
-    "Every slice must contain every flight segment, local timestamp with UTC offset, marketing airline, and flight number.",
+    "Every slice must contain every flight segment, marketing airline, flight number, and departure/arrival timestamps.",
+    "Use ISO-8601 local times with a UTC offset when the source shows one; otherwise use Zulu times from the published schedule.",
     "Trip request:",
     JSON.stringify(request)
   ].join("\n");
@@ -450,8 +544,9 @@ function discoveryPrompt(request: SearchSpecRequest): string {
 function verificationPrompt(request: SearchSpecRequest, candidates: VerifiedOfferCandidate[]): string {
   return [
     "Independently verify these discovered flight candidates with fresh web searches.",
-    "Return only candidates whose source still shows the exact same route, dates, segments, flight numbers, cabin, one-adult fare, and currency.",
-    "Preserve all structured values exactly; omit a candidate if any field cannot be confirmed.",
+    "Return only candidates whose source still shows the same route, dates, segments, flight numbers, cabin, one-adult fare, and currency.",
+    "Preserve structured itinerary and fare values exactly; evidence URLs may differ if they are the same approved domain.",
+    "Omit a candidate if route, dates, segments, cabin, fare, or currency cannot be confirmed.",
     "Return no more than 20 verified candidates.",
     "Trip request:",
     JSON.stringify(request),

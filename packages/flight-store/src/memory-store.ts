@@ -737,10 +737,24 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const run = this.#runs.get(runId);
     if (!run || run.claimedBy !== workerId || run.status !== "running") throw new Error("Search run lease is not owned by this worker");
     this.#runs.set(runId, { ...run, status: "completed", completedAt: now.toISOString(), leaseExpiresAt: "", error: null });
+    const retained = retainSearchOffers(offers);
+    if (retained.length === 0) {
+      for (const watch of this.#watchesForSpec(run.searchSpecId)) {
+        this.#watches.set(watch.id, {
+          ...watch,
+          lastCheckAt: now.toISOString(),
+          delayedAt: now.toISOString(),
+          delayReason: "No verified fares this check; keeping last results.",
+          updatedAt: now.toISOString()
+        });
+      }
+      void providerRequestId;
+      return;
+    }
     for (const [offerId, offer] of this.#offers) {
       if (offer.searchSpecId === run.searchSpecId) this.#offers.delete(offerId);
     }
-    for (const offer of retainSearchOffers(offers)) {
+    for (const offer of retained) {
       const stored: OfferSnapshot = { ...clone(offer), id: randomUUID(), searchRunId: runId, searchSpecId: run.searchSpecId };
       this.#offers.set(stored.id, stored);
     }
@@ -838,6 +852,14 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       });
     }
     void now;
+  }
+
+  async enqueueInventoryGapForSearchSpec(searchSpecId: string, now: Date): Promise<number> {
+    let queued = 0;
+    for (const watch of this.#watchesForSpec(searchSpecId)) {
+      if (this.#enqueueInventoryGap(watch.tripId, now)) queued += 1;
+    }
+    return queued;
   }
 
   async evaluateTripsForSearchSpec(searchSpecId: string, now: Date): Promise<number> {
@@ -1091,6 +1113,32 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       ).toISOString(),
       createdAt: now.toISOString(), dedupKey, error: null
     });
+  }
+
+  #enqueueInventoryGap(tripId: string, now: Date): boolean {
+    const trip = this.#trips.get(tripId);
+    const user = trip ? [...this.#usersByTelegram.values()].find((item) => item.id === trip.userId) : undefined;
+    const profile = trip ? this.#profiles.get(trip.userId) : undefined;
+    if (!trip || !user || !profile?.alertsEnabled) return false;
+    const dedupKey = `${trip.id}:inventory_gap`;
+    if ([...this.#notifications.values()].some((item) => item.dedupKey === dedupKey)) return false;
+    const id = randomUUID();
+    this.#notifications.set(id, {
+      id,
+      userId: trip.userId,
+      tripId,
+      telegramChatId: user.telegramChatId,
+      kind: "inventory_gap",
+      payload: { tripTitle: trip.title },
+      attempts: 0,
+      telegramMessageId: null,
+      status: "pending",
+      availableAt: deliveryTime(now, user.timezone, profile).toISOString(),
+      createdAt: now.toISOString(),
+      dedupKey,
+      error: null
+    });
+    return true;
   }
 }
 
