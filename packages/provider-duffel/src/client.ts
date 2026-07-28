@@ -9,7 +9,7 @@ import {
 import type { FlightSearchProvider, WebSearchResult } from "@agents/provider-web";
 import { z } from "zod";
 
-import { convertAmount, isSupportedFxCurrency, type FxQuote } from "./fx.js";
+import { convertAmount, isSupportedFxCurrency, type FxQuote, type SupportedFxCurrency } from "./fx.js";
 
 const carrierSchema = z.object({ name: z.string().default("Unknown"), iata_code: z.string().nullish() });
 const placeSchema = z.object({ iata_code: z.string().default("") });
@@ -228,13 +228,15 @@ async function mapOffer(
   const sourceCurrency = parsed.data.total_currency.toUpperCase();
   if (!isSupportedFxCurrency(sourceCurrency)) return null;
   let priceAmount = parsed.data.total_amount;
-  let currency = sourceCurrency;
+  let currency: SupportedFxCurrency = sourceCurrency;
   let quote: FxQuote | null = null;
   if (sourceCurrency !== request.currency.toUpperCase()) {
     try {
       const converted = await convertAmount(priceAmount, sourceCurrency, request.currency, { fetch: fetchImpl });
       priceAmount = converted.amount;
-      currency = request.currency.toUpperCase();
+      const targetCurrency = request.currency.toUpperCase();
+      if (!isSupportedFxCurrency(targetCurrency)) return null;
+      currency = targetCurrency;
       quote = converted.quote;
     } catch (error) {
       throw new DuffelError(
