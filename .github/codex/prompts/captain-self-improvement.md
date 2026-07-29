@@ -1,6 +1,6 @@
 # Captain failure repair
 
-Investigate the failed **Captain Daily Self-Test** run using
+Investigate the failed **Captain Hourly Self-Test** run using
 `.codex-artifacts/captain-self-test-failure.log` as evidence.
 When present, use the captured event streams and assertions under
 `.codex-artifacts/eval-run/` to inspect the exact synthetic conversation

@@ -120,7 +120,7 @@ conversations:
 - `Captain CI` runs deterministic domain, Telegram, store, and Captain checks
   for every relevant pull request and `main` update.
 - `Deploy Captain` runs only after `Captain CI` succeeds on `main`.
-- `Captain Daily Self-Test` runs at 03:00 UTC and replays synthetic
+- `Captain Hourly Self-Test` runs at 17 minutes past every hour and replays synthetic
   conversations through the real agent models. Every scenario gets its own
   temporary database and Captain process, and receives no production database
   or Telegram credential.

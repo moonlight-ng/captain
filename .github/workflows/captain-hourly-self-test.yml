@@ -1,0 +1,173 @@
+name: Captain Hourly Self-Test
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: captain-hourly-self-test
+  cancel-in-progress: false
+
+jobs:
+  synthetic-journeys:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: captain_test
+          POSTGRES_PASSWORD: captain_test
+          POSTGRES_USER: captain
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U captain -d captain_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+      AI_MODEL: openai/gpt-5.6-terra
+      TRIP_INTERPRETER_MODEL: openai/gpt-5.6-luna
+      DATABASE_URL: postgresql://captain:captain_test@127.0.0.1:5432/captain_test
+      WORKFLOW_POSTGRES_URL: postgresql://captain:captain_test@127.0.0.1:5432/captain_test
+      WORKFLOW_POSTGRES_JOB_PREFIX: captain_eval
+      GRAPHILE_WORKER_SCHEMA: captain_eval_worker
+      TELEGRAM_BOT_TOKEN: synthetic-eval-token
+      TELEGRAM_WEBHOOK_SECRET_TOKEN: synthetic-eval-secret
+      CAPTAIN_PUBLIC_BETA_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - name: Deterministic regression suite
+        run: |
+          pnpm --filter @agents/flight-domain test
+          pnpm --filter @agents/telegram-core test
+          pnpm --filter @agents/flight-store test
+          pnpm --filter @agents/captain test
+          pnpm --filter @agents/captain typecheck
+          pnpm --filter @agents/captain build
+      - name: Verify model-test credential
+        run: test -n "$AI_GATEWAY_API_KEY"
+      - name: Synthetic conversation evals
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          eval_ids=(
+            inspection-only
+            relative-date-correction
+            trip-creation-reliability
+            trip-understanding-v2
+          )
+          admin_url="postgresql://captain:captain_test@127.0.0.1:5432/postgres"
+          overall_status=0
+          server_pid=""
+
+          stop_server() {
+            if [ -n "$server_pid" ]; then
+              kill "$server_pid" 2>/dev/null || true
+              wait "$server_pid" 2>/dev/null || true
+              server_pid=""
+            fi
+          }
+          trap stop_server EXIT
+
+          for eval_id in "${eval_ids[@]}"; do
+            eval_slug="${eval_id//-/_}"
+            eval_database="captain_eval_${eval_slug}"
+            eval_database_url="postgresql://captain:captain_test@127.0.0.1:5432/${eval_database}"
+            server_log="artifacts/${eval_id}-server.log"
+
+            (
+              cd apps/captain
+              EVAL_DATABASE_NAME="$eval_database" \
+                DATABASE_URL="$admin_url" \
+                node --input-type=module -e '
+                  import postgres from "postgres";
+                  const name = process.env.EVAL_DATABASE_NAME;
+                  if (!/^captain_eval_[a-z0-9_]+$/.test(name)) {
+                    throw new Error(`Unsafe evaluation database name: ${name}`);
+                  }
+                  const sql = postgres(process.env.DATABASE_URL, { max: 1 });
+                  await sql.unsafe(`create database "${name}"`);
+                  await sql.end();
+                '
+            )
+
+            DATABASE_URL="$eval_database_url" \
+              WORKFLOW_POSTGRES_URL="$eval_database_url" \
+              WORKFLOW_POSTGRES_JOB_PREFIX="captain_eval_${eval_slug}" \
+              pnpm --filter @agents/captain db:migrate
+            (
+              cd apps/captain
+              DATABASE_URL="$eval_database_url" \
+                WORKFLOW_POSTGRES_URL="$eval_database_url" \
+                WORKFLOW_POSTGRES_JOB_PREFIX="captain_eval_${eval_slug}" \
+                ./node_modules/.bin/bootstrap
+            )
+
+            if curl --fail --silent --max-time 1 \
+              http://127.0.0.1:8080/eve/v1/health > /dev/null; then
+              echo "Port 8080 is still occupied before starting ${eval_id}."
+              exit 1
+            fi
+            (
+              cd apps/captain
+              exec env \
+                DATABASE_URL="$eval_database_url" \
+                WORKFLOW_POSTGRES_URL="$eval_database_url" \
+                WORKFLOW_POSTGRES_JOB_PREFIX="captain_eval_${eval_slug}" \
+                ./node_modules/.bin/eve start --host 0.0.0.0 --port 8080
+            ) > "$server_log" 2>&1 &
+            server_pid=$!
+
+            for attempt in $(seq 1 30); do
+              if curl --fail --silent http://127.0.0.1:8080/eve/v1/health > /dev/null; then
+                break
+              fi
+              if ! kill -0 "$server_pid" 2>/dev/null; then
+                cat "$server_log"
+                exit 1
+              fi
+              if [ "$attempt" -eq 30 ]; then
+                cat "$server_log"
+                exit 1
+              fi
+              sleep 2
+            done
+
+            eval_status=0
+            pnpm --filter @agents/captain eval "$eval_id" \
+              --url http://127.0.0.1:8080 \
+              --strict \
+              --skip-report \
+              --junit "../../artifacts/${eval_id}.xml" \
+              || eval_status=$?
+            stop_server
+
+            if [ "$eval_status" -ne 0 ]; then
+              cat "$server_log"
+              overall_status=1
+            fi
+          done
+          exit "$overall_status"
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captain-daily-evals-${{ github.run_id }}
+          path: |
+            artifacts/
+            apps/captain/.eve/evals/
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14

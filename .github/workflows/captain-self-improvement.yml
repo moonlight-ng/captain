@@ -2,7 +2,7 @@ name: Captain Self-Improvement
 
 on:
   workflow_run:
-    workflows: ["Captain Daily Self-Test"]
+    workflows: ["Captain Hourly Self-Test"]
     types: [completed]
 
 permissions:
