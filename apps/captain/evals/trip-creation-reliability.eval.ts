@@ -26,7 +26,8 @@ export default defineEval({
 
     const where = await t.send("Where?");
     t.succeeded();
-    t.check(where.message, includes("/trips"));
+    t.check(where.message, includes("LOS"));
+    t.check(where.message, includes("NYC"));
     t.calledTool("prepare_trip", { count: 2 });
     t.calledTool("start_prepared_trip", { count: 1 });
     t.judge.autoevals.closedQA([
@@ -34,7 +35,7 @@ export default defineEval({
       "The route is Lagos LOS to the New York metropolitan area NYC for one traveller.",
       "One traveller comes from the traveller saying just me; Economy, at most two stops, the traveller profile currency, and adaptive tracking are clearly presented as defaults rather than user-supplied preferences.",
       "Creation is claimed only after confirmation and the saved Trip is available through /trips.",
-      "The final Where reply identifies where the Trip is saved and points to /trips instead of asking a generic clarification."
+      "The final Where reply identifies the saved Trip's Lagos LOS to New York NYC route instead of asking a generic clarification."
     ].join(" ")).atLeast(0.9);
   }
 });
