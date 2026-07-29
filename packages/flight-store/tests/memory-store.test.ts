@@ -215,7 +215,7 @@ describe("Captain platform store", () => {
     });
   });
 
-  it("replaces current results, keeps only 20 compact offers, and preserves price-drop context", async () => {
+  it("replaces current results, keeps every compact offer, and preserves price-drop context", async () => {
     const store = new MemoryCaptainPlatformStore();
     const ada = await user(store, 1);
     const specs = buildSearchSpecs(tripInput.brief, false);
@@ -245,7 +245,7 @@ describe("Captain platform store", () => {
     );
     expect(await store.evaluateTripsForSearchSpec(firstRun.searchSpecId, new Date("2026-08-01T12:00:02Z"))).toBe(1);
     const firstOffers = await store.listTripOffers(ada.id, created.trip.id, new Date("2026-08-01T12:00:03Z"));
-    expect(firstOffers).toHaveLength(20);
+    expect(firstOffers).toHaveLength(40);
     expect(firstOffers.every((offer) => !("raw" in offer.snapshot))).toBe(true);
 
     await store.scheduleDueSearchRuns(new Date("2026-08-02T00:00:00Z"), 900_000, 100);

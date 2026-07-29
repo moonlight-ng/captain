@@ -127,7 +127,7 @@ describe("OpenAI web flight provider", () => {
     expect(result.rejectionCounts.two_pass_mismatch).toBe(1);
   });
 
-  it("retries discovery when the first pass returns no candidates", async () => {
+  it("does not accept a candidate seen in only one of the two passes", async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(response("discovery", []))
       .mockResolvedValueOnce(response("retry", [offer]));
@@ -142,7 +142,53 @@ describe("OpenAI web flight provider", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(result.discoveryResponseId).toBe("discovery");
     expect(result.verificationResponseId).toBe("retry");
-    expect(result.offers).toHaveLength(1);
+    expect(result.offers).toEqual([]);
+  });
+
+  it("returns more than 20 verified offers and interleaves distinct airlines", async () => {
+    const offers = Array.from({ length: 27 }, (_, index) => {
+      const airline = ["P4", "UA", "BA"][index % 3]!;
+      const hour = String(1 + Math.floor(index / 3)).padStart(2, "0");
+      return {
+        ...offer,
+        priceAmount: `${155000 + index}`,
+        primaryAirlineCode: airline,
+        participatingAirlineCodes: [airline],
+        slices: [{
+          ...offer.slices[0]!,
+          segments: [{
+            ...offer.slices[0]!.segments[0]!,
+            departure: `2026-09-10T${hour}:00:00+01:00`,
+            arrival: `2026-09-10T${hour}:50:00+01:00`,
+            marketingAirlineCode: airline,
+            marketingAirline: airline,
+            flightNumber: `${airline}${100 + index}`
+          }]
+        }]
+      };
+    });
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response("discovery", offers))
+      .mockResolvedValueOnce(response("verification", offers));
+    const provider = new OpenAIWebFlightSearchProvider({
+      apiKey: "test",
+      approvedDomains: ["flyairpeace.com"],
+      fetch
+    });
+
+    const result = await provider.search(request);
+
+    expect(result.offers).toHaveLength(27);
+    expect(result.offers.slice(0, 3).map((item) => item.primaryAirlineCode))
+      .toEqual(["P4", "UA", "BA"]);
+    const firstRequest = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)) as {
+      input: string;
+      max_tool_calls: number;
+      text: { format: { schema: { properties: { offers: Record<string, unknown> } } } };
+    };
+    expect(firstRequest.input).toContain("every identified primary airline");
+    expect(firstRequest.max_tool_calls).toBe(16);
+    expect(firstRequest.text.format.schema.properties.offers).not.toHaveProperty("maxItems");
   });
 
   it("still performs the bounded verification response when discovery is empty", async () => {

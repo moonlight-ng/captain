@@ -25,24 +25,21 @@ current profile and the traveller’s selected Trip.
 ## Search and verification flow
 
 Each Trip has one canonical `SearchSpec`. Matching Watches may share fresh
-results. The primary `openai_web` provider performs exactly two bounded OpenAI
+results. The primary `openai_web` provider performs exactly two OpenAI
 Responses:
 
-1. broad discovery of at most 40 candidates;
-2. independent verification retaining at most 20 candidates.
+1. coverage-first discovery across distinct airlines, airports, stops, and
+   departure-time bands;
+2. independent verification of every discovered candidate.
 
 Both Responses must use web search. A candidate is accepted when the two
 passes agree on route, dates, every segment, marketing airline and flight
 number, cabin, exact one-adult fare, and Trip currency. Evidence must use an
 approved airline, metasearch, or OTA domain that appears among retrieved
 sources (exact URL or same domain). Rejected candidates are reduced to
-aggregate reason counts and are never stored or shown. Empty verified sets
-keep the previous offers rather than wiping the Trip blank.
-
-See [ADR: Duffel-primary USD/GBP](adr-duffel-primary-usd-gbp.md).
-`official_duffel` is the inventory provider for Trips in USD or GBP. Routes or
-airlines Duffel does not cover surface as empty results with a one-shot notice.
-Duffel amounts convert between USD and GBP when needed.
+aggregate reason counts and are never stored or shown. Verified offers are
+deduplicated without an arbitrary result-count cap. Empty verified sets keep
+the previous offers rather than wiping the Trip blank.
 
 The provider contract reserves other `official_*` identifiers for future
 documented airline or partnership APIs. It does not permit unofficial scraping.

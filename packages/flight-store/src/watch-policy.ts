@@ -1,13 +1,9 @@
 import type { CompletedProviderOffer } from "./contracts.js";
 
-export const MAX_RETAINED_OFFERS_PER_SEARCH = 20;
 export const DISCOVERY_SEARCH_SPEC_LIMIT = 1;
 export const TRACKING_SEARCH_SPEC_LIMIT = 1;
 export const CURRENT_OFFER_RETENTION_MS = 7 * 86_400_000;
 export const PRICE_HISTORY_RETENTION_MS = 90 * 86_400_000;
-
-const CHEAPEST_OFFER_SLOTS = 12;
-const AIRLINE_DIVERSITY_SLOTS = MAX_RETAINED_OFFERS_PER_SEARCH - CHEAPEST_OFFER_SLOTS;
 
 export function retainSearchOffers(offers: CompletedProviderOffer[]): CompletedProviderOffer[] {
   const bestByItinerary = new Map<string, CompletedProviderOffer>();
@@ -20,25 +16,25 @@ export function retainSearchOffers(offers: CompletedProviderOffer[]): CompletedP
   }
 
   const ranked = [...bestByItinerary.values()].sort(compareOffers);
-  const retained = new Map<string, CompletedProviderOffer>();
-  for (const offer of ranked.slice(0, CHEAPEST_OFFER_SLOTS)) {
-    retained.set(offer.itineraryKey, offer);
+  const offersByAirline = new Map<string, CompletedProviderOffer[]>();
+  for (const offer of ranked) {
+    const airline = primaryAirline(offer.snapshot) || offer.primaryAirlineCode || "UNKNOWN";
+    const airlineOffers = offersByAirline.get(airline) ?? [];
+    airlineOffers.push(offer);
+    offersByAirline.set(airline, airlineOffers);
   }
 
-  const bestByAirline = new Map<string, CompletedProviderOffer>();
-  for (const offer of ranked) {
-    const airline = primaryAirline(offer.snapshot);
-    if (airline && !bestByAirline.has(airline)) bestByAirline.set(airline, offer);
+  const airlineOrder = [...offersByAirline.entries()]
+    .sort((left, right) => compareOffers(left[1][0]!, right[1][0]!))
+    .map(([airline]) => airline);
+  const representative: CompletedProviderOffer[] = [];
+  for (let depth = 0; representative.length < ranked.length; depth += 1) {
+    for (const airline of airlineOrder) {
+      const offer = offersByAirline.get(airline)?.[depth];
+      if (offer) representative.push(offer);
+    }
   }
-  for (const offer of [...bestByAirline.values()].sort(compareOffers)) {
-    if (retained.size >= CHEAPEST_OFFER_SLOTS + AIRLINE_DIVERSITY_SLOTS) break;
-    retained.set(offer.itineraryKey, offer);
-  }
-  for (const offer of ranked) {
-    if (retained.size >= MAX_RETAINED_OFFERS_PER_SEARCH) break;
-    retained.set(offer.itineraryKey, offer);
-  }
-  return [...retained.values()].sort(compareOffers);
+  return representative;
 }
 
 export function compactOfferSnapshot(snapshot: Record<string, unknown>): Record<string, unknown> {

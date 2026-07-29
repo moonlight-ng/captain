@@ -1,8 +1,7 @@
 import postgres from "postgres";
 import { PostgresCaptainPlatformStore } from "@agents/flight-store";
 import { logEvent } from "@agents/observability";
-import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
-import { OpenAIWebFlightSearchProvider, type FlightSearchProvider } from "@agents/provider-web";
+import { OpenAIWebFlightSearchProvider } from "@agents/provider-web";
 
 import { loadWorkerEnv } from "./env.js";
 import { FlightWorker } from "./worker.js";
@@ -11,7 +10,6 @@ const env = loadWorkerEnv({
   ...process.env,
   CAPTAIN_PUBLIC_URL: process.env.CAPTAIN_PUBLIC_URL?.trim() || "https://dr-captain.fly.dev",
   TRACKING_KILL_SWITCH: "false",
-  FLIGHT_INVENTORY_PROVIDER: process.env.FLIGHT_INVENTORY_PROVIDER?.trim() || "official_duffel",
   FLIGHT_WORKER_CLAIM_LIMIT: process.env.FLIGHT_WORKER_CLAIM_LIMIT ?? "4",
   FLIGHT_WORKER_LEASE_MS: process.env.FLIGHT_WORKER_LEASE_MS ?? "600000"
 });
@@ -23,20 +21,15 @@ const forced = await sql`
   where status = 'active'
   returning id, trip_id, next_check_at
 `;
-console.log(JSON.stringify({ forcedDue: forced, provider: env.inventoryProvider }, null, 2));
+console.log(JSON.stringify({ forcedDue: forced, provider: "openai_web" }, null, 2));
 await sql.end({ timeout: 5 });
 
-const provider: FlightSearchProvider = env.inventoryProvider === "openai_web"
-  ? new OpenAIWebFlightSearchProvider({
-      apiKey: env.openaiApiKey,
-      baseUrl: env.openaiBaseUrl,
-      model: env.openaiModel,
-      approvedDomains: env.approvedDomains
-    })
-  : new DuffelFlightSearchProvider({
-      accessToken: env.duffelAccessToken,
-      baseUrl: env.duffelBaseUrl
-    });
+const provider = new OpenAIWebFlightSearchProvider({
+  apiKey: env.openaiApiKey,
+  baseUrl: env.openaiBaseUrl,
+  model: env.openaiModel,
+  approvedDomains: env.approvedDomains
+});
 
 const store = PostgresCaptainPlatformStore.connect(env.databaseUrl, 6);
 const worker = new FlightWorker({
@@ -57,12 +50,12 @@ try {
   const result = await worker.tick(new Date());
   logEvent("info", "flight_worker.manual_tick_done", {
     ...result,
-    provider: env.inventoryProvider,
+    provider: provider.provider,
     duration_ms: Date.now() - startedAt
   });
   console.log(JSON.stringify({
     tick: result,
-    provider: env.inventoryProvider,
+    provider: provider.provider,
     durationMs: Date.now() - startedAt
   }, null, 2));
 } finally {

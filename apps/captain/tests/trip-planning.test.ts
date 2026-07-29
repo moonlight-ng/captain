@@ -263,7 +263,7 @@ describe("Captain Trip planning", () => {
       tripType: "one_way",
       departureWindow: { start: "2025-07-05", end: "2025-07-05" },
       maxStops: 1,
-      currency: "USD"
+      currency: "NGN"
     });
   });
 

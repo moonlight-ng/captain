@@ -14,12 +14,10 @@ import type {
   WebSearchResult
 } from "./types.js";
 
-const PROMPT_VERSION = "captain-web-fares-v2";
-const MAX_DISCOVERY_OFFERS = 40;
-const MAX_VERIFIED_OFFERS = 20;
+const PROMPT_VERSION = "captain-web-fares-v3";
 const RESPONSE_TIMEOUT_MS = 300_000;
 const POLL_INTERVAL_MS = 2_000;
-const MAX_TOOL_CALLS = 10;
+const MAX_TOOL_CALLS = 16;
 
 const responseEnvelopeSchema = z.object({
   id: z.string(),
@@ -67,30 +65,29 @@ export class OpenAIWebFlightSearchProvider implements FlightSearchProvider {
   }
 
   async search(request: SearchSpecRequest): Promise<WebSearchResult> {
+    const webRequest: SearchSpecRequest = { ...request, provider: "openai_web" };
     const rejectionCounts: Partial<Record<WebSearchRejectionReason, number>> = {};
     const discovery = await this.#createResponse({
       schemaName: "flight_discovery",
-      prompt: discoveryPrompt(request),
-      maximumOffers: MAX_DISCOVERY_OFFERS
+      prompt: discoveryPrompt(webRequest)
     });
-    const discovered = parseAndValidateBatch(
+    const discovered = representativeOrder(parseAndValidateBatch(
       discovery,
-      request,
+      webRequest,
       this.#approvedDomains,
       rejectionCounts
-    );
+    ));
 
-    // When discovery finds nothing, run an independent second discovery instead of
-    // "verifying" an empty list. Accept validated offers from that retry alone.
+    // Always spend the second pass independently. A candidate found only in the
+    // retry is useful diagnostic evidence, but it is not a two-pass verified fare.
     if (discovered.length === 0) {
       const retry = await this.#createResponse({
         schemaName: "flight_discovery_retry",
-        prompt: discoveryPrompt(request),
-        maximumOffers: MAX_DISCOVERY_OFFERS
+        prompt: discoveryPrompt(webRequest)
       });
-      const retried = parseAndValidateBatch(
+      parseAndValidateBatch(
         retry,
-        request,
+        webRequest,
         this.#approvedDomains,
         rejectionCounts
       );
@@ -100,7 +97,7 @@ export class OpenAIWebFlightSearchProvider implements FlightSearchProvider {
         verificationResponseId: retry.id,
         model: this.#model,
         promptVersion: PROMPT_VERSION,
-        offers: retried.slice(0, MAX_VERIFIED_OFFERS),
+        offers: [],
         rejectionCounts,
         webSearchCalls: countWebSearchCalls(discovery) + countWebSearchCalls(retry)
       };
@@ -108,12 +105,11 @@ export class OpenAIWebFlightSearchProvider implements FlightSearchProvider {
 
     const verification = await this.#createResponse({
       schemaName: "flight_verification",
-      prompt: verificationPrompt(request, discovered),
-      maximumOffers: MAX_VERIFIED_OFFERS
+      prompt: verificationPrompt(webRequest, discovered)
     });
     const verified = parseAndValidateBatch(
       verification,
-      request,
+      webRequest,
       this.#approvedDomains,
       rejectionCounts
     );
@@ -126,7 +122,6 @@ export class OpenAIWebFlightSearchProvider implements FlightSearchProvider {
         continue;
       }
       accepted.push(candidate);
-      if (accepted.length >= MAX_VERIFIED_OFFERS) break;
     }
 
     return {
@@ -135,7 +130,7 @@ export class OpenAIWebFlightSearchProvider implements FlightSearchProvider {
       verificationResponseId: verification.id,
       model: this.#model,
       promptVersion: PROMPT_VERSION,
-      offers: accepted,
+      offers: representativeOrder(accepted),
       rejectionCounts,
       webSearchCalls: countWebSearchCalls(discovery) + countWebSearchCalls(verification)
     };
@@ -144,7 +139,6 @@ export class OpenAIWebFlightSearchProvider implements FlightSearchProvider {
   async #createResponse(input: {
     schemaName: string;
     prompt: string;
-    maximumOffers: number;
   }): Promise<ResponseEnvelope> {
     const response = await this.#request("/responses", {
       method: "POST",
@@ -167,12 +161,14 @@ export class OpenAIWebFlightSearchProvider implements FlightSearchProvider {
             type: "json_schema",
             name: input.schemaName,
             strict: true,
-            schema: batchJsonSchema(input.maximumOffers)
+            schema: batchJsonSchema()
           }
         },
         instructions: [
           "You are the evidence-gathering component of a public flight tracker.",
           "Search broadly, then prefer airline, metasearch, and OTA pages for evidence.",
+          "First identify the airlines serving the requested market, then search each identified airline independently.",
+          "Cover distinct primary airlines, airport variants, connection counts, and departure-time bands before returning additional variants from one airline.",
           "Approved evidence domains include Google Flights, Skyscanner, Kayak, Momondo, Expedia, Trip.com, Travelstart, and major carriers.",
           "Return only fares supported by pages retrieved in this response.",
           "Never infer, convert, multiply, estimate, or repair a price.",
@@ -529,10 +525,15 @@ function delay(ms: number): Promise<void> {
 function discoveryPrompt(request: SearchSpecRequest): string {
   return [
     "Find currently displayed, source-backed flight fares matching this exact Trip.",
-    "Search approved airline, metasearch, and OTA sites broadly, including Google Flights when useful.",
+    "Use a coverage-first search sequence:",
+    "1. Search metasearch results for the route and dates to identify operating airlines and viable connections.",
+    "2. Search each identified airline or itinerary family independently on approved airline, metasearch, or OTA domains.",
+    "3. Only then add additional time or fare variants from airlines already represented.",
+    "Do not let one airline dominate the result set: include at least one valid candidate from every identified primary airline before adding a seventh candidate for any airline.",
+    "Cover the permitted destination airports, nonstop and connecting choices, and morning, afternoon, and evening departures when the market offers them.",
     "Open fare result pages when search snippets lack flight numbers or times.",
     "Prefer itineraries within the requested maxConnections; include realistic one- and two-stop long-haul options when allowed.",
-    "Return no more than 40 candidates.",
+    "Return every distinct candidate that has complete evidence; do not apply an arbitrary result-count limit.",
     "The price must be the displayed total for exactly one adult in the requested cabin and currency.",
     "Every slice must contain every flight segment, marketing airline, flight number, and departure/arrival timestamps.",
     "Use ISO-8601 local times with a UTC offset when the source shows one; otherwise use Zulu times from the published schedule.",
@@ -544,10 +545,11 @@ function discoveryPrompt(request: SearchSpecRequest): string {
 function verificationPrompt(request: SearchSpecRequest, candidates: VerifiedOfferCandidate[]): string {
   return [
     "Independently verify these discovered flight candidates with fresh web searches.",
+    "Verify candidates airline by airline so every represented primary airline gets checked before checking additional variants from the same airline.",
     "Return only candidates whose source still shows the same route, dates, segments, flight numbers, cabin, one-adult fare, and currency.",
     "Preserve structured itinerary and fare values exactly; evidence URLs may differ if they are the same approved domain.",
     "Omit a candidate if route, dates, segments, cabin, fare, or currency cannot be confirmed.",
-    "Return no more than 20 verified candidates.",
+    "Return every candidate that passes verification; do not apply an arbitrary result-count limit.",
     "Trip request:",
     JSON.stringify(request),
     "Candidates:",
@@ -555,7 +557,7 @@ function verificationPrompt(request: SearchSpecRequest, candidates: VerifiedOffe
   ].join("\n");
 }
 
-function batchJsonSchema(maximumOffers: number): Record<string, unknown> {
+function batchJsonSchema(): Record<string, unknown> {
   const string = { type: "string" };
   return {
     type: "object",
@@ -564,7 +566,6 @@ function batchJsonSchema(maximumOffers: number): Record<string, unknown> {
     properties: {
       offers: {
         type: "array",
-        maxItems: maximumOffers,
         items: {
           type: "object",
           additionalProperties: false,
@@ -648,4 +649,47 @@ function batchJsonSchema(maximumOffers: number): Record<string, unknown> {
       }
     }
   };
+}
+
+function representativeOrder(offers: VerifiedOfferCandidate[]): VerifiedOfferCandidate[] {
+  const distinct = new Map<string, VerifiedOfferCandidate>();
+  for (const offer of offers) {
+    const key = `${offer.itineraryKey}:${offer.priceAmount}:${offer.currency}:${offer.cabin}`;
+    if (!distinct.has(key)) distinct.set(key, offer);
+  }
+  const byAirline = new Map<string, VerifiedOfferCandidate[]>();
+  for (const offer of distinct.values()) {
+    const airlineOffers = byAirline.get(offer.primaryAirlineCode) ?? [];
+    airlineOffers.push(offer);
+    byAirline.set(offer.primaryAirlineCode, airlineOffers);
+  }
+  for (const airlineOffers of byAirline.values()) {
+    airlineOffers.sort(compareRepresentativeOffers);
+  }
+  const airlineOrder = [...byAirline.keys()].sort((left, right) => {
+    const leftBest = byAirline.get(left)![0]!;
+    const rightBest = byAirline.get(right)![0]!;
+    return compareRepresentativeOffers(leftBest, rightBest) || left.localeCompare(right);
+  });
+  const ordered: VerifiedOfferCandidate[] = [];
+  for (let depth = 0; ordered.length < distinct.size; depth += 1) {
+    for (const airline of airlineOrder) {
+      const offer = byAirline.get(airline)?.[depth];
+      if (offer) ordered.push(offer);
+    }
+  }
+  return ordered;
+}
+
+function compareRepresentativeOffers(
+  left: VerifiedOfferCandidate,
+  right: VerifiedOfferCandidate
+): number {
+  return Number(left.priceAmount) - Number(right.priceAmount)
+    || totalConnections(left) - totalConnections(right)
+    || left.itineraryKey.localeCompare(right.itineraryKey);
+}
+
+function totalConnections(offer: VerifiedOfferCandidate): number {
+  return offer.slices.reduce((total, slice) => total + Math.max(0, slice.segments.length - 1), 0);
 }

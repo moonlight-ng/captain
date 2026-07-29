@@ -10,12 +10,12 @@ passport data.
   avoided airlines.
 - A traveller can have up to three active or paused Trips. A fourth Trip
   requires stopping or completing one of the existing Trips.
-- Domestic Trips are not tracked yet. International Trips use **USD or GBP**
-  only. Duffel fares convert between those two when needed; the confirmed Trip
-  currency stays fixed after confirm.
+- Domestic Trips suggest the local currency. International Trips use the
+  profile default. The confirmed Trip currency stays fixed and Captain never
+  converts fares between currencies.
 - The dashboard has **Flights**, **Airlines**, and **Browse** views. It only
-  displays offers from Duffel inventory and never describes the
-  set as exhaustive.
+  displays web-derived offers that pass both evidence checks and never
+  describes the set as exhaustive.
 - During product design, Trip and Agent settings use direct reusable links
   containing an opaque access key. Public-beta session authentication is
   deferred until the interaction design settles.
@@ -40,16 +40,18 @@ field. Terra remains the general Captain agent model. This follows OpenAI's
 and [Structured Outputs guidance](https://developers.openai.com/api/docs/guides/structured-outputs).
 
 The worker uses the provider-neutral `FlightSearchProvider` contract. The
-initial `openai_web` adapter makes two bounded OpenAI Responses:
+initial `openai_web` adapter makes two OpenAI Responses:
 
-1. broad discovery of at most 40 candidates;
-2. targeted verification retaining at most 20.
+1. coverage-first discovery across distinct airlines, airports, stops, and
+   departure-time bands;
+2. targeted verification of every discovered candidate.
 
 An offer is accepted when both responses agree on its itinerary, fare,
 currency, and cabin. Evidence must use an approved airline, metasearch, or
 OTA domain that appears among retrieved sources (exact URL or same domain).
-Failed candidates are not stored. Empty verified checks keep the last good
-offers.
+Failed candidates are not stored. Verified offers are deduplicated but are not
+silently truncated to an arbitrary count. Empty verified checks keep the last
+good offers.
 
 Captain and Pilot are independent. Captain has no Pilot client, route,
 principal, secret, tool, or redirect. The legacy Flight Agent and Duffel

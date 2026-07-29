@@ -16,7 +16,7 @@ Silent FX conversion is forbidden: Trip currency is immutable and fares must not
 ## Decision
 
 1. **`openai_web` is the primary inventory path** for domestic, regional, and international Trips in whatever currency the traveller confirmed.
-2. **Duffel (`official_duffel`) is optional and deferred.** It may run only when `Trip.currency` equals the Duffel org billing currency and the route is not a local/domestic market Duffel covers poorly. Eligibility helpers live in `@agents/flight-domain` (`duffelInventoryEligible`). Restoring the adapter is backlog, not a launch blocker.
+2. **Duffel (`official_duffel`) is optional and deferred.** It is not part of the public request path. Restoring an official adapter is backlog, not a launch blocker.
 3. **Do not steer travellers into GBP** so Duffel can run. Suggest NGN for single-country NG domestic routes; otherwise use the profile default.
 4. **ChatGPT chat is not the quality bar.** Captain needs structured, constraint-checked offers. Web validation keeps route/date/cabin/currency/fare checks but does not require bit-identical evidence URLs across passes or exact URL membership when a same-domain source was retrieved.
 5. **Empty verified sets must not wipe last good offers.**

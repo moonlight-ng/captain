@@ -2,8 +2,7 @@
 
 ## Status
 
-Accepted — 2026-07-28 (supersedes OpenAI-primary for inventory)
-Amended — 2026-07-28 (domestic Trips allowed; empty inventory notifies once)
+Superseded by [OpenAI-primary flight inventory](adr-openai-primary-flight-inventory.md).
 
 ## Decision
 

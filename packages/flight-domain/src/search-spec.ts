@@ -44,22 +44,29 @@ export type SearchRun = {
   error: string | null;
 };
 
+const METROPOLITAN_AIRPORTS: Readonly<Record<string, readonly string[]>> = {
+  LON: ["LHR", "LGW", "LCY", "STN", "LTN"],
+  NYC: ["JFK", "EWR", "LGA"],
+  PAR: ["CDG", "ORY"],
+  TYO: ["HND", "NRT"]
+};
+
 export function buildSearchSpecs(brief: TripBrief, _liveMode = true): SearchSpec[] {
   const slices: SearchSlice[] = brief.tripType === "multi_city"
     ? (brief.legs ?? []).map((leg) => ({
-        originAirports: leg.originAirports,
-        destinationAirports: leg.destinationAirports,
+        originAirports: expandMetropolitanAirports(leg.originAirports),
+        destinationAirports: expandMetropolitanAirports(leg.destinationAirports),
         departureStart: leg.departureWindow.start,
         departureEnd: leg.departureWindow.end
       }))
     : [{
-        originAirports: brief.originAirports,
-        destinationAirports: brief.destinationAirports,
+        originAirports: expandMetropolitanAirports(brief.originAirports),
+        destinationAirports: expandMetropolitanAirports(brief.destinationAirports),
         departureStart: brief.departureWindow.start,
         departureEnd: brief.departureWindow.end
       }];
   const request: SearchSpecRequest = {
-    provider: "official_duffel",
+    provider: "openai_web",
     apiVersion: "v1",
     tripType: brief.tripType,
     slices,
@@ -73,6 +80,10 @@ export function buildSearchSpecs(brief: TripBrief, _liveMode = true): SearchSpec
   };
   const key = searchSpecKey(request);
   return [{ id: key, key, request }];
+}
+
+export function expandMetropolitanAirports(codes: string[]): string[] {
+  return [...new Set(codes.flatMap((code) => METROPOLITAN_AIRPORTS[code] ?? [code]))];
 }
 
 export function searchSpecKey(request: SearchSpecRequest): string {

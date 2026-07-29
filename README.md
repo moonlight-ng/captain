@@ -21,8 +21,8 @@ booking, payment, or passenger-document collection.
 2. Captain creates or updates a tenant-scoped Trip and its individual Watch.
 3. The flight worker wakes due Watches, collapses matching provider requests
    into one shared SearchSpec, and leases work transactionally.
-4. `official_duffel` results are stored once (converted into Trip USD/GBP when
-   needed), retained as price history, then ranked separately against every
+4. `openai_web` results that pass two independent evidence checks are stored
+   once, retained as price history, then ranked separately against every
    subscribed Trip’s budget and preferences.
 5. Captain queues a deduplicated Telegram alert for first results, a price drop,
    a newly stronger itinerary, or a terminal Watch failure.

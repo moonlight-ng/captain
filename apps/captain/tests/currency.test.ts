@@ -7,13 +7,13 @@ import {
 } from "../services/trip-planning/currency.js";
 
 describe("Trip currency suggestions", () => {
-  it("keeps USD/GBP profile defaults and falls back to USD otherwise", () => {
+  it("uses the domestic route currency and otherwise keeps the profile default", () => {
     expect(suggestedTripCurrency({
       originAirports: ["LOS"],
       destinationAirports: ["ABV"],
       tripType: "one_way",
       legs: []
-    }, "USD")).toBe("USD");
+    }, "USD")).toBe("NGN");
     expect(suggestedTripCurrency({
       originAirports: ["LOS"],
       destinationAirports: ["LHR"],
@@ -25,7 +25,7 @@ describe("Trip currency suggestions", () => {
       destinationAirports: ["JFK"],
       tripType: "one_way",
       legs: []
-    }, "NGN")).toBe("USD");
+    }, "NGN")).toBe("NGN");
   });
 });
 

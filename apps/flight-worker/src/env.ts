@@ -1,7 +1,5 @@
 export type WorkerEnv = {
   databaseUrl: string;
-  duffelAccessToken: string;
-  duffelBaseUrl: string;
   openaiApiKey: string;
   openaiBaseUrl: string;
   openaiModel: string;
@@ -16,22 +14,12 @@ export type WorkerEnv = {
   leaseMs: number;
   freshnessMs: number;
   claimLimit: number;
-  inventoryProvider: "official_duffel" | "openai_web";
 };
 
 export function loadWorkerEnv(source: NodeJS.ProcessEnv = process.env): WorkerEnv {
-  const inventoryProvider = source.FLIGHT_INVENTORY_PROVIDER?.trim() === "openai_web"
-    ? "openai_web"
-    : "official_duffel";
   return {
     databaseUrl: required(source, "DATABASE_URL"),
-    duffelAccessToken: inventoryProvider === "official_duffel"
-      ? required(source, "DUFFEL_ACCESS_TOKEN")
-      : (source.DUFFEL_ACCESS_TOKEN?.trim() || ""),
-    duffelBaseUrl: (source.DUFFEL_BASE_URL?.trim() || "https://api.duffel.com").replace(/\/$/u, ""),
-    openaiApiKey: inventoryProvider === "openai_web"
-      ? required(source, "OPENAI_API_KEY")
-      : (source.OPENAI_API_KEY?.trim() || ""),
+    openaiApiKey: required(source, "OPENAI_API_KEY"),
     openaiBaseUrl: (source.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1").replace(/\/$/u, ""),
     openaiModel: source.OPENAI_FLIGHT_MODEL?.trim() || "gpt-5.6-sol",
     approvedDomains: source.FLIGHT_APPROVED_DOMAINS?.split(",").map((value) => value.trim()).filter(Boolean) ?? [],
@@ -44,8 +32,7 @@ export function loadWorkerEnv(source: NodeJS.ProcessEnv = process.env): WorkerEn
     tickMs: positive(source, "FLIGHT_WORKER_TICK_MS", 60_000),
     leaseMs: positive(source, "FLIGHT_WORKER_LEASE_MS", 240_000),
     freshnessMs: positive(source, "FLIGHT_SEARCH_FRESHNESS_MS", 900_000),
-    claimLimit: positive(source, "FLIGHT_WORKER_CLAIM_LIMIT", 1),
-    inventoryProvider
+    claimLimit: positive(source, "FLIGHT_WORKER_CLAIM_LIMIT", 1)
   };
 }
 

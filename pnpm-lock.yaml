@@ -89,9 +89,6 @@ importers:
       '@agents/observability':
         specifier: workspace:*
         version: link:../../packages/observability
-      '@agents/provider-duffel':
-        specifier: workspace:*
-        version: link:../../packages/provider-duffel
       '@agents/provider-web':
         specifier: workspace:*
         version: link:../../packages/provider-web

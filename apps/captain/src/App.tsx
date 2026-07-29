@@ -362,7 +362,7 @@ function BrowseTab({
           {visible.map((offer) => <OfferRow offer={offer} key={offer.id} />)}
         </div>
       )}
-      <p className="set-note">Captain shows up to 20 verified results. This is not an exhaustive market listing.</p>
+      <p className="set-note">Captain shows the verified options it found across airlines. This is not an exhaustive market listing.</p>
       <FilterSheet
         open={filterOpen}
         preferences={draftPreferences}

@@ -3,12 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { CompletedProviderOffer } from "../src/contracts.js";
 import {
   adaptiveWatchIntervalMs,
-  MAX_RETAINED_OFFERS_PER_SEARCH,
   retainSearchOffers
 } from "../src/watch-policy.js";
 
 describe("efficient watch policy", () => {
-  it("keeps a bounded, diverse set and strips raw provider payloads", () => {
+  it("keeps every deduplicated offer, orders airlines representatively, and strips raw payloads", () => {
     const offers = Array.from({ length: 40 }, (_, index) => providerOffer(index));
     offers.push({
       ...providerOffer(100),
@@ -19,12 +18,14 @@ describe("efficient watch policy", () => {
 
     const retained = retainSearchOffers(offers);
 
-    expect(retained).toHaveLength(MAX_RETAINED_OFFERS_PER_SEARCH);
+    expect(retained).toHaveLength(40);
     expect(retained.find((offer) => offer.itineraryKey === offers[0]!.itineraryKey)?.price).toBe(50);
     expect(new Set(retained.map((offer) => offer.itineraryKey)).size).toBe(retained.length);
     expect(retained.every((offer) => !("raw" in offer.snapshot))).toBe(true);
     expect(retained.every((offer) => JSON.stringify(offer.snapshot).length < 4_000)).toBe(true);
     expect(new Set(retained.flatMap((offer) => offer.snapshot.airlineCodes as string[])).size).toBeGreaterThan(1);
+    expect(new Set(retained.slice(0, 5).map((offer) => offer.primaryAirlineCode)).size)
+      .toBe(5);
   });
 
   it("uses the public beta's exact adaptive 12, 6, and 3 hour schedule", () => {
