@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { SearchSpecRequest } from "@agents/flight-domain";
-import { OpenAIWebFlightSearchProvider } from "@agents/provider-web";
+import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
 
 type CorpusCase = {
   id: string;
@@ -13,23 +13,14 @@ type CorpusCase = {
   currency: string;
 };
 
-const apiKey = process.env.OPENAI_API_KEY?.trim();
-if (!apiKey) throw new Error("OPENAI_API_KEY is required for the live launch evaluation");
+const accessToken = process.env.DUFFEL_ACCESS_TOKEN?.trim();
+if (!accessToken) throw new Error("DUFFEL_ACCESS_TOKEN is required for the live launch evaluation");
 const corpus = JSON.parse(
   await readFile(resolve("evals/corpus.json"), "utf8")
 ) as CorpusCase[];
-const provider = new OpenAIWebFlightSearchProvider({
-  apiKey,
-  ...(process.env.OPENAI_BASE_URL ? { baseUrl: process.env.OPENAI_BASE_URL } : {}),
-  ...(process.env.OPENAI_FLIGHT_MODEL ? { model: process.env.OPENAI_FLIGHT_MODEL } : {}),
-  ...(process.env.FLIGHT_APPROVED_DOMAINS
-    ? {
-        approvedDomains: process.env.FLIGHT_APPROVED_DOMAINS
-          .split(",")
-          .map((domain) => domain.trim())
-          .filter(Boolean)
-      }
-    : {})
+const provider = new DuffelFlightSearchProvider({
+  accessToken,
+  ...(process.env.DUFFEL_BASE_URL ? { baseUrl: process.env.DUFFEL_BASE_URL } : {})
 });
 
 const cases: Array<{
@@ -94,18 +85,18 @@ const manualAgreement = numberArgument("--manual-agreement=");
 const passed = coverage >= 0.8
   && domesticCoverage >= 0.75
   && internationalCoverage >= 0.75
-  && p95LatencyMs < 300_000
+  && p95LatencyMs < 180_000
   && (manualAgreement === null || (manualSample.length > 0 && manualAgreement >= 0.9));
 
 console.log(JSON.stringify({
   evaluatedAt: new Date().toISOString(),
-  model: process.env.OPENAI_FLIGHT_MODEL?.trim() || "gpt-5.6-sol",
-  inventoryProvider: "openai_web",
+  model: "duffel",
+  inventoryProvider: "official_duffel",
   thresholds: {
     coverageWithThreeOffers: 0.8,
     domesticCoverageWithThreeOffers: 0.75,
     internationalCoverageWithThreeOffers: 0.75,
-    p95LatencyMs: 300_000,
+    p95LatencyMs: 180_000,
     manualLandingAgreement: 0.9
   },
   metrics: {
@@ -130,7 +121,7 @@ function maxConnectionsFor(category: CorpusCase["category"]): number {
 
 function searchRequest(item: CorpusCase): SearchSpecRequest {
   return {
-    provider: "openai_web",
+    provider: "official_duffel",
     apiVersion: "v1",
     tripType: "one_way",
     slices: [{

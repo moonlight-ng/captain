@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import { PostgresCaptainPlatformStore } from "@agents/flight-store";
 import { logEvent } from "@agents/observability";
-import { OpenAIWebFlightSearchProvider } from "@agents/provider-web";
+import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
 
 import { loadWorkerEnv } from "./env.js";
 import { FlightWorker } from "./worker.js";
@@ -21,14 +21,12 @@ const forced = await sql`
   where status = 'active'
   returning id, trip_id, next_check_at
 `;
-console.log(JSON.stringify({ forcedDue: forced, provider: "openai_web" }, null, 2));
+console.log(JSON.stringify({ forcedDue: forced, provider: "official_duffel" }, null, 2));
 await sql.end({ timeout: 5 });
 
-const provider = new OpenAIWebFlightSearchProvider({
-  apiKey: env.openaiApiKey,
-  baseUrl: env.openaiBaseUrl,
-  model: env.openaiModel,
-  approvedDomains: env.approvedDomains
+const provider = new DuffelFlightSearchProvider({
+  accessToken: env.duffelAccessToken,
+  baseUrl: env.duffelBaseUrl
 });
 
 const store = PostgresCaptainPlatformStore.connect(env.databaseUrl, 6);

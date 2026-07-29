@@ -1,9 +1,7 @@
 export type WorkerEnv = {
   databaseUrl: string;
-  openaiApiKey: string;
-  openaiBaseUrl: string;
-  openaiModel: string;
-  approvedDomains: string[];
+  duffelAccessToken: string;
+  duffelBaseUrl: string;
   telegramBotToken: string;
   captainPublicUrl: string;
   trackingEnabled: boolean;
@@ -19,10 +17,8 @@ export type WorkerEnv = {
 export function loadWorkerEnv(source: NodeJS.ProcessEnv = process.env): WorkerEnv {
   return {
     databaseUrl: required(source, "DATABASE_URL"),
-    openaiApiKey: required(source, "OPENAI_API_KEY"),
-    openaiBaseUrl: (source.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1").replace(/\/$/u, ""),
-    openaiModel: source.OPENAI_FLIGHT_MODEL?.trim() || "gpt-5.6-sol",
-    approvedDomains: source.FLIGHT_APPROVED_DOMAINS?.split(",").map((value) => value.trim()).filter(Boolean) ?? [],
+    duffelAccessToken: required(source, "DUFFEL_ACCESS_TOKEN"),
+    duffelBaseUrl: (source.DUFFEL_BASE_URL?.trim() || "https://api.duffel.com").replace(/\/$/u, ""),
     telegramBotToken: required(source, "TELEGRAM_BOT_TOKEN"),
     captainPublicUrl: required(source, "CAPTAIN_PUBLIC_URL").replace(/\/$/u, ""),
     trackingEnabled: !booleanValue(source.TRACKING_KILL_SWITCH, false),

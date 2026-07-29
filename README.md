@@ -21,7 +21,7 @@ booking, payment, or passenger-document collection.
 2. Captain creates or updates a tenant-scoped Trip and its individual Watch.
 3. The flight worker wakes due Watches, collapses matching provider requests
    into one shared SearchSpec, and leases work transactionally.
-4. `openai_web` results that pass two independent evidence checks are stored
+4. Duffel offers are paged to completion, deduplicated by itinerary, stored
    once, retained as price history, then ranked separately against every
    subscribed Trip’s budget and preferences.
 5. Captain queues a deduplicated Telegram alert for first results, a price drop,
@@ -40,5 +40,5 @@ pnpm typecheck
 pnpm build
 ```
 
-See [architecture](docs/architecture.md), [OpenAI-primary inventory ADR](docs/adr-openai-primary-flight-inventory.md), and [rollout](docs/rollout.md) for the
+See [architecture](docs/architecture.md), [Duffel-primary inventory ADR](docs/adr-duffel-primary-usd-gbp.md), and [rollout](docs/rollout.md) for the
 runtime boundaries and safe production sequence.

@@ -99,7 +99,7 @@ async function reconcileActiveTripSearchSpecs(): Promise<void> {
     reconciled += 1;
   }
   if (reconciled > 0) {
-    console.info(`Reconciled web search specifications for ${reconciled} active Trips`);
+    console.info(`Reconciled Duffel search specifications for ${reconciled} active Trips`);
   }
 }
 

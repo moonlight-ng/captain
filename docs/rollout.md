@@ -14,8 +14,8 @@ cp apps/flight-worker/.env.example apps/flight-worker/.env
 
 Captain requires `DATABASE_URL`, `WORKFLOW_POSTGRES_URL`,
 `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_WEBHOOK_SECRET_TOKEN`. The worker requires
-`DATABASE_URL`, `TELEGRAM_BOT_TOKEN`, `CAPTAIN_PUBLIC_URL`, and a server-side
-`OPENAI_API_KEY`.
+`DATABASE_URL`, `TELEGRAM_BOT_TOKEN`, `CAPTAIN_PUBLIC_URL`, and
+`DUFFEL_ACCESS_TOKEN`.
 
 Install the equivalent Fly secrets without putting their values in
 `fly.toml`, Git, or GitHub variables stored as plain text:
@@ -27,7 +27,7 @@ fly secrets set -a dr-captain \
 
 fly secrets set -a dr-flight-worker \
   TELEGRAM_BOT_TOKEN='…' DATABASE_URL='postgresql://…' \
-  CAPTAIN_PUBLIC_URL='https://dr-captain.fly.dev' OPENAI_API_KEY='…'
+  CAPTAIN_PUBLIC_URL='https://dr-captain.fly.dev' DUFFEL_ACCESS_TOKEN='…'
 ```
 
 ## Safe sequence
@@ -42,14 +42,10 @@ fly secrets set -a dr-flight-worker \
    profile editing, and account deletion.
 5. Deploy one worker. Leave tracking disabled while checking readiness and
    logs.
-6. Run `pnpm --filter @agents/flight-worker eval:live`. Optionally review
-   sampled landing sources and rerun with
-   `pnpm --filter @agents/flight-worker eval:live -- --manual-agreement=<ratio>`.
+6. Run the live Duffel evaluation corpus.
 7. Continue only if overall coverage reaches 80%, domestic and international
-   subsets each reach 75% with three verified offers, optional manual agreement
-   is at least 90% when provided, and P95 two-pass latency is below five
-   minutes. Inventory is `openai_web`-primary; Duffel is not required for
-   launch.
+   subsets each reach 75% with three usable offers, representative carrier
+   coverage is acceptable, and P95 search latency is below three minutes.
 8. Turn off `TRACKING_KILL_SWITCH` for private users and observe at least one
    full adaptive cycle.
 9. Set `CAPTAIN_PUBLIC_BETA_ENABLED=true` to admit new users, capped by

@@ -493,13 +493,11 @@ export default telegramChannel({
 
 async function postCurrencyQuestion(ctx: TelegramContext): Promise<void> {
   await ctx.telegram.post({
-    text: "First, choose your default currency, or reply with any three-letter currency code. Captain never converts fares; each Trip keeps the currency you confirm.",
+    text: "First, choose USD or GBP. Captain tracks fares through Duffel and normalizes between USD and GBP when needed. Some airlines or routes may not appear in inventory yet.",
     reply_markup: {
       inline_keyboard: [[
         { text: "USD", callback_data: "captain-profile:currency:USD" },
-        { text: "GBP", callback_data: "captain-profile:currency:GBP" },
-        { text: "NGN", callback_data: "captain-profile:currency:NGN" },
-        { text: "EUR", callback_data: "captain-profile:currency:EUR" }
+        { text: "GBP", callback_data: "captain-profile:currency:GBP" }
       ]]
     }
   });
@@ -532,7 +530,7 @@ async function handleOnboardingText(
 ): Promise<boolean> {
   const services = await getCaptainServices();
   if (profile.onboardingStep === "currency") {
-    const currency = /^[A-Z]{3}$/iu.test(content.trim()) ? content.trim().toUpperCase() : null;
+    const currency = /^(USD|GBP)$/iu.test(content.trim()) ? content.trim().toUpperCase() : null;
     if (!currency) {
       await postCurrencyQuestion(ctx);
       return true;
@@ -591,10 +589,10 @@ async function handleProfileCallback(
   }, new Date());
   await clearCallbackButtons(ctx, query);
   if (action.type === "currency") {
-    if (!/^[A-Z]{3}$/u.test(action.value)) {
+    if (!/^(USD|GBP)$/u.test(action.value)) {
       await ctx.telegram.answerCallbackQuery({
         callbackQueryId: query.id,
-        text: "Choose a three-letter currency code"
+        text: "Choose USD or GBP"
       });
       await postCurrencyQuestion(ctx);
       return;

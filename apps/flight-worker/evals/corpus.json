@@ -5,7 +5,7 @@
     "origin": "LOS",
     "destination": "ABV",
     "departureDate": "2026-09-08",
-    "currency": "NGN"
+    "currency": "USD"
   },
   {
     "id": "ng-abv-los",
@@ -13,7 +13,7 @@
     "origin": "ABV",
     "destination": "LOS",
     "departureDate": "2026-09-15",
-    "currency": "NGN"
+    "currency": "USD"
   },
   {
     "id": "ng-los-phc",
@@ -21,7 +21,7 @@
     "origin": "LOS",
     "destination": "PHC",
     "departureDate": "2026-10-06",
-    "currency": "NGN"
+    "currency": "USD"
   },
   {
     "id": "ng-abv-kan",
@@ -29,7 +29,7 @@
     "origin": "ABV",
     "destination": "KAN",
     "departureDate": "2026-10-13",
-    "currency": "NGN"
+    "currency": "USD"
   },
   {
     "id": "af-los-acc",

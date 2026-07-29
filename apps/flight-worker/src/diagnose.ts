@@ -1,20 +1,19 @@
 import type { SearchSpecRequest } from "@agents/flight-domain";
-import { OpenAIWebFlightSearchProvider } from "@agents/provider-web";
+import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
 
-const apiKey = process.env.OPENAI_API_KEY?.trim();
-if (!apiKey) throw new Error("OPENAI_API_KEY is required");
+const accessToken = process.env.DUFFEL_ACCESS_TOKEN?.trim();
+if (!accessToken) throw new Error("DUFFEL_ACCESS_TOKEN is required");
 
-const provider = new OpenAIWebFlightSearchProvider({
-  apiKey,
-  ...(process.env.OPENAI_BASE_URL ? { baseUrl: process.env.OPENAI_BASE_URL } : {}),
-  ...(process.env.OPENAI_FLIGHT_MODEL ? { model: process.env.OPENAI_FLIGHT_MODEL } : {})
+const provider = new DuffelFlightSearchProvider({
+  accessToken,
+  ...(process.env.DUFFEL_BASE_URL ? { baseUrl: process.env.DUFFEL_BASE_URL } : {})
 });
 
 const cases: Array<{ id: string; request: SearchSpecRequest }> = [
   {
     id: "domestic-los-abv-ngn",
     request: {
-      provider: "openai_web",
+      provider: "official_duffel",
       apiVersion: "v1",
       tripType: "one_way",
       slices: [{
@@ -27,7 +26,7 @@ const cases: Array<{ id: string; request: SearchSpecRequest }> = [
       passenger: { adults: 1, childrenAges: [], infants: 0 },
       cabin: "economy",
       maxConnections: 1,
-      currency: "NGN",
+      currency: "USD",
       maximumPrice: null,
       fareContext: "public_beta"
     }
@@ -35,7 +34,7 @@ const cases: Array<{ id: string; request: SearchSpecRequest }> = [
   {
     id: "longhaul-los-lhr-usd",
     request: {
-      provider: "openai_web",
+      provider: "official_duffel",
       apiVersion: "v1",
       tripType: "one_way",
       slices: [{

@@ -22,24 +22,14 @@ expire after 15 minutes and exchange for a hashed, revocable, HttpOnly,
 SameSite session lasting 30 days. The authenticated API exposes only the
 current profile and the traveller’s selected Trip.
 
-## Search and verification flow
+## Search flow
 
 Each Trip has one canonical `SearchSpec`. Matching Watches may share fresh
-results. The primary `openai_web` provider performs exactly two OpenAI
-Responses:
-
-1. coverage-first discovery across distinct airlines, airports, stops, and
-   departure-time bands;
-2. independent verification of every discovered candidate.
-
-Both Responses must use web search. A candidate is accepted when the two
-passes agree on route, dates, every segment, marketing airline and flight
-number, cabin, exact one-adult fare, and Trip currency. Evidence must use an
-approved airline, metasearch, or OTA domain that appears among retrieved
-sources (exact URL or same domain). Rejected candidates are reduced to
-aggregate reason counts and are never stored or shown. Verified offers are
-deduplicated without an arbitrary result-count cap. Empty verified sets keep
-the previous offers rather than wiping the Trip blank.
+results. `official_duffel` is the only live provider. The worker creates an
+offer request with a 60-second supplier window and retrieves all associated
+offers from Duffel's cursor-paginated Offers endpoint. Offers are deduplicated
+by itinerary without an arbitrary result-count cap and ordered in airline
+rounds so one carrier's fare variants do not crowd out the market.
 
 The provider contract reserves other `official_*` identifiers for future
 documented airline or partnership APIs. It does not permit unofficial scraping.
@@ -61,5 +51,5 @@ historical comparison.
 Production starts with `CAPTAIN_PUBLIC_BETA_ENABLED=false`. Existing private
 users continue to work, but new users are admitted only after the live launch
 evaluation passes and the flag is deliberately enabled. Capacity is capped at
-25 travellers. The worker has a global tracking kill switch, a 500-Responses
-daily ceiling, adaptive 12/6/3-hour checks, and six-hour manual refresh limits.
+25 travellers. The worker has a global tracking kill switch, adaptive
+12/6/3-hour checks, and six-hour manual refresh limits.

@@ -6,11 +6,9 @@ primary_region = "lhr"
 
 [env]
   PORT = "8080"
-  OPENAI_BASE_URL = "https://api.openai.com/v1"
-  OPENAI_FLIGHT_MODEL = "gpt-5.6-sol"
+  DUFFEL_BASE_URL = "https://api.duffel.com"
   CAPTAIN_PUBLIC_URL = "https://dr-captain.fly.dev"
   TRACKING_KILL_SWITCH = "false"
-  DAILY_RESPONSES_CEILING = "500"
   FLIGHT_WORKER_ID = "flight-worker-1"
   FLIGHT_WORKER_TICK_MS = "60000"
   FLIGHT_WORKER_LEASE_MS = "180000"

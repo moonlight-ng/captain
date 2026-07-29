@@ -1,6 +1,5 @@
--- Store every deduplicated offer that passed both web checks. Search responses
--- remain naturally bounded by their tool and token budgets; the database must
--- not silently discard representative airlines after verification.
+-- Store every deduplicated provider offer. The database must not silently
+-- discard representative airlines after a successful search.
 alter table captain.search_runs
   drop constraint if exists captain_search_runs_retained_offer_count_check;
 

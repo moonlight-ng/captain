@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted — 2026-07-27
+Superseded by [Duffel-primary inventory](adr-duffel-primary-usd-gbp.md) on
+2026-07-29.
 
 ## Context
 

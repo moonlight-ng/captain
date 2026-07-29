@@ -10,6 +10,7 @@ COPY patches ./patches
 COPY packages/flight-domain/package.json ./packages/flight-domain/package.json
 COPY packages/flight-store/package.json ./packages/flight-store/package.json
 COPY packages/observability/package.json ./packages/observability/package.json
+COPY packages/provider-duffel/package.json ./packages/provider-duffel/package.json
 COPY packages/provider-web/package.json ./packages/provider-web/package.json
 COPY packages/telegram-core/package.json ./packages/telegram-core/package.json
 RUN pnpm install --frozen-lockfile --prod
@@ -18,6 +19,7 @@ COPY apps/flight-worker ./apps/flight-worker
 COPY packages/flight-domain ./packages/flight-domain
 COPY packages/flight-store ./packages/flight-store
 COPY packages/observability ./packages/observability
+COPY packages/provider-duffel ./packages/provider-duffel
 COPY packages/provider-web ./packages/provider-web
 
 WORKDIR /app/apps/flight-worker

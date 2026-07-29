@@ -7,6 +7,7 @@ import type {
   RecommendationSnapshot
 } from "@agents/flight-store";
 import { logEvent } from "@agents/observability";
+import { DuffelError } from "@agents/provider-duffel";
 import type { FlightSearchProvider } from "@agents/provider-web";
 import { WebSearchProviderError } from "@agents/provider-web";
 
@@ -90,26 +91,28 @@ export class FlightWorker {
   async #processRun(run: ClaimedSearchRun, now: Date): Promise<void> {
     const startedAt = Date.now();
     try {
-      const reserved = await this.#store.reserveDailyResponseBudget(
-        now,
-        OPENAI_RESPONSES_PER_RUN,
-        this.#dailyResponseLimit
-      );
-      if (!reserved) {
-        const until = nextUtcDay(now);
-        await this.#store.deferSearchRun(
-          this.#workerId,
-          run.id,
-          until,
-          "Daily OpenAI Responses safety ceiling reached; tracking is delayed.",
-          now
+      if (this.#provider.provider === "openai_web") {
+        const reserved = await this.#store.reserveDailyResponseBudget(
+          now,
+          OPENAI_RESPONSES_PER_RUN,
+          this.#dailyResponseLimit
         );
-        logEvent("warn", "flight_worker.search_deferred", {
-          run_id: run.id,
-          reason: "daily_response_limit",
-          scheduled_at: until.toISOString()
-        });
-        return;
+        if (!reserved) {
+          const until = nextUtcDay(now);
+          await this.#store.deferSearchRun(
+            this.#workerId,
+            run.id,
+            until,
+            "Daily OpenAI Responses safety ceiling reached; tracking is delayed.",
+            now
+          );
+          logEvent("warn", "flight_worker.search_deferred", {
+            run_id: run.id,
+            reason: "daily_response_limit",
+            scheduled_at: until.toISOString()
+          });
+          return;
+        }
       }
 
       const result = await this.#provider.search(run.request);
@@ -119,10 +122,11 @@ export class FlightWorker {
       const completedAt = new Date();
       const offers: CompletedProviderOffer[] = result.offers.map((offer) => {
         const metrics = deriveOfferMetrics(offer.slices);
+        const providerOfferId = duffelOfferId(offer.evidence[0]?.url) ?? offer.itineraryKey;
         return {
           itineraryKey: offer.itineraryKey,
           provider: this.#provider.provider,
-          providerOfferId: offer.itineraryKey,
+          providerOfferId,
           providerSearchId: result.requestId,
           price: Number(offer.priceAmount),
           priceAmount: offer.priceAmount,
@@ -144,7 +148,11 @@ export class FlightWorker {
             flightNumbers: metrics.flightNumbers,
             stops: metrics.stops,
             durationSeconds: metrics.durationSeconds,
-            conditions: { fareBasis: "One-adult total shown by the cited source" },
+            conditions: {
+              fareBasis: this.#provider.provider === "official_duffel"
+                ? "One-adult Duffel total converted into Trip currency when needed"
+                : "One-adult total shown by the cited source"
+            },
             segments: metrics.segments,
             slices: offer.slices
           }
@@ -170,7 +178,9 @@ export class FlightWorker {
         duration_ms: Date.now() - startedAt
       });
     } catch (error) {
-      const retryAfterMs = error instanceof WebSearchProviderError ? error.retryAfterMs : null;
+      const retryAfterMs = error instanceof WebSearchProviderError || error instanceof DuffelError
+        ? error.retryAfterMs
+        : null;
       await this.#store.failSearchRun(
         this.#workerId,
         run.id,
@@ -182,7 +192,7 @@ export class FlightWorker {
         run_id: run.id,
         search_spec_id: run.searchSpecId,
         provider: this.#provider.provider,
-        error_code: error instanceof WebSearchProviderError
+        error_code: error instanceof WebSearchProviderError || error instanceof DuffelError
           ? error.code
           : error instanceof Error ? error.name : "UnknownError",
         duration_ms: Date.now() - startedAt
@@ -245,6 +255,12 @@ export function notificationText(notification: CaptainNotification): string {
   }
   const improvement = improvementText(snapshot);
   return `I found a better flight for ${title}: ${improvement}.\n\n${summary}\n\nReply to this alert if you want me to explain the exact comparison.`;
+}
+
+function duffelOfferId(url: string | undefined): string | null {
+  if (!url) return null;
+  const match = /\/air\/offers\/([^/?#]+)/u.exec(url);
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
 }
 
 function improvementText(snapshot: RecommendationSnapshot): string {

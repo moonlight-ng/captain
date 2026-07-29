@@ -1,13 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { primaryFlightInventoryProvider } from "../src/provider.js";
+import {
+  duffelInventoryEligible,
+  isSupportedTripCurrency,
+  primaryFlightInventoryProvider
+} from "../src/provider.js";
 
 describe("Captain inventory provider", () => {
-  it("uses verified web research for every Trip currency and route", () => {
-    expect(primaryFlightInventoryProvider()).toBe("openai_web");
+  it("uses Duffel for the supported Trip currencies", () => {
+    expect(primaryFlightInventoryProvider()).toBe("official_duffel");
     expect(primaryFlightInventoryProvider({
-      tripCurrency: "NGN",
-      domesticRoute: true
-    })).toBe("openai_web");
+      tripCurrency: "USD",
+      domesticRoute: false
+    })).toBe("official_duffel");
+    expect(isSupportedTripCurrency("gbp")).toBe(true);
+    expect(isSupportedTripCurrency("NGN")).toBe(false);
+    expect(duffelInventoryEligible({ tripCurrency: "USD" })).toBe(true);
+    expect(duffelInventoryEligible({ tripCurrency: "NGN" })).toBe(false);
   });
 });

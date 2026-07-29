@@ -128,7 +128,7 @@ describe("flight worker orchestration", () => {
       attempts: 0,
       telegramMessageId: null,
       payload: { tripTitle: "Lagos to Abuja" }
-    })).toContain("No verified fares yet");
+    })).toContain("doesn’t cover these airlines/routes");
   });
 
   it("defers a run without calling the provider when the daily ceiling is reached", async () => {
@@ -257,7 +257,7 @@ describe("flight worker orchestration", () => {
     expect(first).toEqual({ scheduled: 1, processed: 1, notified: 1 });
     const sent = await store.getNotificationByTelegramMessage(user.id, 77);
     expect(sent).toMatchObject({ kind: "inventory_gap" });
-    expect(notificationText(sent!)).toContain("No verified fares yet");
+    expect(notificationText(sent!)).toContain("doesn’t cover these airlines/routes");
 
     const specs = buildSearchSpecs(input.brief, false);
     expect(await store.enqueueInventoryGapForSearchSpec(specs[0]!.id, new Date("2026-08-01T18:00:00Z")))

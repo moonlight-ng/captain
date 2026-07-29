@@ -3,11 +3,13 @@ import {
   EMPTY_TRIP_PLAN_PARTIAL,
   EMPTY_TRIP_PLAN_TURN_STATE,
   MAX_ACTIVE_TRIPS_PER_USER,
+  SUPPORTED_CURRENCY_MESSAGE,
   addIsoDays,
   buildSearchSpecs,
   createTripSchema,
   daysBetween,
   formatCalendarDate,
+  isSupportedTripCurrency,
   stableJson,
   totalTravellers,
   type Trip,
@@ -156,8 +158,13 @@ export class TripPlanningService {
       };
     }
     if (unsupportedParty) partial.travellers = null;
+    const unsupportedCurrency = Boolean(
+      partial.currency && !isSupportedTripCurrency(partial.currency)
+    );
     const missingFields = missingTripFields(partial, dateIssue);
-    const plan = missingFields.length === 0 ? completePlan(partial, draft.id) : null;
+    const plan = missingFields.length === 0 && !unsupportedCurrency
+      ? completePlan(partial, draft.id)
+      : null;
     const activeTrips = plan
       ? (await this.#store.listTrips(userId)).filter((trip) =>
           !["cancelled", "completed", "archived"].includes(trip.status)
@@ -173,7 +180,9 @@ export class TripPlanningService {
         ? "You’re already tracking three Trips. Open /preferences, stop tracking one Trip, then reply “continue” here."
         : unsupportedParty
           ? "Captain’s beta currently tracks fares for exactly one adult. Reply “just me” to continue, or cancel this Trip."
-          : dateIssue ?? clarificationPrompt(missingFields)
+          : unsupportedCurrency
+            ? SUPPORTED_CURRENCY_MESSAGE
+            : dateIssue ?? clarificationPrompt(missingFields)
       : null;
     const repeatedPromptCount = basePrompt && priorTurnState.lastPrompt === basePrompt
       ? priorTurnState.repeatedPromptCount + 1

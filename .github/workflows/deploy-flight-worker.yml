@@ -8,6 +8,7 @@ on:
       - packages/flight-domain/**
       - packages/flight-store/**
       - packages/observability/**
+      - packages/provider-duffel/**
       - packages/provider-web/**
       - package.json
       - pnpm-lock.yaml

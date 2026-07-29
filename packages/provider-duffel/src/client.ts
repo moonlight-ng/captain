@@ -31,8 +31,14 @@ const offerSchema = z.object({
   owner: carrierSchema,
   slices: z.array(sliceSchema).min(1)
 });
-const searchResponseSchema = z.object({
-  data: z.object({ id: z.string(), offers: z.array(z.unknown()).default([]) })
+const offerRequestResponseSchema = z.object({
+  data: z.object({ id: z.string() })
+});
+const offerListResponseSchema = z.object({
+  data: z.array(z.unknown()).default([]),
+  meta: z.object({
+    after: z.string().nullable().optional()
+  }).default({})
 });
 const errorSchema = z.object({
   errors: z.array(z.object({
@@ -83,7 +89,10 @@ export class DuffelFlightSearchProvider implements FlightSearchProvider {
     this.#baseUrl = (options.baseUrl ?? "https://api.duffel.com").replace(/\/$/u, "");
     this.#fetch = options.fetch ?? fetch;
     this.#timeoutMs = options.timeoutMs ?? 120_000;
-    this.#supplierTimeoutMs = options.supplierTimeoutMs ?? 20_000;
+    this.#supplierTimeoutMs = options.supplierTimeoutMs ?? 60_000;
+    if (this.#supplierTimeoutMs < 2_000 || this.#supplierTimeoutMs > 60_000) {
+      throw new Error("Duffel supplierTimeoutMs must be between 2,000 and 60,000");
+    }
   }
 
   async search(request: SearchSpecRequest): Promise<WebSearchResult> {
@@ -94,17 +103,18 @@ export class DuffelFlightSearchProvider implements FlightSearchProvider {
       );
     }
     const response = await this.#request(
-      `/air/offer_requests?return_offers=true&supplier_timeout=${this.#supplierTimeoutMs}&view=offers`,
+      `/air/offer_requests?return_offers=false&supplier_timeout=${this.#supplierTimeoutMs}&view=offers`,
       {
         method: "POST",
         body: JSON.stringify({ data: toOfferRequest(request) })
       }
     );
-    const parsed = searchResponseSchema.safeParse(response);
+    const parsed = offerRequestResponseSchema.safeParse(response);
     if (!parsed.success) throw new DuffelError("invalid_response");
+    const rawOffers = await this.#listOffers(parsed.data.data.id);
 
     const offers: VerifiedOfferCandidate[] = [];
-    for (const raw of parsed.data.data.offers) {
+    for (const raw of rawOffers) {
       try {
         const mapped = await mapOffer(raw, request, this.#fetch);
         if (mapped) offers.push(mapped);
@@ -120,11 +130,36 @@ export class DuffelFlightSearchProvider implements FlightSearchProvider {
       discoveryResponseId: parsed.data.data.id,
       verificationResponseId: parsed.data.data.id,
       model: "duffel",
-      promptVersion: "duffel-fx-v1",
-      offers: offers.slice(0, 40),
+      promptVersion: "duffel-paginated-v2",
+      offers,
       rejectionCounts: {},
       webSearchCalls: 0
     };
+  }
+
+  async #listOffers(offerRequestId: string): Promise<unknown[]> {
+    const offers: unknown[] = [];
+    const seenCursors = new Set<string>();
+    let after: string | null = null;
+    do {
+      const query = new URLSearchParams({
+        offer_request_id: offerRequestId,
+        limit: "200",
+        sort: "total_amount"
+      });
+      if (after) query.set("after", after);
+      const response = await this.#request(`/air/offers?${query.toString()}`, { method: "GET" });
+      const parsed = offerListResponseSchema.safeParse(response);
+      if (!parsed.success) throw new DuffelError("invalid_response");
+      offers.push(...parsed.data.data);
+      const next = parsed.data.meta.after ?? null;
+      if (next && seenCursors.has(next)) {
+        throw new DuffelError("invalid_response", "Duffel repeated an offer pagination cursor");
+      }
+      if (next) seenCursors.add(next);
+      after = next;
+    } while (after);
+    return offers;
   }
 
   async #request(path: string, options: { method: "GET" | "POST"; body?: string }): Promise<unknown> {
@@ -249,7 +284,12 @@ async function mapOffer(
   const participating = [...new Set(
     slices.flatMap((slice) => slice.segments.map((segment) => segment.marketingAirlineCode))
   )].sort();
-  const primary = (parsed.data.owner.iata_code ?? participating[0] ?? "XX").toUpperCase();
+  const primary = (
+    slices[0]?.segments[0]?.marketingAirlineCode
+    ?? parsed.data.owner.iata_code
+    ?? participating[0]
+    ?? "XX"
+  ).toUpperCase();
   const itineraryKey = createHash("sha256")
     .update(JSON.stringify({ slices, primaryAirlineCode: primary }))
     .digest("hex");

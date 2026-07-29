@@ -41,10 +41,11 @@ describe("DuffelFlightSearchProvider", () => {
           rates: { USD: 1.25 }
         });
       }
+      if (url.includes("/air/offer_requests")) {
+        return Response.json({ data: { id: "orq_1" } });
+      }
       return Response.json({
-        data: {
-          id: "orq_1",
-          offers: [{
+        data: [{
             id: "off_1",
             expires_at: "2026-09-01T12:30:00Z",
             total_amount: "800.00",
@@ -74,8 +75,8 @@ describe("DuffelFlightSearchProvider", () => {
                 }]
               }
             ]
-          }]
-        }
+          }],
+        meta: { after: null }
       }, { status: 200, headers: { "content-type": "application/json" } });
     });
 
@@ -117,6 +118,76 @@ describe("DuffelFlightSearchProvider", () => {
     expect(result.offers[0]!.evidence[0]!.title).toContain("GBP 800");
     expect(result.webSearchCalls).toBe(0);
     expect(provider.provider).toBe("official_duffel");
+  });
+
+  it("uses Duffel pagination and returns every offer without an arbitrary cap", async () => {
+    const rawOffers = Array.from({ length: 205 }, (_, index) => {
+      const airline = [
+        { code: "VS", name: "Virgin Atlantic" },
+        { code: "BA", name: "British Airways" },
+        { code: "AT", name: "Royal Air Maroc" }
+      ][index % 3]!;
+      return {
+        id: `off_${index}`,
+        expires_at: "2026-09-01T12:30:00Z",
+        total_amount: String(500 + index),
+        total_currency: "GBP",
+        owner: { name: "Virgin Atlantic", iata_code: "VS" },
+        slices: [{
+          segments: [{
+            origin: { iata_code: "LOS" },
+            destination: { iata_code: "LHR" },
+            departing_at: `2026-09-06T${String(10 + (index % 10)).padStart(2, "0")}:00:00+01:00`,
+            arriving_at: `2026-09-06T${String(11 + (index % 10)).padStart(2, "0")}:00:00+01:00`,
+            marketing_carrier: { name: airline.name, iata_code: airline.code },
+            marketing_carrier_flight_number: String(100 + index),
+            passengers: [{ cabin_class: "economy" }]
+          }]
+        }]
+      };
+    });
+    const requestedUrls: string[] = [];
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes("/air/offer_requests")) {
+        return Response.json({ data: { id: "orq_paginated" } });
+      }
+      const secondPage = new URL(url).searchParams.has("after");
+      return Response.json({
+        data: secondPage ? rawOffers.slice(200) : rawOffers.slice(0, 200),
+        meta: { after: secondPage ? null : "cursor_2" }
+      });
+    });
+    const provider = new DuffelFlightSearchProvider({ accessToken: "test", fetch });
+
+    const result = await provider.search({
+      provider: "official_duffel",
+      apiVersion: "v1",
+      tripType: "one_way",
+      slices: [{
+        originAirports: ["LOS"],
+        destinationAirports: ["LON"],
+        departureStart: "2026-09-06",
+        departureEnd: "2026-09-06"
+      }],
+      stayNights: null,
+      passenger: { adults: 1, childrenAges: [], infants: 0 },
+      cabin: "economy",
+      maxConnections: 2,
+      currency: "GBP",
+      maximumPrice: null,
+      fareContext: "public_beta"
+    });
+
+    expect(result.offers).toHaveLength(205);
+    expect(new Set(result.offers.map((offer) => offer.primaryAirlineCode)))
+      .toEqual(new Set(["VS", "BA", "AT"]));
+    expect(result.offers[1]?.primaryAirlineCode).toBe("BA");
+    expect(requestedUrls[0]).toContain("return_offers=false");
+    expect(requestedUrls[0]).toContain("supplier_timeout=60000");
+    expect(requestedUrls[1]).toContain("limit=200");
+    expect(requestedUrls[2]).toContain("after=cursor_2");
   });
 
   it("rejects Trips outside USD/GBP", async () => {

@@ -10,12 +10,10 @@ passport data.
   avoided airlines.
 - A traveller can have up to three active or paused Trips. A fourth Trip
   requires stopping or completing one of the existing Trips.
-- Domestic Trips suggest the local currency. International Trips use the
-  profile default. The confirmed Trip currency stays fixed and Captain never
-  converts fares between currencies.
+- Captain currently supports USD and GBP Trips. The confirmed display
+  currency stays fixed; Duffel GBP/USD results are normalized into it.
 - The dashboard has **Flights**, **Airlines**, and **Browse** views. It only
-  displays web-derived offers that pass both evidence checks and never
-  describes the set as exhaustive.
+  displays Duffel offers and never describes the set as exhaustive.
 - During product design, Trip and Agent settings use direct reusable links
   containing an opaque access key. Public-beta session authentication is
   deferred until the interaction design settles.
@@ -39,28 +37,16 @@ field. Terra remains the general Captain agent model. This follows OpenAI's
 [tier-aware model guidance](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6)
 and [Structured Outputs guidance](https://developers.openai.com/api/docs/guides/structured-outputs).
 
-The worker uses the provider-neutral `FlightSearchProvider` contract. The
-initial `openai_web` adapter makes two OpenAI Responses:
-
-1. coverage-first discovery across distinct airlines, airports, stops, and
-   departure-time bands;
-2. targeted verification of every discovered candidate.
-
-An offer is accepted when both responses agree on its itinerary, fare,
-currency, and cabin. Evidence must use an approved airline, metasearch, or
-OTA domain that appears among retrieved sources (exact URL or same domain).
-Failed candidates are not stored. Verified offers are deduplicated but are not
-silently truncated to an arbitrary count. Empty verified checks keep the last
-good offers.
+The worker uses the provider-neutral `FlightSearchProvider` contract with
+`official_duffel` as its only live adapter. It gives suppliers up to 60 seconds
+to respond, then retrieves the resulting offers through Duffel's paginated
+Offers endpoint until no cursor remains. Offers are deduplicated by itinerary,
+stored without an arbitrary count cap, and ordered across primary marketing
+airlines before additional variants from the same airline.
 
 Captain and Pilot are independent. Captain has no Pilot client, route,
-principal, secret, tool, or redirect. The legacy Flight Agent and Duffel
-runtime have been removed.
-
-Future provider adapters use the reserved `official_*` namespace and require
-documented airline or partnership access. Captain does not scrape unofficial
-Skyscanner endpoints; an official adapter remains blocked on
-[approved API access](https://developers.skyscanner.net/docs/getting-started/authentication).
+principal, secret, tool, or redirect. Future provider adapters use the
+reserved `official_*` namespace and require documented access.
 
 ## Local development
 
@@ -82,13 +68,12 @@ pnpm --filter @agents/captain build:web
 The flight worker has its own ignored `.env`. It requires:
 
 - `DATABASE_URL`
-- `OPENAI_API_KEY`
+- `DUFFEL_ACCESS_TOKEN`
 - `TELEGRAM_BOT_TOKEN`
 - `CAPTAIN_PUBLIC_URL`
 
-Optional worker controls include `OPENAI_FLIGHT_MODEL`,
-`FLIGHT_APPROVED_DOMAINS`, `TRACKING_KILL_SWITCH`, and
-`DAILY_RESPONSES_CEILING`. The default daily ceiling is 500 Responses.
+Optional worker controls include `DUFFEL_BASE_URL`,
+`TRACKING_KILL_SWITCH`, and the worker scheduling controls.
 
 Captain uses `AI_MODEL=openai/gpt-5.6-terra` for its general agent and
 `TRIP_INTERPRETER_MODEL=openai/gpt-5.6-luna` for strict, low-latency Trip
@@ -108,11 +93,9 @@ travellers are held back. Set it to `true` only when opening the capped beta.
 - At most two improvement alerts in a rolling 24-hour period.
 - Deferred searches keep the last verified results and show delayed tracking.
 
-Public launch remains gated by the live evaluation corpus against
-`openai_web`. It must demonstrate route/date/currency/source mismatch
-rejection, three or more verified options in at least 80% of cases overall
-(and at least 75% on domestic and international subsets), optional manual
-landing agreement when sampled, and P95 two-pass latency below five minutes.
+Public launch remains gated by the live evaluation corpus against Duffel. It
+must demonstrate representative airline coverage and three or more usable
+options in at least 80% of cases overall.
 
 ## Cloud quality loop
 

@@ -1,4 +1,5 @@
 import type { TripPlanPartial } from "@agents/flight-domain";
+import { isSupportedTripCurrency } from "@agents/flight-domain";
 
 import { airportMarket } from "./airport-catalog.js";
 
@@ -33,18 +34,8 @@ export function suggestedTripCurrency(
   >,
   defaultCurrency: string
 ): string {
-  const routes = partial.tripType === "multi_city" && partial.legs.length > 0
-    ? partial.legs
-    : [{
-        originAirports: partial.originAirports,
-        destinationAirports: partial.destinationAirports
-      }];
-  const markets = routes.flatMap((route) =>
-    [...route.originAirports, ...route.destinationAirports].map(airportMarket)
-  );
-  if (markets.length === 0 || markets.some((market) => !market)) return defaultCurrency;
-  const countries = new Set(markets.map((market) => market!.country));
-  return countries.size === 1 ? markets[0]!.currency : defaultCurrency;
+  void partial;
+  return isSupportedTripCurrency(defaultCurrency) ? defaultCurrency.toUpperCase() : "USD";
 }
 
 /** Domestic routes default to 1 stop; cross-border routes default to 2. */
