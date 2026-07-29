@@ -38,6 +38,9 @@ jobs:
           mkdir -p .codex-artifacts
           gh run view "$FAILED_RUN_ID" --log-failed \
             > .codex-artifacts/captain-self-test-failure.log
+          gh run download "$FAILED_RUN_ID" \
+            --dir .codex-artifacts/eval-run \
+            || true
       - name: Prepare a verified repair
         id: codex
         uses: openai/codex-action@v1
@@ -55,6 +58,7 @@ jobs:
           name: captain-self-improvement-${{ github.event.workflow_run.id }}
           path: .codex-artifacts/
           if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 30
       - name: Remove diagnostic artifacts
         run: rm -rf .codex-artifacts

@@ -121,12 +121,13 @@ conversations:
   for every relevant pull request and `main` update.
 - `Deploy Captain` runs only after `Captain CI` succeeds on `main`.
 - `Captain Daily Self-Test` runs at 03:00 UTC and replays synthetic
-  conversations through the real agent models using an isolated temporary
-  Postgres service. It receives no production database or Telegram credential.
+  conversations through the real agent models. Every scenario gets its own
+  temporary database and Captain process, and receives no production database
+  or Telegram credential.
 - When the daily run fails, `Captain Self-Improvement` gives Codex the failed
-  logs and repository in a disposable GitHub runner. A validated code change
-  is pushed to a dedicated branch and proposed as a pull request. Nothing is
-  merged or deployed automatically.
+  logs, full synthetic event stream, and repository in a disposable GitHub
+  runner. A validated code change is pushed to a dedicated branch and proposed
+  as a pull request. Nothing is merged or deployed automatically.
 
 The GitHub repository requires `AI_GATEWAY_API_KEY` for Captain's model evals,
 `OPENAI_API_KEY` for the Codex repair action, and

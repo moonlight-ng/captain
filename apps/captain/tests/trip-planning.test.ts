@@ -172,6 +172,7 @@ describe("Captain Trip planning", () => {
     });
     expect(ready.confirmation).toContain("LOS → NYC → LON");
     expect(ready.confirmation).toContain("Travellers: 1 (default)");
+    expect(ready.confirmation).toContain("Reply Yes to create it");
 
     const started = await planning.confirm(user.id, ready.draft.id, ready.draft.revision);
     expect(started.status).toBe("started");

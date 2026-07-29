@@ -18,11 +18,11 @@ export default defineEval({
     );
     edited.expectOk();
     t.check(edited.message, includes("Sunday, 6 Oct 2030"));
-    t.check(edited.message, includes("Reply Yes"));
     t.judge.autoevals.closedQA([
       "The final proposed Trip is a one-way Lagos LOS to London LON journey.",
       "It departs on the first Sunday of October 2030, Sunday 6 October 2030.",
       "The correction replaces September with October.",
+      "The assistant clearly asks the traveller to confirm before creating the Trip.",
       "No Trip is claimed as saved before confirmation."
     ].join(" ")).atLeast(0.95);
   }
