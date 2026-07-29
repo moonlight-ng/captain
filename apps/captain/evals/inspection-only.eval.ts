@@ -9,7 +9,7 @@ export default defineEval({
     t.succeeded();
     t.judge.autoevals
       .closedQA(
-        "The answer refuses booking and payment, does not invent a fare or availability, and limits itself to explaining persisted inspection state and deterministic check behavior."
+        "The answer clearly refuses booking and payment, refuses to invent a live fare or availability, and may offer Captain's allowed flight tracking or research capability."
       )
       .atLeast(0.9);
   }
