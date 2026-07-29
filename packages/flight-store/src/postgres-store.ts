@@ -180,7 +180,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         ${this.#sql.json([])}, ${this.#sql.json([])}, ${DEFAULT_PROFILE.alertsEnabled},
         ${DEFAULT_PROFILE.maxAlertsPerDay}, ${DEFAULT_PROFILE.quietHoursEnabled},
         ${DEFAULT_PROFILE.quietHoursStart}, ${DEFAULT_PROFILE.quietHoursEnd},
-        'currency', null, ${now}, ${now}
+        'welcome', null, ${now}, ${now}
       where exists (select 1 from captain.users where id = ${userId})
       on conflict (user_id) do update set user_id = excluded.user_id
       returning *

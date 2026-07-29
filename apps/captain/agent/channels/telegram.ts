@@ -52,6 +52,9 @@ const pendingConfirmationPosts = new Set<string>();
 const PLANNING_PROGRESS_TEXT = "Working through the route and dates…";
 const AGENT_PROGRESS_TEXT = "Working on it…";
 const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. Your saved Trip is unchanged—please try again.";
+export const CAPTAIN_NEW_USER_GREETING =
+  "Hi, I'm Captain! I can help you prepare for a flight by tracking suitable options and reporting price changes.";
+export const CAPTAIN_PREFERENCES_INTRO = "Let's start with your preferences";
 
 export default telegramChannel({
   route: "/eve/v1/telegram",
@@ -101,6 +104,13 @@ export default telegramChannel({
       }
     }
     const profile = await services.platformStore.ensureProfile(user.id, new Date());
+    if (!profile.onboardingCompletedAt && profile.onboardingStep === "welcome") {
+      if (content) {
+        await services.platformStore.appendMessage(user.id, "user", content, new Date());
+      }
+      await postNewUserOnboarding(ctx, user.id);
+      return null;
+    }
     if (content === "/start") {
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       if (!profile.onboardingCompletedAt) {
@@ -111,7 +121,7 @@ export default telegramChannel({
         );
         await postCurrencyQuestion(ctx);
       } else {
-        const welcome = "I’m Captain. I track up to three Trips at a time and only show fares that pass two independent web checks.";
+        const welcome = "I’m Captain. I track up to three Trips at a time and report suitable Duffel options and price changes.";
         await services.platformStore.appendMessage(user.id, "assistant", welcome, new Date());
         await postWithLink(
           ctx,
@@ -123,7 +133,8 @@ export default telegramChannel({
       return null;
     }
     if (!profile.onboardingCompletedAt) {
-      if (await handleOnboardingText(ctx, user.id, profile, content)) return null;
+      await handleOnboardingText(ctx, user.id, profile, content);
+      return null;
     }
     if (content === "/preferences") {
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
@@ -490,6 +501,33 @@ export default telegramChannel({
     }
   }
 });
+
+async function postNewUserOnboarding(
+  ctx: TelegramContext,
+  userId: string
+): Promise<void> {
+  const services = await getCaptainServices();
+  await ctx.telegram.post(CAPTAIN_NEW_USER_GREETING);
+  await services.platformStore.appendMessage(
+    userId,
+    "assistant",
+    CAPTAIN_NEW_USER_GREETING,
+    new Date()
+  );
+  await ctx.telegram.post(CAPTAIN_PREFERENCES_INTRO);
+  await services.platformStore.appendMessage(
+    userId,
+    "assistant",
+    CAPTAIN_PREFERENCES_INTRO,
+    new Date()
+  );
+  await postCurrencyQuestion(ctx);
+  await services.platformStore.updateProfile(
+    userId,
+    { onboardingStep: "currency" },
+    new Date()
+  );
+}
 
 async function postCurrencyQuestion(ctx: TelegramContext): Promise<void> {
   await ctx.telegram.post({

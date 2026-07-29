@@ -193,7 +193,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       preferredAirlineCodes: [],
       excludedAirlineCodes: [],
       onboardingCompletedAt: null,
-      onboardingStep: "currency",
+      onboardingStep: "welcome",
       createdAt: timestamp,
       updatedAt: timestamp
     };

@@ -4,6 +4,8 @@ import type { OfferSnapshot } from "@agents/flight-domain";
 import type { RecommendationSnapshot } from "@agents/flight-store";
 
 import {
+  CAPTAIN_NEW_USER_GREETING,
+  CAPTAIN_PREFERENCES_INTRO,
   explainRecommendation,
   parseAirlinePreferences,
   parseProfileCallback,
@@ -11,6 +13,13 @@ import {
 } from "../agent/channels/telegram.js";
 
 describe("Telegram profile onboarding", () => {
+  it("starts every new traveller with the fixed introduction", () => {
+    expect(CAPTAIN_NEW_USER_GREETING).toBe(
+      "Hi, I'm Captain! I can help you prepare for a flight by tracking suitable options and reporting price changes."
+    );
+    expect(CAPTAIN_PREFERENCES_INTRO).toBe("Let's start with your preferences");
+  });
+
   it("parses currency, ranking, and preferred/avoided airlines deterministically", () => {
     expect(parseProfileCallback("captain-profile:currency:NGN")).toEqual({
       type: "currency",

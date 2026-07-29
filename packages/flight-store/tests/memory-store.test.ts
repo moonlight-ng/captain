@@ -31,6 +31,17 @@ describe("Captain platform store", () => {
     await expect(user(store, 1)).resolves.toMatchObject({ status: "active", telegramUserId: 1 });
   });
 
+  it("gates every new profile behind the onboarding welcome", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    const ada = await user(store, 1);
+    await expect(
+      store.ensureProfile(ada.id, new Date("2026-08-01T12:00:00Z"))
+    ).resolves.toMatchObject({
+      onboardingStep: "welcome",
+      onboardingCompletedAt: null
+    });
+  });
+
   it("stores the traveller timezone used by conversational date resolution", async () => {
     const store = new MemoryCaptainPlatformStore();
     const ada = await user(store, 1);

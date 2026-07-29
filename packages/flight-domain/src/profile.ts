@@ -18,7 +18,7 @@ export const travellerProfileSchema = z.object({
   quietHoursStart: z.number().int().min(0).max(23),
   quietHoursEnd: z.number().int().min(0).max(23),
   onboardingCompletedAt: z.iso.datetime().nullable(),
-  onboardingStep: z.enum(["currency", "ranking", "airlines", "complete"]),
+  onboardingStep: z.enum(["welcome", "currency", "ranking", "airlines", "complete"]),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime()
 }).strict();
