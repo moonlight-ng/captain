@@ -30,5 +30,6 @@ query production databases, use deployment credentials, weaken verification
 or authentication, alter quotas, increase external spending, deploy, merge,
 or push. Do not modify unrelated Pilot behavior to make Captain checks pass.
 
-End with a concise account of the failure, root cause, regression test, files
-changed, validation performed, and any remaining risk.
+Begin the final account with a one-sentence, plain-language summary suitable
+for Opemipo's daily digest. Then concisely cover the failure, root cause,
+regression test, files changed, validation performed, and any remaining risk.
