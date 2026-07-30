@@ -1,5 +1,5 @@
 {
-  "name": "@agents/workspace",
+  "name": "@agents/captain-workspace",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -11,7 +11,7 @@
     "build": "pnpm -r --if-present build",
     "check": "pnpm check:boundaries && pnpm test && pnpm typecheck && pnpm build",
     "check:boundaries": "node scripts/check-dependency-boundaries.mjs",
-    "eve:info": "pnpm --filter @agents/pilot eve:info && pnpm --filter @agents/captain eve:info",
+    "eve:info": "pnpm --filter @agents/captain eve:info",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck"
   }

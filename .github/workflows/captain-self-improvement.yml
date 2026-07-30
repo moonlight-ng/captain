@@ -98,7 +98,7 @@ jobs:
             --source-workflow-started-at "$SOURCE_WORKFLOW_STARTED_AT" \
             --source-workflow-completed-at "$SOURCE_WORKFLOW_COMPLETED_AT" \
             --report .codex-artifacts/codex-report.md \
-            --output-dir apps/pilot/agent-improvements
+            --output-dir apps/captain/agent-improvements
           rm -rf .codex-artifacts
           branch="codex/captain-self-improve-${FAILED_RUN_ID}"
           git config user.name "Captain Self-Improvement"

@@ -28,7 +28,7 @@ the requested field, broken dashboard links, and searches that never settle.
 Do not access or mutate production systems. Do not send Telegram messages,
 query production databases, use deployment credentials, weaken verification
 or authentication, alter quotas, increase external spending, deploy, merge,
-or push. Do not modify unrelated Pilot behavior to make Captain checks pass.
+or push. Do not modify unrelated platform behavior to make Captain checks pass.
 
 Begin the final account with a one-sentence, plain-language summary suitable
 for Opemipo's daily digest. Then concisely cover the failure, root cause,

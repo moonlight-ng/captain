@@ -1,34 +1,26 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-const apps = ["pilot", "captain", "flight-worker"];
+const apps = ["captain", "flight-worker"];
 const failures = [];
-const identityRules = {
-  pilot: [
-    /\bCaptain(?:Env|Services|Principal)\b/u,
-    /\b(?:get|create)CaptainServices\b/u,
-    /captain_principal/u,
-    /captain-telegram-webhook/u,
-    /["'`]captain\./u,
-    /\bCAPTAIN_/u,
-    /(?:service|agent_id):\s*["']captain["']/u
-  ],
-  captain: [
-    /\bFlightAgent(?:Env|Services)\b/u,
-    /\b(?:get|create)FlightAgentServices\b/u,
-    /\bCaptainResearchClient\b/u,
-    /bridge\/captain-client/u,
-    /\b(?:CAPTAIN_TO_FLIGHT_AGENT_SECRET|FLIGHT_AGENT_TO_CAPTAIN_SECRET|FLIGHT_AGENT_PUBLIC_URL|FLIGHT_AGENT_BASIC_(?:USERNAME|PASSWORD)|FLIGHT_AGENT_OWNER_AUTH_ENABLED)\b/u,
-    /(?:service|agent_id):\s*["']flight-agent["']/u
-  ]
-};
+const captainLegacyRules = [
+  /\bFlightAgent(?:Env|Services)\b/u,
+  /\b(?:get|create)FlightAgentServices\b/u,
+  /\bCaptainResearchClient\b/u,
+  /bridge\/captain-client/u,
+  /\b(?:CAPTAIN_TO_FLIGHT_AGENT_SECRET|FLIGHT_AGENT_TO_CAPTAIN_SECRET|FLIGHT_AGENT_PUBLIC_URL|FLIGHT_AGENT_BASIC_(?:USERNAME|PASSWORD)|FLIGHT_AGENT_OWNER_AUTH_ENABLED)\b/u,
+  /(?:service|agent_id):\s*["']flight-agent["']/u
+];
 
 for (const app of apps) {
   const root = join("apps", app);
   const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const dockerfile = await readFile(join(root, "Dockerfile"), "utf8");
   for (const sibling of apps.filter((candidate) => candidate !== app)) {
-    if (manifest.dependencies?.[`@agents/${sibling}`] || manifest.devDependencies?.[`@agents/${sibling}`]) {
+    if (
+      manifest.dependencies?.[`@agents/${sibling}`] ||
+      manifest.devDependencies?.[`@agents/${sibling}`]
+    ) {
       failures.push(`${root}/package.json depends on sibling app @agents/${sibling}`);
     }
     if (dockerfile.includes(`apps/${sibling}`)) {
@@ -37,30 +29,28 @@ for (const app of apps) {
   }
   for (const file of await sourceFiles(root)) {
     const content = await readFile(file, "utf8");
-    for (const sibling of apps.filter((candidate) => candidate !== app)) {
-      if (content.includes(`@agents/${sibling}`) || content.includes(`/apps/${sibling}/`)) {
-        failures.push(`${file} imports sibling app ${sibling}`);
-      }
+    if (content.includes("@agents/pilot") || content.includes("/apps/pilot/")) {
+      failures.push(`${file} imports the separate Pilot product`);
     }
-    for (const rule of identityRules[app] ?? []) {
-      if (rule.test(content)) {
-        failures.push(`${file} violates the ${app} runtime identity boundary (${rule})`);
+    if (app === "captain") {
+      for (const rule of captainLegacyRules) {
+        if (rule.test(content)) {
+          failures.push(`${file} violates the Captain runtime identity boundary (${rule})`);
+        }
       }
     }
   }
 }
 
-// Product identities use Dancing Robots-namespaced Fly deployment identities.
-await checkDeploymentIdentity("pilot", "dr-pilot");
 await checkDeploymentIdentity("captain", "dr-captain");
-await checkEnvironmentOwnership("pilot", new Set());
-await checkEnvironmentOwnership("captain", new Set());
+await checkDeploymentIdentity("flight-worker", "dr-flight-worker");
+await checkCaptainEnvironmentOwnership();
 
 if (failures.length > 0) {
   console.error(failures.join("\n"));
   process.exitCode = 1;
 } else {
-  console.info("Application dependency boundaries are valid");
+  console.info("Captain dependency boundaries are valid");
 }
 
 async function sourceFiles(directory) {
@@ -82,14 +72,12 @@ async function checkDeploymentIdentity(app, expectedName) {
   }
 }
 
-async function checkEnvironmentOwnership(app, allowedRemoteKeys) {
-  const file = join("apps", app, ".env.example");
+async function checkCaptainEnvironmentOwnership() {
+  const file = "apps/captain/.env.example";
   const content = await readFile(file, "utf8");
-  const foreignPrefix = app === "pilot" ? "CAPTAIN_" : "PILOT_";
   for (const match of content.matchAll(/^\s*#?\s*([A-Z][A-Z0-9_]+)=/gmu)) {
-    const name = match[1];
-    if (name.startsWith(foreignPrefix) && !allowedRemoteKeys.has(name)) {
-      failures.push(`${file} exposes foreign runtime setting ${name}`);
+    if (match[1]?.startsWith("PILOT_")) {
+      failures.push(`${file} exposes Pilot runtime setting ${match[1]}`);
     }
   }
 }

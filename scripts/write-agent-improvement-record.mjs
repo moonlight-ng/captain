@@ -25,7 +25,7 @@ const sourceWorkflowCompletedAt = optionalOption(
 );
 const reportPath = resolve(requiredOption(options, "report"));
 const outputDir = resolve(
-  options.get("output-dir") ?? "apps/pilot/agent-improvements"
+  options.get("output-dir") ?? "apps/captain/agent-improvements"
 );
 const report = (await readFile(reportPath, "utf8"))
   .replace(/\s+/g, " ")
