@@ -66,7 +66,7 @@ export function meetsAlertThreshold(
   if (!previous) return true;
   if (mode === "cheapest") return current.offer.price <= previous.offer.price * 0.95;
   if (mode === "fastest") return durationSeconds(current.offer) <= durationSeconds(previous.offer) * 0.9;
-  return current.score <= previous.score * 0.9;
+  return previous.score > 0 && current.score <= previous.score * 0.9;
 }
 
 export function recommendationSummary(offer: OfferSnapshot): string {

@@ -36,6 +36,7 @@ import type {
   CompletedProviderOffer,
   ConversationContext,
   TelegramUserInput,
+  TrackingMaintenance,
   TripFlightSelection,
   TripActivity,
   TripRecommendation
@@ -53,7 +54,10 @@ import {
   DISCOVERY_SEARCH_SPEC_LIMIT,
   PRICE_HISTORY_RETENTION_MS,
   retainSearchOffers,
-  TRACKING_SEARCH_SPEC_LIMIT
+  TRACKING_SEARCH_SPEC_LIMIT,
+  trackingStartsAt,
+  INACTIVITY_AUTO_PAUSE_MS,
+  INACTIVITY_CHECKIN_MS
 } from "./watch-policy.js";
 
 export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
@@ -172,13 +176,18 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       insert into captain.traveller_profiles (
         user_id, default_currency, ranking_mode, preferred_airline_codes,
         excluded_airline_codes, alerts_enabled, max_alerts_per_day,
+        notification_mode, digest_hour_local, price_rise_alerts_enabled,
+        better_option_alerts_enabled, tracking_checkins_enabled,
         quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
         onboarding_step, onboarding_completed_at,
         created_at, updated_at
       )
       select ${userId}, ${DEFAULT_PROFILE.defaultCurrency}, ${DEFAULT_PROFILE.rankingMode},
         ${this.#sql.json([])}, ${this.#sql.json([])}, ${DEFAULT_PROFILE.alertsEnabled},
-        ${DEFAULT_PROFILE.maxAlertsPerDay}, ${DEFAULT_PROFILE.quietHoursEnabled},
+        ${DEFAULT_PROFILE.maxAlertsPerDay}, ${DEFAULT_PROFILE.notificationMode},
+        ${DEFAULT_PROFILE.digestHourLocal}, ${DEFAULT_PROFILE.priceRiseAlertsEnabled},
+        ${DEFAULT_PROFILE.betterOptionAlertsEnabled}, ${DEFAULT_PROFILE.trackingCheckinsEnabled},
+        ${DEFAULT_PROFILE.quietHoursEnabled},
         ${DEFAULT_PROFILE.quietHoursStart}, ${DEFAULT_PROFILE.quietHoursEnd},
         'welcome', null, ${now}, ${now}
       where exists (select 1 from captain.users where id = ${userId})
@@ -210,7 +219,31 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           ${input.excludedAirlineCodes ? this.#sql.json(input.excludedAirlineCodes) : null},
           excluded_airline_codes
         ),
-        alerts_enabled = coalesce(${input.alertsEnabled ?? null}, alerts_enabled),
+        alerts_enabled = case
+          when ${input.notificationMode ?? null} is not null
+            then ${input.notificationMode !== "off"}
+          else coalesce(${input.alertsEnabled ?? null}, alerts_enabled)
+        end,
+        notification_mode = case
+          when ${input.notificationMode ?? null} is not null
+            then ${input.notificationMode ?? null}
+          when ${input.alertsEnabled ?? null} = false then 'off'
+          when ${input.alertsEnabled ?? null} = true and notification_mode = 'off' then 'smart'
+          else notification_mode
+        end,
+        digest_hour_local = coalesce(${input.digestHourLocal ?? null}, digest_hour_local),
+        price_rise_alerts_enabled = coalesce(
+          ${input.priceRiseAlertsEnabled ?? null},
+          price_rise_alerts_enabled
+        ),
+        better_option_alerts_enabled = coalesce(
+          ${input.betterOptionAlertsEnabled ?? null},
+          better_option_alerts_enabled
+        ),
+        tracking_checkins_enabled = coalesce(
+          ${input.trackingCheckinsEnabled ?? null},
+          tracking_checkins_enabled
+        ),
         max_alerts_per_day = coalesce(${input.maxAlertsPerDay ?? null}, max_alerts_per_day),
         quiet_hours_enabled = coalesce(${input.quietHoursEnabled ?? null}, quiet_hours_enabled),
         quiet_hours_start = coalesce(${input.quietHoursStart ?? null}, quiet_hours_start),
@@ -225,6 +258,32 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       where user_id = ${userId}
       returning *
     `;
+    const updatedProfile = toProfile(rows[0]!);
+    if (
+      updatedProfile.notificationMode === "off"
+      || !updatedProfile.trackingCheckinsEnabled
+    ) {
+      await this.#sql`
+        update captain.watches watch set
+          check_in_sent_at = null,
+          auto_pause_at = null,
+          updated_at = ${now}
+        from captain.trips trip
+        where watch.trip_id = trip.id and trip.user_id = ${userId}
+      `;
+      await this.#sql`
+        update captain.notifications set
+          status = 'superseded',
+          error = 'Notification preference changed before delivery',
+          updated_at = ${now}
+        where user_id = ${userId}
+          and status = 'pending'
+          and (
+            ${updatedProfile.notificationMode === "off"}
+            or kind = 'tracking_checkin'
+          )
+      `;
+    }
     const specs = await this.#sql<Array<{ search_spec_id: string }>>`
       select distinct link.search_spec_id
       from captain.watch_search_specs link
@@ -234,7 +293,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         and trip.status not in ('cancelled', 'completed', 'archived')
     `;
     for (const spec of specs) await this.evaluateTripsForSearchSpec(spec.search_spec_id, now);
-    return toProfile(rows[0]!);
+    return updatedProfile;
   }
 
   async createLoginToken(
@@ -433,8 +492,14 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     });
     for (const specId of new Set(specs.map((spec) => spec.id))) {
       await this.evaluateTripsForSearchSpec(specId, now);
+      const recommendation = await this.getRecommendation(userId, created.trip.id);
+      if (recommendation) await this.finalizeFarFutureBaseline(specId, now);
     }
-    return { ...created, trip: await this.getTrip(userId, created.trip.id) ?? created.trip };
+    return {
+      ...created,
+      trip: await this.getTrip(userId, created.trip.id) ?? created.trip,
+      watch: await this.getWatch(userId, created.trip.id) ?? created.watch
+    };
   }
 
   async updateTripBrief(
@@ -465,10 +530,20 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         where id = ${tripId}
         returning *
       `;
+      const startsAt = trackingStartsAt(input.brief.departureWindow.start);
+      const futureTracking = startsAt.getTime() > now.getTime();
       const watches = await tx<Array<{ id: string }>>`
         update captain.watches set
           status = 'active',
           next_check_at = ${now},
+          tracking_starts_at = ${futureTracking ? startsAt : null},
+          baseline_completed_at = null,
+          activated_at = ${futureTracking ? null : now},
+          last_user_activity_at = ${now},
+          check_in_sent_at = null,
+          auto_pause_at = null,
+          price_rise_itinerary_key = null,
+          price_rise_armed = true,
           delayed_at = null,
           delay_reason = null,
           updated_at = ${now}
@@ -668,12 +743,15 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     if (!confirmed) return null;
     for (const specId of new Set(specs.map((spec) => spec.id))) {
       await this.evaluateTripsForSearchSpec(specId, now);
+      const recommendation = await this.getRecommendation(userId, confirmed.result.trip.id);
+      if (recommendation) await this.finalizeFarFutureBaseline(specId, now);
     }
     return {
       draft: confirmed.draft,
       result: {
         ...confirmed.result,
-        trip: await this.getTrip(userId, confirmed.result.trip.id) ?? confirmed.result.trip
+        trip: await this.getTrip(userId, confirmed.result.trip.id) ?? confirmed.result.trip,
+        watch: await this.getWatch(userId, confirmed.result.trip.id) ?? confirmed.result.watch
       }
     };
   }
@@ -689,11 +767,35 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         update captain.trips set status = ${status}, version = version + 1, updated_at = ${now}
         where id = ${tripId} returning *
       `;
-      const watchStatus = status === "paused" ? "paused" : ["cancelled", "completed"].includes(status) ? "completed" : "active";
+      const watches = await tx<WatchRow[]>`
+        select * from captain.watches where trip_id = ${tripId} for update
+      `;
+      const currentWatch = watches[0];
+      const futureScheduled = Boolean(
+        currentWatch?.tracking_starts_at
+        && currentWatch.tracking_starts_at.getTime() > now.getTime()
+        && currentWatch.baseline_completed_at
+      );
+      const watchStatus = status === "paused"
+        ? "paused"
+        : ["cancelled", "completed"].includes(status)
+          ? "completed"
+          : action.type === "resume" && futureScheduled
+            ? "scheduled"
+            : "active";
       await tx`
         update captain.watches set status = ${watchStatus},
-          next_check_at = case when ${action.type} in ('refresh', 'resume') then ${now} else next_check_at end,
+          next_check_at = case
+            when ${action.type} = 'refresh' then ${now}
+            when ${action.type} = 'resume' and ${futureScheduled}
+              then tracking_starts_at
+            when ${action.type} = 'resume' then ${now}
+            else next_check_at
+          end,
           last_manual_refresh_at = case when ${action.type} = 'refresh' then ${now} else last_manual_refresh_at end,
+          last_user_activity_at = ${now},
+          check_in_sent_at = null,
+          auto_pause_at = null,
           updated_at = ${now}
         where trip_id = ${tripId}
       `;
@@ -817,7 +919,384 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           ${tx.json(json({ itineraryKey, selectedBy: "person" }))}, ${now}
         )
       `;
+      await tx`
+        update captain.watches set
+          last_user_activity_at = ${now},
+          check_in_sent_at = null,
+          auto_pause_at = null,
+          updated_at = ${now}
+        where trip_id = ${tripId}
+      `;
     });
+  }
+
+  async markTripActivity(userId: string, tripId: string, now: Date): Promise<void> {
+    const rows = await this.#sql<Array<{ id: string }>>`
+      update captain.watches watch set
+        last_user_activity_at = ${now},
+        check_in_sent_at = null,
+        auto_pause_at = null,
+        updated_at = ${now}
+      from captain.trips trip
+      where watch.trip_id = trip.id
+        and trip.id = ${tripId}
+        and trip.user_id = ${userId}
+      returning watch.id
+    `;
+    if (!rows[0]) throw new TripNotFoundError();
+    await this.#sql`
+      update captain.notifications set
+        status = 'superseded',
+        error = 'Traveller activity reset the check-in timer',
+        updated_at = ${now}
+      where trip_id = ${tripId}
+        and kind = 'tracking_checkin'
+        and status = 'pending'
+    `;
+  }
+
+  async respondToTrackingCheckIn(
+    userId: string,
+    tripId: string,
+    action: "keep" | "pause",
+    now: Date
+  ): Promise<Trip> {
+    return this.#sql.begin(async (tx) => {
+      const trips = await tx<TripRow[]>`
+        select * from captain.trips
+        where id = ${tripId} and user_id = ${userId}
+        for update
+      `;
+      const trip = trips[0];
+      if (!trip) throw new TripNotFoundError();
+      const watches = await tx<WatchRow[]>`
+        select * from captain.watches where trip_id = ${tripId} for update
+      `;
+      const watch = watches[0];
+      if (!watch) throw new Error("Trip Watch not found");
+      const futureScheduled = Boolean(
+        watch.tracking_starts_at
+        && watch.tracking_starts_at.getTime() > now.getTime()
+        && watch.baseline_completed_at
+      );
+      const hasRecommendation = await tx<Array<{ exists: boolean }>>`
+        select exists(
+          select 1 from captain.trip_recommendations where trip_id = ${tripId}
+        ) as exists
+      `;
+      const tripStatus: TripStatus = action === "pause"
+        ? "paused"
+        : hasRecommendation[0]?.exists ? "recommended" : "tracking";
+      const updated = await tx<TripRow[]>`
+        update captain.trips set
+          status = ${tripStatus},
+          version = version + 1,
+          updated_at = ${now}
+        where id = ${tripId}
+        returning *
+      `;
+      await tx`
+        update captain.watches set
+          status = ${action === "pause" ? "paused" : futureScheduled ? "scheduled" : "active"},
+          next_check_at = case
+            when ${action === "pause"} then next_check_at
+            when ${futureScheduled} then tracking_starts_at
+            else ${now}
+          end,
+          last_user_activity_at = ${now},
+          check_in_sent_at = null,
+          auto_pause_at = null,
+          updated_at = ${now}
+        where trip_id = ${tripId}
+      `;
+      await tx`
+        insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
+        values (
+          ${randomUUID()}, ${tripId}, ${userId},
+          ${action === "pause" ? "tracking_checkin_paused" : "tracking_checkin_kept"},
+          '{}'::jsonb, ${now}
+        )
+      `;
+      return toTrip(updated[0]!);
+    });
+  }
+
+  async maintainTracking(now: Date): Promise<TrackingMaintenance> {
+    const rows = await this.#sql<Array<{
+      watch_id: string;
+      trip_id: string;
+      user_id: string;
+      title: string;
+      watch_status: Watch["status"];
+      tracking_starts_at: Date | null;
+      last_user_activity_at: Date;
+      check_in_sent_at: Date | null;
+      auto_pause_at: Date | null;
+      notification_mode: TravellerProfile["notificationMode"];
+      tracking_checkins_enabled: boolean;
+    }>>`
+      select watch.id as watch_id, trip.id as trip_id, trip.user_id, trip.title,
+        watch.status as watch_status, watch.tracking_starts_at,
+        watch.last_user_activity_at, watch.check_in_sent_at, watch.auto_pause_at,
+        profile.notification_mode, profile.tracking_checkins_enabled
+      from captain.watches watch
+      join captain.trips trip on trip.id = watch.trip_id
+      join captain.traveller_profiles profile on profile.user_id = trip.user_id
+      where watch.status in ('active', 'scheduled')
+        and trip.status not in ('cancelled', 'completed', 'archived')
+    `;
+    let activated = 0;
+    let checkInsQueued = 0;
+    let autoPaused = 0;
+    for (const row of rows) {
+      if (
+        row.watch_status === "scheduled"
+        && row.tracking_starts_at
+        && row.tracking_starts_at.getTime() <= now.getTime()
+      ) {
+        const updated = await this.#sql<Array<{ id: string }>>`
+          update captain.watches set
+            status = 'active',
+            next_check_at = ${now},
+            activated_at = ${now},
+            last_user_activity_at = ${now},
+            check_in_sent_at = null,
+            auto_pause_at = null,
+            updated_at = ${now}
+          where id = ${row.watch_id} and status = 'scheduled'
+          returning id
+        `;
+        if (!updated[0]) continue;
+        if (row.notification_mode !== "off") {
+          await enqueueNotification(this.#sql, {
+            userId: row.user_id,
+            tripId: row.trip_id,
+            kind: "tracking_activation",
+            dedupKey: `${row.trip_id}:tracking_activation:${row.tracking_starts_at.toISOString()}`,
+            payload: {
+              tripTitle: row.title,
+              trackingStartsAt: row.tracking_starts_at.toISOString()
+            },
+            now
+          });
+        }
+        if (["smart", "daily"].includes(row.notification_mode)) {
+          await this.#sql`
+            update captain.traveller_profiles
+            set last_digest_at = ${now}, updated_at = ${now}
+            where user_id = ${row.user_id}
+          `;
+        }
+        activated += 1;
+        continue;
+      }
+      if (row.watch_status !== "active") continue;
+      if (row.auto_pause_at && row.auto_pause_at.getTime() <= now.getTime()) {
+        const paused = await this.#sql.begin(async (tx) => {
+          const watches = await tx<Array<{ id: string }>>`
+            update captain.watches set
+              status = 'paused',
+              check_in_sent_at = null,
+              auto_pause_at = null,
+              updated_at = ${now}
+            where id = ${row.watch_id}
+              and status = 'active'
+              and auto_pause_at <= ${now}
+            returning id
+          `;
+          if (!watches[0]) return false;
+          await tx`
+            update captain.trips set
+              status = 'paused',
+              version = version + 1,
+              updated_at = ${now}
+            where id = ${row.trip_id}
+          `;
+          return true;
+        });
+        if (!paused) continue;
+        if (row.notification_mode !== "off") {
+          await enqueueNotification(this.#sql, {
+            userId: row.user_id,
+            tripId: row.trip_id,
+            kind: "tracking_paused",
+            dedupKey: `${row.trip_id}:tracking_paused:${row.auto_pause_at.toISOString()}`,
+            payload: { tripTitle: row.title },
+            now
+          });
+        }
+        autoPaused += 1;
+        continue;
+      }
+      if (
+        row.notification_mode !== "off"
+        && row.tracking_checkins_enabled
+        && !row.check_in_sent_at
+        && row.last_user_activity_at.getTime() <= now.getTime() - INACTIVITY_CHECKIN_MS
+      ) {
+        const deliveryAt = await userDeliveryTime(this.#sql, row.user_id, now);
+        const updated = await this.#sql<Array<{ id: string }>>`
+          update captain.watches set
+            check_in_sent_at = ${now},
+            auto_pause_at = ${new Date(deliveryAt.getTime() + INACTIVITY_AUTO_PAUSE_MS)},
+            updated_at = ${now}
+          where id = ${row.watch_id}
+            and status = 'active'
+            and check_in_sent_at is null
+            and last_user_activity_at <= ${new Date(now.getTime() - INACTIVITY_CHECKIN_MS)}
+          returning id
+        `;
+        if (!updated[0]) continue;
+        const queued = await enqueueNotification(this.#sql, {
+          userId: row.user_id,
+          tripId: row.trip_id,
+          kind: "tracking_checkin",
+          dedupKey: `${row.trip_id}:tracking_checkin:${now.toISOString().slice(0, 10)}`,
+          payload: {
+            tripTitle: row.title,
+            departureDate: (await this.getTripById(row.trip_id))?.brief.departureWindow.start
+          },
+          now
+        });
+        if (queued) checkInsQueued += 1;
+      }
+    }
+    return { activated, checkInsQueued, autoPaused };
+  }
+
+  async finalizeFarFutureBaseline(searchSpecId: string, now: Date): Promise<void> {
+    await this.#sql`
+      update captain.watches watch set
+        status = 'scheduled',
+        next_check_at = watch.tracking_starts_at,
+        baseline_completed_at = ${now},
+        updated_at = ${now}
+      from captain.watch_search_specs link
+      where link.watch_id = watch.id
+        and link.search_spec_id = ${searchSpecId}
+        and watch.status = 'active'
+        and watch.tracking_starts_at > ${now}
+    `;
+  }
+
+  async enqueueDueDigests(now: Date): Promise<number> {
+    const profiles = await this.#sql<Array<ProfileRow & { timezone: string }>>`
+      select profile.*, users.timezone
+      from captain.traveller_profiles profile
+      join captain.users users on users.id = profile.user_id
+      where profile.notification_mode in ('smart', 'daily')
+    `;
+    let queued = 0;
+    for (const profile of profiles) {
+      if (!digestDue(now, profile.timezone, profile.digest_hour_local, profile.last_digest_at)) {
+        continue;
+      }
+      const trips = await this.#sql<Array<{
+        id: string;
+        title: string;
+        recommendation: TripRecommendation["snapshot"];
+        price: string | number;
+        currency: string;
+        summary: string;
+        price_rise_itinerary_key: string | null;
+      }>>`
+        select trip.id, trip.title, recommendation.snapshot as recommendation,
+          recommendation.price, recommendation.currency, recommendation.summary,
+          watch.price_rise_itinerary_key
+        from captain.trips trip
+        join captain.watches watch on watch.trip_id = trip.id
+        join captain.trip_recommendations recommendation on recommendation.trip_id = trip.id
+        where trip.user_id = ${profile.user_id}
+          and trip.status not in ('paused', 'cancelled', 'completed', 'archived')
+          and watch.status = 'active'
+        order by trip.updated_at desc
+        limit 3
+      `;
+      if (trips.length === 0) continue;
+      const recent = await this.#sql<Array<{ exists: boolean }>>`
+        select exists(
+          select 1 from captain.notifications
+          where user_id = ${profile.user_id}
+            and kind in ('price_rise', 'price_drop', 'new_best')
+            and status in ('pending', 'sending', 'sent')
+            and created_at >= ${new Date(now.getTime() - 3 * 3_600_000)}
+        ) as exists
+      `;
+      if (recent[0]?.exists) {
+        await this.#sql`
+          update captain.trip_recommendations recommendation set
+            snapshot = recommendation.snapshot - 'pendingDigestChange',
+            updated_at = ${now}
+          from captain.trips trip
+          where recommendation.trip_id = trip.id
+            and trip.user_id = ${profile.user_id}
+        `;
+        await this.#sql`
+          update captain.traveller_profiles
+          set last_digest_at = ${now}, updated_at = ${now}
+          where user_id = ${profile.user_id}
+        `;
+        continue;
+      }
+      const primary = trips[0]!;
+      const digestTrips = [];
+      for (const trip of trips) {
+        let priceRise: { increase: number; percent: number } | null = null;
+        const itineraryKey = trip.price_rise_itinerary_key;
+        if (itineraryKey) {
+          const prices = await this.#sql<Array<{
+            current_price: string | number;
+            low_price: string | number;
+          }>>`
+            select
+              (array_agg(price order by observed_at desc))[1] as current_price,
+              min(price) as low_price
+            from captain.price_observations
+            where itinerary_key = ${itineraryKey}
+              and currency = ${trip.currency}
+              and observed_at >= ${new Date(now.getTime() - 7 * 86_400_000)}
+            having count(*) > 0
+          `;
+          const current = Number(prices[0]?.current_price);
+          const low = Number(prices[0]?.low_price);
+          const increase = current - low;
+          const percent = low > 0 ? increase / low * 100 : 0;
+          if (increase >= 20 && percent >= 5) priceRise = { increase, percent };
+        }
+        digestTrips.push({
+          tripId: trip.id,
+          tripTitle: trip.title,
+          price: Number(trip.price),
+          currency: trip.currency,
+          summary: trip.summary,
+          snapshot: trip.recommendation,
+          priceRise
+        });
+      }
+      const inserted = await enqueueNotification(this.#sql, {
+        userId: profile.user_id,
+        tripId: primary.id,
+        kind: "daily_digest",
+        dedupKey: `${profile.user_id}:daily_digest:${localDateKey(now, profile.timezone)}`,
+        payload: { trips: digestTrips },
+        now
+      });
+      if (inserted) queued += 1;
+      await this.#sql`
+        update captain.trip_recommendations recommendation set
+          snapshot = recommendation.snapshot - 'pendingDigestChange',
+          updated_at = ${now}
+        from captain.trips trip
+        where recommendation.trip_id = trip.id
+          and trip.user_id = ${profile.user_id}
+      `;
+      await this.#sql`
+        update captain.traveller_profiles
+        set last_digest_at = ${now}, updated_at = ${now}
+        where user_id = ${profile.user_id}
+      `;
+    }
+    return queued;
   }
 
   async scheduleDueSearchRuns(now: Date, freshnessMs: number, limit: number): Promise<number> {
@@ -953,7 +1432,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         await tx`
           update captain.watches watch set last_check_at = ${now},
             delayed_at = ${now},
-            delay_reason = ${"No verified fares this check; keeping last results."},
+            delay_reason = ${"No fares were found in the latest check."},
             updated_at = ${now}
           from captain.watch_search_specs link
           where link.watch_id = watch.id and link.search_spec_id = ${run.search_spec_id}
@@ -1064,7 +1543,17 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       `;
       return retry ? null : run.search_spec_id;
     });
-    if (terminal) await this.#enqueueAttentionForSpec(terminal, error, now);
+    if (terminal) {
+      await this.#sql`
+        update captain.watches watch set
+          delayed_at = ${now},
+          delay_reason = 'A scheduled check was delayed; keeping last results.',
+          updated_at = ${now}
+        from captain.watch_search_specs link
+        where link.watch_id = watch.id
+          and link.search_spec_id = ${terminal}
+      `;
+    }
   }
 
   async deferSearchRun(workerId: string, runId: string, until: Date, reason: string, now: Date): Promise<void> {
@@ -1101,6 +1590,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       const trip = toTrip(row);
       const offers = await this.listTripOffers(trip.userId, trip.id, now);
       const profile = await this.ensureProfile(trip.userId, now);
+      const watch = await this.getWatch(trip.userId, trip.id);
       const ranked = rankOffers(trip.brief, profile, offers);
       const best = ranked[0];
       if (!best) {
@@ -1121,11 +1611,25 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           }
         : null;
       const comparableBest = comparison.find((candidate) => candidate.offer.id === best.offer.id) ?? best;
-      const reasonCodes = recommendationReasonCodes(
-        profile.rankingMode,
-        best.offer,
-        previous?.snapshot.current ?? null
-      );
+      const qualifies = meetsAlertThreshold(profile.rankingMode, comparableBest, previousRanked);
+      const reasonCodes = previous && !qualifies
+        ? []
+        : recommendationReasonCodes(
+            profile.rankingMode,
+            best.offer,
+            previous?.snapshot.current ?? null
+          );
+      const pendingDigestChange = ["smart", "daily"].includes(profile.notificationMode)
+        ? previous && qualifies
+          ? {
+              current: best.offer,
+              previous: previous.snapshot.current,
+              rankingMode: profile.rankingMode,
+              reasonCodes,
+              createdAt: now.toISOString()
+            }
+          : previous?.snapshot.pendingDigestChange ?? null
+        : null;
       const recommendation: TripRecommendation = {
         tripId: trip.id, offerId: best.offer.id, searchSpecId: best.offer.searchSpecId,
         itineraryKey: best.offer.itineraryKey,
@@ -1137,17 +1641,28 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           previous: previous?.snapshot.current ?? null,
           rankingMode: profile.rankingMode,
           reasonCodes,
-          createdAt: now.toISOString()
+          createdAt: now.toISOString(),
+          pendingDigestChange
         }
       };
-      const qualifies = meetsAlertThreshold(profile.rankingMode, comparableBest, previousRanked);
-      const kind = !profile.alertsEnabled
+      const farBaseline = Boolean(
+        watch?.trackingStartsAt
+        && Date.parse(watch.trackingStartsAt) > now.getTime()
+        && !watch.baselineCompletedAt
+      );
+      const finalWeek = daysUntilDeparture(trip.brief.departureWindow.start, now) <= 7;
+      const immediateInitial = farBaseline || profile.notificationMode === "changes_only";
+      const immediateImprovement = profile.betterOptionAlertsEnabled && (
+        profile.notificationMode === "changes_only"
+        || (profile.notificationMode === "smart" && finalWeek)
+      );
+      const kind = profile.notificationMode === "off"
         ? null
         : !previous
-          ? "initial_results"
-          : qualifies && profile.rankingMode === "cheapest"
+          ? immediateInitial ? "initial_results" : null
+          : qualifies && immediateImprovement && profile.rankingMode === "cheapest"
             ? "price_drop"
-            : qualifies
+            : qualifies && immediateImprovement
               ? "new_best"
               : null;
       const notified = await this.#sql.begin(async (tx) => {
@@ -1173,7 +1688,8 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           const recentAlerts = await tx<Array<{ count: string }>>`
             select count(*)::text as count from captain.notifications
             where user_id = ${trip.userId}
-              and kind in ('price_drop', 'new_best')
+              and kind in ('price_rise', 'price_drop', 'new_best')
+              and status <> 'superseded'
               and created_at >= ${new Date(now.getTime() - 86_400_000)}
           `;
           const capped = kind !== "initial_results"
@@ -1194,6 +1710,9 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
                   ${tx.json(json({
                     tripTitle: trip.title,
                     ...recommendation,
+                    ...(kind === "initial_results" && watch?.trackingStartsAt
+                      ? { trackingStartsAt: watch.trackingStartsAt }
+                      : {}),
                     ...(previous ? {
                       previousPrice: previous.price,
                       dropPercent: previous.price > 0 ? Math.round((1 - recommendation.price / previous.price) * 100) : 0
@@ -1216,12 +1735,119 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         return queued;
       });
       if (notified) changed += 1;
+      if (
+        watch
+        && await this.#evaluatePriceRise(trip, watch, profile, offers, best.offer, now)
+      ) {
+        changed += 1;
+      }
     }
     return changed;
   }
 
+  async #evaluatePriceRise(
+    trip: Trip,
+    watch: Watch,
+    profile: TravellerProfile,
+    offers: OfferSnapshot[],
+    recommended: OfferSnapshot,
+    now: Date
+  ): Promise<boolean> {
+    const selections = await this.#sql<Array<{ itinerary_key: string }>>`
+      select itinerary_key
+      from captain.trip_flight_selections
+      where trip_id = ${trip.id} and selected_by = 'person'
+      order by selected_at desc
+      limit 1
+    `;
+    const monitored = offers.find((offer) =>
+      offer.itineraryKey === selections[0]?.itinerary_key
+    ) ?? recommended;
+    const lows = await this.#sql<Array<{ minimum: string | number | null }>>`
+      select min(price) as minimum
+      from captain.price_observations
+      where itinerary_key = ${monitored.itineraryKey}
+        and currency = ${monitored.currency}
+        and observed_at >= ${new Date(now.getTime() - 7 * 86_400_000)}
+    `;
+    const low = Number(lows[0]?.minimum ?? monitored.price);
+    const increase = monitored.price - low;
+    const percent = low > 0 ? increase / low : 0;
+    const sameItinerary = watch.priceRiseItineraryKey === monitored.itineraryKey;
+    const armed = sameItinerary ? watch.priceRiseArmed : true;
+    const thresholdReached = percent >= 0.05 && increase >= 20;
+    const finalWeek = daysUntilDeparture(trip.brief.departureWindow.start, now) <= 7;
+    const immediate = profile.priceRiseAlertsEnabled && (
+      profile.notificationMode === "changes_only"
+      || (profile.notificationMode === "smart" && finalWeek)
+    );
+    let queued = false;
+    if (thresholdReached && armed && immediate) {
+      const recent = await this.#sql<Array<{ count: string }>>`
+        select count(*)::text as count
+        from captain.notifications
+        where user_id = ${trip.userId}
+          and kind in ('price_rise', 'price_drop', 'new_best')
+          and status <> 'superseded'
+          and created_at >= ${new Date(now.getTime() - 86_400_000)}
+      `;
+      if (Number(recent[0]?.count ?? 0) < profile.maxAlertsPerDay) {
+        queued = await enqueueNotification(this.#sql, {
+          userId: trip.userId,
+          tripId: trip.id,
+          kind: "price_rise",
+          dedupKey: `${trip.id}:price_rise:${monitored.itineraryKey}:${low}:${monitored.price}`,
+          payload: {
+            tripTitle: trip.title,
+            current: monitored,
+            sevenDayLow: low,
+            increase,
+            percent: Math.round(percent * 100)
+          },
+          now
+        });
+      }
+    }
+    await this.#sql`
+      update captain.watches set
+        price_rise_itinerary_key = ${monitored.itineraryKey},
+        price_rise_armed = ${thresholdReached ? !queued && armed : true},
+        updated_at = ${now}
+      where id = ${watch.id}
+    `;
+    return queued;
+  }
+
   async listPendingNotifications(now: Date, limit: number): Promise<CaptainNotification[]> {
     return this.#sql.begin(async (tx) => {
+      await tx`
+        update captain.notifications set
+          status = 'superseded',
+          error = 'Suppressed by smart notification policy',
+          updated_at = ${now}
+        where status = 'pending'
+          and available_at <= ${now}
+          and kind in ('inventory_gap', 'watch_attention')
+      `;
+      await tx`
+        with ranked as (
+          select id,
+            row_number() over (
+              partition by trip_id
+              order by created_at desc, id desc
+            ) as position
+          from captain.notifications
+          where status = 'pending'
+            and kind in ('initial_results', 'price_drop', 'new_best')
+        )
+        update captain.notifications notification set
+          status = 'superseded',
+          error = 'A newer Trip update was available before delivery',
+          updated_at = ${now}
+        from ranked
+        where notification.id = ranked.id
+          and ranked.position > 1
+      `;
       const rows = await tx<Array<NotificationRow & { chat_id: string }>>`
         with candidates as (
           select id from captain.notifications
@@ -1329,61 +1955,11 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
   }
 
   async enqueueInventoryGapForSearchSpec(searchSpecId: string, now: Date): Promise<number> {
-    const trips = await this.#sql<Array<{ id: string; user_id: string; title: string }>>`
-      select distinct trip.id, trip.user_id, trip.title
-      from captain.trips trip
-      join captain.watches watch on watch.trip_id = trip.id
-      join captain.watch_search_specs link on link.watch_id = watch.id
-      join captain.telegram_accounts telegram on telegram.user_id = trip.user_id
-      join captain.traveller_profiles profile on profile.user_id = trip.user_id
-      where link.search_spec_id = ${searchSpecId}
-        and profile.alerts_enabled = true
-        and trip.status not in ('cancelled', 'completed', 'archived')
-    `;
-    let queued = 0;
-    for (const trip of trips) {
-      const dedupKey = `${trip.id}:inventory_gap`;
-      const availableAt = await userDeliveryTime(this.#sql, trip.user_id, now);
-      const inserted = await this.#sql<Array<{ id: string }>>`
-        insert into captain.notifications (
-          id, user_id, trip_id, kind, dedup_key, payload, status,
-          attempts, available_at, created_at, updated_at
-        ) values (
-          ${randomUUID()}, ${trip.user_id}, ${trip.id}, 'inventory_gap', ${dedupKey},
-          ${this.#sql.json(json({ tripTitle: trip.title }))}, 'pending', 0,
-          ${availableAt}, ${now}, ${now}
-        ) on conflict (dedup_key) do nothing
-        returning id
-      `;
-      if (inserted.length === 1) queued += 1;
-    }
-    return queued;
+    void searchSpecId;
+    void now;
+    return 0;
   }
 
-  async #enqueueAttentionForSpec(searchSpecId: string, error: string, now: Date): Promise<void> {
-    const trips = await this.#sql<Array<{ id: string; user_id: string; title: string }>>`
-      select distinct trip.id, trip.user_id, trip.title
-      from captain.trips trip
-      join captain.watches watch on watch.trip_id = trip.id
-      join captain.watch_search_specs link on link.watch_id = watch.id
-      join captain.telegram_accounts telegram on telegram.user_id = trip.user_id
-      where link.search_spec_id = ${searchSpecId}
-    `;
-    for (const trip of trips) {
-      const dedupKey = `${trip.id}:watch_attention:${now.toISOString().slice(0, 10)}`;
-      const availableAt = await userDeliveryTime(this.#sql, trip.user_id, now);
-      await this.#sql`
-        insert into captain.notifications (
-          id, user_id, trip_id, kind, dedup_key, payload, status,
-          attempts, available_at, created_at, updated_at
-        ) values (
-          ${randomUUID()}, ${trip.user_id}, ${trip.id}, 'watch_attention', ${dedupKey},
-          ${this.#sql.json(json({ tripTitle: trip.title, error }))}, 'pending', 0,
-          ${availableAt}, ${now}, ${now}
-        ) on conflict (dedup_key) do nothing
-      `;
-    }
-  }
 }
 
 async function syncSpecs(sql: Sql, watchId: string, specs: SearchSpec[], now: Date): Promise<void> {
@@ -1439,6 +2015,8 @@ async function createTripInTransaction(
   }
   const tripId = randomUUID();
   const watchId = randomUUID();
+  const startsAt = trackingStartsAt(input.brief.departureWindow.start);
+  const futureTracking = startsAt.getTime() > now.getTime();
   await sql`
     insert into captain.trips (
       id, user_id, title, status, version, brief, created_at, updated_at
@@ -1449,8 +2027,14 @@ async function createTripInTransaction(
   `;
   await sql`
     insert into captain.watches (
-      id, trip_id, status, cadence_hours, next_check_at, created_at, updated_at
-    ) values (${watchId}, ${tripId}, 'active', ${input.cadenceHours}, ${now}, ${now}, ${now})
+      id, trip_id, status, cadence_hours, next_check_at,
+      tracking_starts_at, activated_at, last_user_activity_at,
+      created_at, updated_at
+    ) values (
+      ${watchId}, ${tripId}, 'active', ${input.cadenceHours}, ${now},
+      ${futureTracking ? startsAt : null}, ${futureTracking ? null : now}, ${now},
+      ${now}, ${now}
+    )
   `;
   await syncSpecs(sql, watchId, specs, now);
   await sql`
@@ -1482,6 +2066,14 @@ async function createTripInTransaction(
       nextCheckAt: now.toISOString(),
       lastCheckAt: null,
       lastManualRefreshAt: null,
+      trackingStartsAt: futureTracking ? startsAt.toISOString() : null,
+      baselineCompletedAt: null,
+      activatedAt: futureTracking ? null : now.toISOString(),
+      lastUserActivityAt: now.toISOString(),
+      checkInSentAt: null,
+      autoPauseAt: null,
+      priceRiseItineraryKey: null,
+      priceRiseArmed: true,
       delayedAt: null,
       delayReason: null,
       createdAt: now.toISOString(),
@@ -1532,12 +2124,97 @@ async function userDeliveryTime(sql: Sql, userId: string, now: Date): Promise<Da
   return now;
 }
 
+async function enqueueNotification(
+  sql: Sql,
+  input: {
+    userId: string;
+    tripId: string;
+    kind: CaptainNotification["kind"];
+    dedupKey: string;
+    payload: Record<string, unknown>;
+    now: Date;
+  }
+): Promise<boolean> {
+  const recipients = await sql<Array<{
+    exists: boolean;
+    notification_mode: TravellerProfile["notificationMode"] | null;
+  }>>`
+    select exists(
+      select 1 from captain.telegram_accounts where user_id = ${input.userId}
+    ) as exists,
+    (
+      select notification_mode from captain.traveller_profiles
+      where user_id = ${input.userId}
+    ) as notification_mode
+  `;
+  if (!recipients[0]?.exists || recipients[0].notification_mode === "off") return false;
+  const availableAt = await userDeliveryTime(sql, input.userId, input.now);
+  const rows = await sql<Array<{ id: string }>>`
+    insert into captain.notifications (
+      id, user_id, trip_id, kind, dedup_key, payload, status,
+      attempts, available_at, created_at, updated_at
+    ) values (
+      ${randomUUID()}, ${input.userId}, ${input.tripId}, ${input.kind},
+      ${input.dedupKey}, ${sql.json(json(input.payload))}, 'pending',
+      0, ${availableAt}, ${input.now}, ${input.now}
+    )
+    on conflict (dedup_key) do nothing
+    returning id
+  `;
+  return rows.length === 1;
+}
+
+function digestDue(
+  now: Date,
+  timezone: string,
+  digestHourLocal: number,
+  lastDigestAt: Date | string | undefined | null
+): boolean {
+  try {
+    const parts = localParts(now, timezone);
+    if (parts.hour < digestHourLocal) return false;
+    return !lastDigestAt || localDateKey(new Date(lastDigestAt), timezone) !== parts.date;
+  } catch {
+    return now.getUTCHours() >= digestHourLocal
+      && (!lastDigestAt
+        || new Date(lastDigestAt).toISOString().slice(0, 10) !== now.toISOString().slice(0, 10));
+  }
+}
+
+function localDateKey(now: Date, timezone: string): string {
+  return localParts(now, timezone).date;
+}
+
+function localParts(now: Date, timezone: string): { date: string; hour: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  return {
+    date: `${value("year")}-${value("month")}-${value("day")}`,
+    hour: Number(value("hour"))
+  };
+}
+
 function actionStatus(action: TripAction["type"], current: TripStatus): TripStatus {
   if (action === "pause") return "paused";
   if (action === "resume" || action === "refresh") return "tracking";
   if (action === "cancel") return "cancelled";
   if (action === "complete") return "completed";
   return current;
+}
+
+function daysUntilDeparture(departureStart: string, now: Date): number {
+  const departure = Date.parse(`${departureStart}T00:00:00.000Z`);
+  return Number.isFinite(departure)
+    ? Math.ceil((departure - now.getTime()) / 86_400_000)
+    : 0;
 }
 
 type UserRow = { id: string; status: CaptainUser["status"]; timezone: string };
@@ -1562,6 +2239,10 @@ type WatchRow = {
   id: string; trip_id: string; status: Watch["status"]; cadence_hours: number;
   next_check_at: Date | null; last_check_at: Date | null;
   last_manual_refresh_at: Date | null;
+  tracking_starts_at: Date | null; baseline_completed_at: Date | null;
+  activated_at: Date | null; last_user_activity_at: Date;
+  check_in_sent_at: Date | null; auto_pause_at: Date | null;
+  price_rise_itinerary_key: string | null; price_rise_armed: boolean;
   delayed_at: Date | null; delay_reason: string | null;
   created_at: Date; updated_at: Date;
 };
@@ -1602,6 +2283,12 @@ type ProfileRow = {
   preferred_airline_codes: string[];
   excluded_airline_codes: string[];
   alerts_enabled: boolean;
+  notification_mode: TravellerProfile["notificationMode"];
+  digest_hour_local: number;
+  price_rise_alerts_enabled: boolean;
+  better_option_alerts_enabled: boolean;
+  tracking_checkins_enabled: boolean;
+  last_digest_at: Date | null;
   max_alerts_per_day: number;
   quiet_hours_enabled: boolean;
   quiet_hours_start: number;
@@ -1659,6 +2346,14 @@ function toWatch(row: WatchRow): Watch {
     nextCheckAt: row.next_check_at ? iso(row.next_check_at) : null,
     lastCheckAt: row.last_check_at ? iso(row.last_check_at) : null,
     lastManualRefreshAt: row.last_manual_refresh_at ? iso(row.last_manual_refresh_at) : null,
+    trackingStartsAt: row.tracking_starts_at ? iso(row.tracking_starts_at) : null,
+    baselineCompletedAt: row.baseline_completed_at ? iso(row.baseline_completed_at) : null,
+    activatedAt: row.activated_at ? iso(row.activated_at) : null,
+    lastUserActivityAt: iso(row.last_user_activity_at),
+    checkInSentAt: row.check_in_sent_at ? iso(row.check_in_sent_at) : null,
+    autoPauseAt: row.auto_pause_at ? iso(row.auto_pause_at) : null,
+    priceRiseItineraryKey: row.price_rise_itinerary_key,
+    priceRiseArmed: row.price_rise_armed,
     delayedAt: row.delayed_at ? iso(row.delayed_at) : null,
     delayReason: row.delay_reason,
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
@@ -1705,6 +2400,11 @@ function toProfile(row: ProfileRow): TravellerProfile {
     preferredAirlineCodes: row.preferred_airline_codes,
     excludedAirlineCodes: row.excluded_airline_codes,
     alertsEnabled: row.alerts_enabled,
+    notificationMode: row.notification_mode,
+    digestHourLocal: row.digest_hour_local,
+    priceRiseAlertsEnabled: row.price_rise_alerts_enabled,
+    betterOptionAlertsEnabled: row.better_option_alerts_enabled,
+    trackingCheckinsEnabled: row.tracking_checkins_enabled,
     maxAlertsPerDay: row.max_alerts_per_day,
     quietHoursEnabled: row.quiet_hours_enabled,
     quietHoursStart: row.quiet_hours_start,

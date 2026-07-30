@@ -4,6 +4,9 @@ export const DISCOVERY_SEARCH_SPEC_LIMIT = 1;
 export const TRACKING_SEARCH_SPEC_LIMIT = 1;
 export const CURRENT_OFFER_RETENTION_MS = 7 * 86_400_000;
 export const PRICE_HISTORY_RETENTION_MS = 90 * 86_400_000;
+export const TRACKING_WINDOW_DAYS = 30;
+export const INACTIVITY_CHECKIN_MS = 7 * 86_400_000;
+export const INACTIVITY_AUTO_PAUSE_MS = 48 * 3_600_000;
 
 export function retainSearchOffers(offers: CompletedProviderOffer[]): CompletedProviderOffer[] {
   const bestByItinerary = new Map<string, CompletedProviderOffer>();
@@ -56,13 +59,21 @@ export function adaptiveWatchIntervalMs(cadenceHours: number, departureStart: st
     : 0;
   const adaptiveFloor = daysUntilDeparture < 0
     ? 24
-    : daysUntilDeparture > 30
-        ? 12
-        : daysUntilDeparture > 7
-          ? 6
-          : 3;
+    : daysUntilDeparture > 7
+      ? 6
+      : 3;
   void cadenceHours;
   return adaptiveFloor * 3_600_000;
+}
+
+export function trackingStartsAt(departureStart: string): Date {
+  const departure = Date.parse(`${departureStart}T00:00:00.000Z`);
+  if (!Number.isFinite(departure)) throw new Error("Invalid departure date");
+  return new Date(departure - TRACKING_WINDOW_DAYS * 86_400_000);
+}
+
+export function requiresScheduledTracking(departureStart: string, now: Date): boolean {
+  return trackingStartsAt(departureStart).getTime() > now.getTime();
 }
 
 function compareOffers(left: CompletedProviderOffer, right: CompletedProviderOffer): number {

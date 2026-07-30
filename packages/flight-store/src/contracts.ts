@@ -90,6 +90,13 @@ export type RecommendationSnapshot = {
   rankingMode: "cheapest" | "balanced" | "fastest";
   reasonCodes: RecommendationReasonCode[];
   createdAt: string;
+  pendingDigestChange?: {
+    current: OfferSnapshot;
+    previous: OfferSnapshot;
+    rankingMode: "cheapest" | "balanced" | "fastest";
+    reasonCodes: RecommendationReasonCode[];
+    createdAt: string;
+  } | null;
 };
 
 export type TripFlightSelection = {
@@ -111,10 +118,26 @@ export type CaptainNotification = {
   userId: string;
   tripId: string;
   telegramChatId: number;
-  kind: "initial_results" | "price_drop" | "new_best" | "watch_attention" | "inventory_gap";
+  kind:
+    | "initial_results"
+    | "price_drop"
+    | "new_best"
+    | "watch_attention"
+    | "inventory_gap"
+    | "daily_digest"
+    | "price_rise"
+    | "tracking_activation"
+    | "tracking_checkin"
+    | "tracking_paused";
   payload: Record<string, unknown>;
   attempts: number;
   telegramMessageId: number | null;
+};
+
+export type TrackingMaintenance = {
+  activated: number;
+  checkInsQueued: number;
+  autoPaused: number;
 };
 
 export type LoginTokenRecord = {
@@ -174,6 +197,13 @@ export interface CaptainPlatformStore {
     selected: boolean,
     now: Date
   ): Promise<void>;
+  markTripActivity(userId: string, tripId: string, now: Date): Promise<void>;
+  respondToTrackingCheckIn(
+    userId: string,
+    tripId: string,
+    action: "keep" | "pause",
+    now: Date
+  ): Promise<Trip>;
   createTripPlanDraft(userId: string, request: string, sourceMessageId: string | null, now: Date): Promise<TripPlanDraft>;
   getTripPlanDraft(userId: string, draftId: string, now: Date): Promise<TripPlanDraft | null>;
   findOpenTripPlanDraft(userId: string, now: Date): Promise<TripPlanDraft | null>;
@@ -186,6 +216,9 @@ export interface CaptainPlatformStore {
   completeSearchRun(workerId: string, runId: string, providerRequestId: string, offers: CompletedProviderOffer[], now: Date): Promise<void>;
   deferSearchRun(workerId: string, runId: string, until: Date, reason: string, now: Date): Promise<void>;
   failSearchRun(workerId: string, runId: string, error: string, retryAfterMs: number | null, now: Date): Promise<void>;
+  maintainTracking(now: Date): Promise<TrackingMaintenance>;
+  finalizeFarFutureBaseline(searchSpecId: string, now: Date): Promise<void>;
+  enqueueDueDigests(now: Date): Promise<number>;
   pruneWatchData(now: Date): Promise<void>;
   evaluateTripsForSearchSpec(searchSpecId: string, now: Date): Promise<number>;
   enqueueInventoryGapForSearchSpec(searchSpecId: string, now: Date): Promise<number>;

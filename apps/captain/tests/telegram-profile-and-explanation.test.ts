@@ -6,9 +6,11 @@ import type { RecommendationSnapshot } from "@agents/flight-store";
 import {
   CAPTAIN_NEW_USER_GREETING,
   CAPTAIN_PREFERENCES_INTRO,
+  explainNotification,
   explainRecommendation,
   parseAirlinePreferences,
   parseProfileCallback,
+  parseTrackingCallback,
   repliedToTelegramMessageId
 } from "../agent/channels/telegram.js";
 
@@ -38,6 +40,22 @@ describe("Telegram profile onboarding", () => {
       excludedAirlineCodes: []
     });
   });
+
+  it("parses inactivity callbacks without accepting malformed Trip IDs", () => {
+    expect(parseTrackingCallback(
+      "captain-watch:keep:00000000-0000-4000-8000-000000000001"
+    )).toEqual({
+      action: "keep",
+      tripId: "00000000-0000-4000-8000-000000000001"
+    });
+    expect(parseTrackingCallback(
+      "captain-watch:pause:00000000-0000-4000-8000-000000000001"
+    )).toEqual({
+      action: "pause",
+      tripId: "00000000-0000-4000-8000-000000000001"
+    });
+    expect(parseTrackingCallback("captain-watch:pause:not-a-trip")).toBeNull();
+  });
 });
 
 describe("quoted recommendation explanations", () => {
@@ -58,6 +76,29 @@ describe("quoted recommendation explanations", () => {
     expect(explanation).toContain("GBP 1124.77");
     expect(explanation).toContain("£175.77");
     expect(explanation).toContain("GBP 949.00");
+    expect(explanation).toContain("https://ba.com/verified-fare");
+  });
+
+  it("explains the exact historical price-rise alert", () => {
+    const current = offer("current", "125.00", 7_200);
+    const explanation = explainNotification({
+      id: "notification",
+      userId: "user",
+      tripId: "trip",
+      telegramChatId: 1,
+      kind: "price_rise",
+      attempts: 0,
+      telegramMessageId: 42,
+      payload: {
+        current,
+        increase: 25,
+        sevenDayLow: 100,
+        percent: 25
+      }
+    });
+
+    expect(explanation).toContain("up £25.00 (25%)");
+    expect(explanation).toContain("seven-day low of £100.00");
     expect(explanation).toContain("https://ba.com/verified-fare");
   });
 });

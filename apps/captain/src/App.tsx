@@ -137,7 +137,12 @@ export function App() {
 
           {tripData?.watch?.delayReason && (
             <div className="notice notice-delay">
-              <strong>Tracking is delayed.</strong> {tripData.watch.delayReason} Your last verified results remain below.
+              <strong>Tracking update.</strong> {tripData.watch.delayReason}{" "}
+              {offers.length > 0
+                ? "Your last checked results remain below."
+                : tripData.watch.status === "scheduled"
+                  ? "I’ll check again when regular tracking starts."
+                  : "I’ll keep trying on the normal schedule."}
             </div>
           )}
           {error && <div className="notice">{error}</div>}
@@ -729,12 +734,44 @@ function agentRunningLabel(
 ): string {
   if (!trip) return "";
   if (trip.status === "paused" || watch?.status === "paused") return "Paused";
+  if (watch?.status === "scheduled" && watch.trackingStartsAt) {
+    return `Scheduled · starts ${dateLabel(watch.trackingStartsAt.slice(0, 10))}`;
+  }
   if (watch?.nextCheckAt) {
     const next = scheduleTime(watch.nextCheckAt);
     return next === "Due now" ? "Checking soon" : `Next check ${next.toLowerCase()}`;
   }
   if (watch?.lastCheckAt) return `Checked ${relativeTime(watch.lastCheckAt)}`;
   return "Tracking";
+}
+
+function trackingStateLabel(
+  watch: TripPayload["watch"] | null,
+  trip: NonNullable<TripPayload["trip"]>
+): string {
+  if (trip.status === "paused" || watch?.status === "paused") return "Paused";
+  if (watch?.status === "scheduled" && watch.trackingStartsAt) {
+    return `Scheduled — starts ${dateLabel(watch.trackingStartsAt.slice(0, 10))}`;
+  }
+  return "Active";
+}
+
+function notificationModeLabel(mode: TravellerProfile["notificationMode"]): string {
+  return ({
+    smart: "Smart",
+    daily: "Daily",
+    changes_only: "Changes only",
+    off: "Off"
+  })[mode];
+}
+
+function notificationModeDescription(mode: TravellerProfile["notificationMode"]): string {
+  return ({
+    smart: "One useful daily update while active, with important changes sooner near departure.",
+    daily: "One combined update every active day.",
+    changes_only: "Only baselines, activations, and meaningful changes.",
+    off: "Keep tracking silently without Telegram updates."
+  })[mode];
 }
 
 function TripControls({
@@ -814,7 +851,11 @@ function Preferences({
   const [ranking, setRanking] = useState(profile.rankingMode);
   const [preferred, setPreferred] = useState<string[]>(profile.preferredAirlineCodes);
   const [excluded, setExcluded] = useState<string[]>(profile.excludedAirlineCodes);
-  const [alertsEnabled, setAlertsEnabled] = useState(profile.alertsEnabled);
+  const [notificationMode, setNotificationMode] = useState(profile.notificationMode);
+  const [digestHour, setDigestHour] = useState(profile.digestHourLocal);
+  const [priceRiseAlerts, setPriceRiseAlerts] = useState(profile.priceRiseAlertsEnabled);
+  const [betterOptionAlerts, setBetterOptionAlerts] = useState(profile.betterOptionAlertsEnabled);
+  const [trackingCheckins, setTrackingCheckins] = useState(profile.trackingCheckinsEnabled);
   const [maxAlerts, setMaxAlerts] = useState<1 | 2>(profile.maxAlertsPerDay);
   const [quietHoursEnabled, setQuietHoursEnabled] = useState(profile.quietHoursEnabled);
   const [quietStart, setQuietStart] = useState(profile.quietHoursStart);
@@ -851,7 +892,12 @@ function Preferences({
         rankingMode: ranking,
         preferredAirlineCodes: preferred.slice(0, 12),
         excludedAirlineCodes: excluded.slice(0, 12),
-        alertsEnabled,
+        alertsEnabled: notificationMode !== "off",
+        notificationMode,
+        digestHourLocal: digestHour,
+        priceRiseAlertsEnabled: priceRiseAlerts,
+        betterOptionAlertsEnabled: betterOptionAlerts,
+        trackingCheckinsEnabled: trackingCheckins,
         maxAlertsPerDay: maxAlerts,
         quietHoursEnabled,
         quietHoursStart: quietStart,
@@ -904,12 +950,15 @@ function Preferences({
         <details className="settings-card settings-disclosure" open>
           <summary>
             <span><strong>Tracking</strong></span>
-            <em>{trip.status === "paused" ? "Paused" : "Active"}</em>
+            <em>{trackingStateLabel(watch, trip)}</em>
           </summary>
           <div className="settings-body tracking-settings">
             <dl className="settings-list">
               <div><dt>Last check</dt><dd>{watch?.lastCheckAt ? relativeTime(watch.lastCheckAt) : "Not checked yet"}</dd></div>
-              <div><dt>Next check</dt><dd>{watch?.nextCheckAt ? scheduleTime(watch.nextCheckAt) : "Not scheduled"}</dd></div>
+              <div>
+                <dt>{watch?.status === "scheduled" ? "Tracking starts" : "Next check"}</dt>
+                <dd>{watch?.nextCheckAt ? scheduleTime(watch.nextCheckAt) : "Not scheduled"}</dd>
+              </div>
               <div><dt>Verified results</dt><dd>{tripData.offers.length}</dd></div>
               <div><dt>Schedule</dt><dd>Adaptive</dd></div>
             </dl>
@@ -1099,28 +1148,74 @@ function Preferences({
       <details className="settings-card settings-disclosure">
         <summary>
           <span><strong>Notifications</strong></span>
-          <em>{alertsEnabled ? "On" : "Off"}</em>
+          <em>{notificationModeLabel(notificationMode)}</em>
         </summary>
         <div className="settings-body">
           <form onSubmit={(event) => void saveProfile(event, "notifications")}>
+            <label>
+              Notification mode
+              <select
+                value={notificationMode}
+                onChange={(event) => setNotificationMode(
+                  event.target.value as TravellerProfile["notificationMode"]
+                )}
+              >
+                <option value="smart">Smart</option>
+                <option value="daily">Daily</option>
+                <option value="changes_only">Changes only</option>
+                <option value="off">Off</option>
+              </select>
+              <small>{notificationModeDescription(notificationMode)}</small>
+            </label>
+            <label>
+              Daily update time
+              <input
+                type="time"
+                step={3600}
+                disabled={!["smart", "daily"].includes(notificationMode)}
+                value={`${String(digestHour).padStart(2, "0")}:00`}
+                onChange={(event) => setDigestHour(Number(event.target.value.slice(0, 2)))}
+              />
+            </label>
             <label className="switch-setting">
-              <span><strong>Improvement alerts</strong><small>Initial results and meaningful improvements.</small></span>
+              <span><strong>Price rise alerts</strong><small>Warn when the watched option rises meaningfully.</small></span>
               <input
                 type="checkbox"
                 role="switch"
-                checked={alertsEnabled}
-                onChange={(event) => setAlertsEnabled(event.target.checked)}
+                disabled={notificationMode === "off"}
+                checked={priceRiseAlerts}
+                onChange={(event) => setPriceRiseAlerts(event.target.checked)}
+              />
+            </label>
+            <label className="switch-setting">
+              <span><strong>Better option alerts</strong><small>Tell me when Captain finds a meaningfully better flight.</small></span>
+              <input
+                type="checkbox"
+                role="switch"
+                disabled={notificationMode === "off"}
+                checked={betterOptionAlerts}
+                onChange={(event) => setBetterOptionAlerts(event.target.checked)}
+              />
+            </label>
+            <label className="switch-setting">
+              <span><strong>Tracking check-ins</strong><small>Ask after seven quiet days before pausing.</small></span>
+              <input
+                type="checkbox"
+                role="switch"
+                disabled={notificationMode === "off"}
+                checked={trackingCheckins}
+                onChange={(event) => setTrackingCheckins(event.target.checked)}
               />
             </label>
             <label>
-              Maximum alerts in 24 hours
+              Immediate alert limit
               <select
                 value={maxAlerts}
-                disabled={!alertsEnabled}
+                disabled={notificationMode === "off"}
                 onChange={(event) => setMaxAlerts(Number(event.target.value) as 1 | 2)}
               >
-                <option value={1}>1 improvement alert</option>
-                <option value={2}>2 improvement alerts</option>
+                <option value={1}>1 in 24 hours</option>
+                <option value={2}>2 in 24 hours</option>
               </select>
             </label>
             <label className="switch-setting">

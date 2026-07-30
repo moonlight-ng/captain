@@ -205,6 +205,7 @@ async function getTrip(
       { headers: noStore() }
     );
   }
+  await services.platformStore.markTripActivity(userId, trip.id, new Date());
   const [watch, offers, recommendation, selections, activity] = await Promise.all([
     services.platformStore.getWatch(userId, trip.id),
     services.trips.offers(userId, trip.id),

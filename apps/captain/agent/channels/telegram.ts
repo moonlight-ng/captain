@@ -23,6 +23,7 @@ import {
 } from "@agents/telegram-core";
 import {
   TripLimitError,
+  type OfferSnapshot,
   type TravellerProfile,
   type TripPlanDraft,
   type TripPlanResult
@@ -30,6 +31,7 @@ import {
 import {
   BetaCapacityError,
   BetaLaunchGateError,
+  type CaptainNotification,
   type CaptainUser,
   type RecommendationSnapshot
 } from "@agents/flight-store";
@@ -121,7 +123,7 @@ export default telegramChannel({
         );
         await postCurrencyQuestion(ctx);
       } else {
-        const welcome = "I’m Captain. I track up to three Trips at a time and report suitable Duffel options and price changes.";
+        const welcome = "I’m Captain. I can watch up to three Trips and let you know when prices or better options change.";
         await services.platformStore.appendMessage(user.id, "assistant", welcome, new Date());
         await postWithLink(
           ctx,
@@ -180,9 +182,11 @@ export default telegramChannel({
         user.id,
         quotedMessageId
       );
-      const snapshot = notification ? snapshotFromPayload(notification.payload) : null;
-      if (snapshot) {
-        const explanation = explainRecommendation(snapshot);
+      if (notification) {
+        await services.platformStore.markTripActivity(user.id, notification.tripId, new Date());
+      }
+      const explanation = notification ? explainNotification(notification) : null;
+      if (explanation) {
         await services.platformStore.appendMessage(user.id, "assistant", explanation, new Date());
         await ctx.telegram.post(explanation);
         return null;
@@ -194,11 +198,12 @@ export default telegramChannel({
         ? await services.platformStore.getRecommendation(user.id, trip.id)
         : null;
       if (recommendation) {
+        await services.platformStore.markTripActivity(user.id, trip!.id, new Date());
         const explanation = explainRecommendation(recommendation.snapshot);
         await services.platformStore.appendMessage(user.id, "assistant", explanation, new Date());
         await ctx.telegram.post(explanation);
       } else {
-        await ctx.telegram.post("I don’t have a verified recommendation for your Trip yet. I’ll explain it as soon as one passes both checks.");
+        await ctx.telegram.post("I don’t have a recommendation for this Trip yet. I’ll explain it as soon as I find one.");
       }
       return null;
     }
@@ -301,6 +306,11 @@ export default telegramChannel({
             : "Captain’s 25-person beta is full right now."
         });
       }
+      return;
+    }
+    const trackingAction = parseTrackingCallback(query.data);
+    if (trackingAction) {
+      await handleTrackingCallback(ctx, query, trackingAction);
       return;
     }
     const action = parseTripPlanCallback(query.data);
@@ -531,7 +541,7 @@ async function postNewUserOnboarding(
 
 async function postCurrencyQuestion(ctx: TelegramContext): Promise<void> {
   await ctx.telegram.post({
-    text: "First, choose USD or GBP. Captain tracks fares through Duffel and normalizes between USD and GBP when needed. Some airlines or routes may not appear in inventory yet.",
+    text: "First, choose the currency you’d like me to use for fares.",
     reply_markup: {
       inline_keyboard: [[
         { text: "USD", callback_data: "captain-profile:currency:USD" },
@@ -673,6 +683,80 @@ export function parseProfileCallback(
     : null;
 }
 
+export function parseTrackingCallback(data: string | undefined): {
+  action: "keep" | "pause";
+  tripId: string;
+} | null {
+  const match = /^captain-watch:(keep|pause):([0-9a-f-]{36})$/u.exec(data ?? "");
+  return match?.[1] && match[2]
+    ? { action: match[1] as "keep" | "pause", tripId: match[2] }
+    : null;
+}
+
+async function handleTrackingCallback(
+  ctx: TelegramContext,
+  query: TelegramCallbackQuery,
+  action: { action: "keep" | "pause"; tripId: string }
+): Promise<void> {
+  const telegramUserId = safeId(query.from.id);
+  const telegramChatId = safeId(query.message?.chat.id ?? "");
+  if (telegramUserId === null || telegramChatId === null) return;
+  const services = await getCaptainServices();
+  let user: CaptainUser;
+  try {
+    user = await services.platformStore.ensureTelegramUser({
+      telegramUserId,
+      telegramChatId,
+      username: query.from.username ?? null,
+      firstName: query.from.firstName ?? null,
+      lastName: query.from.lastName ?? null
+    }, new Date());
+  } catch (error) {
+    if (!(error instanceof BetaCapacityError || error instanceof BetaLaunchGateError)) throw error;
+    await ctx.telegram.answerCallbackQuery({
+      callbackQueryId: query.id,
+      text: "Captain isn’t available for this account right now."
+    });
+    return;
+  }
+  const claimed = await services.platformStore.claimTelegramUpdate(
+    `captain:callback:${query.id}`,
+    user.id,
+    new Date()
+  );
+  if (!claimed) {
+    await ctx.telegram.answerCallbackQuery({
+      callbackQueryId: query.id,
+      text: "Already updated."
+    });
+    return;
+  }
+  try {
+    const trip = await services.platformStore.respondToTrackingCheckIn(
+      user.id,
+      action.tripId,
+      action.action,
+      new Date()
+    );
+    await clearCallbackButtons(ctx, query);
+    const route = trip.title.replace(/\s+to\s+/giu, " → ");
+    const message = action.action === "keep"
+      ? `Got it — I’ll keep watching ${route}.`
+      : `Okay — I paused ${route}. You can resume it from Agent settings.`;
+    await ctx.telegram.answerCallbackQuery({
+      callbackQueryId: query.id,
+      text: action.action === "keep" ? "Tracking continues." : "Tracking paused."
+    });
+    await services.platformStore.appendMessage(user.id, "assistant", message, new Date());
+    await ctx.telegram.post(message);
+  } catch {
+    await ctx.telegram.answerCallbackQuery({
+      callbackQueryId: query.id,
+      text: "I couldn’t update that trip."
+    });
+  }
+}
+
 export function parseAirlinePreferences(content: string): {
   preferredAirlineCodes: string[];
   excludedAirlineCodes: string[];
@@ -751,6 +835,43 @@ function snapshotFromPayload(payload: Record<string, unknown>): RecommendationSn
     : null;
 }
 
+export function explainNotification(notification: CaptainNotification): string | null {
+  const snapshot = snapshotFromPayload(notification.payload);
+  if (snapshot) return explainRecommendation(snapshot);
+  if (notification.kind === "price_rise") {
+    const current = record(notification.payload.current) as unknown as OfferSnapshot | null;
+    if (!current) return null;
+    const increase = Number(notification.payload.increase);
+    const low = Number(notification.payload.sevenDayLow);
+    const percent = Number(notification.payload.percent);
+    if (![increase, low, percent].every(Number.isFinite)) return null;
+    const evidence = current.evidence[0];
+    return [
+      `The option was ${current.currency} ${current.priceAmount}, up ${formatMoney(increase, current.currency)} (${Math.round(percent)}%) from its seven-day low of ${formatMoney(low, current.currency)}.`,
+      evidence ? `I checked it here: ${evidence.url}` : ""
+    ].filter(Boolean).join("\n");
+  }
+  if (notification.kind === "daily_digest" && Array.isArray(notification.payload.trips)) {
+    const lines = notification.payload.trips.flatMap((value) => {
+      const trip = record(value);
+      if (!trip) return [];
+      const recommendation = record(trip.recommendation);
+      const digestSnapshot = snapshotFromPayload(
+        record(recommendation?.snapshot)?.pendingDigestChange
+          ? { snapshot: record(recommendation?.snapshot)!.pendingDigestChange }
+          : { snapshot: recommendation?.snapshot }
+      );
+      const current = digestSnapshot?.current;
+      if (!current) return [];
+      return [`• ${String(trip.tripTitle ?? "Trip")}: ${current.currency} ${current.priceAmount}, checked ${new Date(current.observedAt).toISOString()}.`];
+    });
+    return lines.length > 0
+      ? ["That update used the saved results available when I sent it:", ...lines].join("\n")
+      : null;
+  }
+  return null;
+}
+
 export function explainRecommendation(snapshot: RecommendationSnapshot): string {
   const current = snapshot.current;
   const previous = snapshot.previous;
@@ -760,9 +881,9 @@ export function explainRecommendation(snapshot: RecommendationSnapshot): string 
   const source = evidence ? `\nEvidence: ${evidence.url}` : "";
   if (!previous) {
     return [
-      `This was the first verified ${titleCase(snapshot.rankingMode)} result for the Trip.`,
+      `This was the first ${titleCase(snapshot.rankingMode)} option I found for the Trip.`,
       `It was ${current.currency} ${current.priceAmount}, ${durationLabel(currentDuration)}, ${stopLabel(snapshotNumber(current.snapshot, "stops"))}.`,
-      "It passed both discovery and verification checks; it is not a claim that every fare on the web was found."
+      "Prices and availability can change, so use the source below to check the latest details."
     ].join("\n") + source;
   }
   const priceChange = previous.price - current.price;

@@ -129,11 +129,19 @@ export type Trip = {
 export type Watch = {
   id: string;
   tripId: string;
-  status: "active" | "paused" | "completed";
+  status: "active" | "scheduled" | "paused" | "completed";
   cadenceHours: number;
   nextCheckAt: string | null;
   lastCheckAt: string | null;
   lastManualRefreshAt: string | null;
+  trackingStartsAt: string | null;
+  baselineCompletedAt: string | null;
+  activatedAt: string | null;
+  lastUserActivityAt: string;
+  checkInSentAt: string | null;
+  autoPauseAt: string | null;
+  priceRiseItineraryKey: string | null;
+  priceRiseArmed: boolean;
   delayedAt: string | null;
   delayReason: string | null;
   createdAt: string;

@@ -1,4 +1,5 @@
 export type RankingMode = "cheapest" | "balanced" | "fastest";
+export type NotificationMode = "smart" | "daily" | "changes_only" | "off";
 
 export type TravellerProfile = {
   userId: string;
@@ -8,12 +9,17 @@ export type TravellerProfile = {
   preferredAirlineCodes: string[];
   excludedAirlineCodes: string[];
   alertsEnabled: boolean;
+  notificationMode: NotificationMode;
+  digestHourLocal: number;
+  priceRiseAlertsEnabled: boolean;
+  betterOptionAlertsEnabled: boolean;
+  trackingCheckinsEnabled: boolean;
   maxAlertsPerDay: 1 | 2;
   quietHoursEnabled: boolean;
   quietHoursStart: number;
   quietHoursEnd: number;
   onboardingCompletedAt: string | null;
-  onboardingStep: "currency" | "ranking" | "airlines" | "complete";
+  onboardingStep: "welcome" | "currency" | "ranking" | "airlines" | "complete";
   createdAt: string;
   updatedAt: string;
 };
@@ -56,10 +62,18 @@ export type Trip = {
 };
 
 export type Watch = {
-  status: "active" | "paused" | "completed";
+  status: "active" | "scheduled" | "paused" | "completed";
   nextCheckAt: string | null;
   lastCheckAt: string | null;
   lastManualRefreshAt: string | null;
+  trackingStartsAt: string | null;
+  baselineCompletedAt: string | null;
+  activatedAt: string | null;
+  lastUserActivityAt: string;
+  checkInSentAt: string | null;
+  autoPauseAt: string | null;
+  priceRiseItineraryKey: string | null;
+  priceRiseArmed: boolean;
   delayedAt: string | null;
   delayReason: string | null;
 };
