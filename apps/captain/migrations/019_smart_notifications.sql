@@ -35,6 +35,12 @@ alter table captain.watches
 update captain.watches
 set last_user_activity_at = coalesce(last_user_activity_at, now());
 
+alter table captain.watches
+  drop constraint if exists watches_status_check;
+alter table captain.watches
+  add constraint watches_status_check
+  check (status in ('active', 'scheduled', 'paused', 'completed'));
+
 update captain.watches watch
 set tracking_starts_at =
       ((trip.brief #>> '{departureWindow,start}')::date - 30)::timestamp at time zone 'UTC',
@@ -59,12 +65,6 @@ where trip.id = watch.trip_id
 
 alter table captain.watches
   alter column last_user_activity_at set not null;
-
-alter table captain.watches
-  drop constraint if exists watches_status_check;
-alter table captain.watches
-  add constraint watches_status_check
-  check (status in ('active', 'scheduled', 'paused', 'completed'));
 
 drop index if exists captain.captain_watches_due_idx;
 create index captain_watches_due_idx on captain.watches (next_check_at)
