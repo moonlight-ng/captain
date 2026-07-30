@@ -77,6 +77,10 @@ jobs:
         env:
           FAILED_RUN_ID: ${{ github.event.workflow_run.id }}
           FAILED_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          REPAIR_WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SOURCE_WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          SOURCE_WORKFLOW_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
+          SOURCE_WORKFLOW_COMPLETED_AT: ${{ github.event.workflow_run.updated_at }}
           GH_TOKEN: ${{ github.token }}
         run: |
           changes="$(git status --porcelain=v1 --untracked-files=all | sed '/^?? \.codex-artifacts\//d')"
@@ -89,6 +93,10 @@ jobs:
             --agent captain \
             --run-id "$FAILED_RUN_ID" \
             --failed-run-url "$FAILED_RUN_URL" \
+            --repair-workflow-url "$REPAIR_WORKFLOW_URL" \
+            --source-workflow-conclusion "$SOURCE_WORKFLOW_CONCLUSION" \
+            --source-workflow-started-at "$SOURCE_WORKFLOW_STARTED_AT" \
+            --source-workflow-completed-at "$SOURCE_WORKFLOW_COMPLETED_AT" \
             --report .codex-artifacts/codex-report.md \
             --output-dir apps/pilot/agent-improvements
           rm -rf .codex-artifacts

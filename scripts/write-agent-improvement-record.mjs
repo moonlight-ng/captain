@@ -10,6 +10,19 @@ if (!["captain", "concierge", "curiosity-study"].includes(agent)) {
 
 const runId = requiredOption(options, "run-id");
 const failedRunUrl = requiredOption(options, "failed-run-url");
+const repairWorkflowUrl = optionalOption(options, "repair-workflow-url");
+const sourceWorkflowConclusion = optionalOption(
+  options,
+  "source-workflow-conclusion"
+);
+const sourceWorkflowStartedAt = optionalOption(
+  options,
+  "source-workflow-started-at"
+);
+const sourceWorkflowCompletedAt = optionalOption(
+  options,
+  "source-workflow-completed-at"
+);
 const reportPath = resolve(requiredOption(options, "report"));
 const outputDir = resolve(
   options.get("output-dir") ?? "apps/pilot/agent-improvements"
@@ -33,6 +46,11 @@ const record = {
   agent,
   recordedAt: new Date().toISOString(),
   failedRunUrl,
+  ...(repairWorkflowUrl
+    ? { repairWorkflowUrl, verificationStatus: "passed" }
+    : {}),
+  ...(sourceWorkflowConclusion ? { sourceWorkflowConclusion } : {}),
+  ...durationFields(sourceWorkflowStartedAt, sourceWorkflowCompletedAt),
   summary: report.slice(0, 4_000),
   filesChanged
 };
@@ -83,4 +101,18 @@ function requiredOption(options, name) {
   const value = options.get(name);
   if (!value) throw new Error(`Missing --${name}`);
   return value;
+}
+
+function optionalOption(options, name) {
+  return options.get(name)?.trim() || undefined;
+}
+
+function durationFields(startedAt, completedAt) {
+  if (!startedAt || !completedAt) return {};
+  const started = Date.parse(startedAt);
+  const completed = Date.parse(completedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(completed)) {
+    throw new Error("Workflow timestamps must be valid ISO timestamps");
+  }
+  return { sourceWorkflowDurationMs: Math.max(0, completed - started) };
 }

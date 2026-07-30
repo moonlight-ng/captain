@@ -982,7 +982,16 @@ async function transcribeVoice(input: { fileId: string; size?: number }): Promis
   try {
     return (await transcribe({
       model: process.env.TRANSCRIPTION_MODEL?.trim() || "openai/gpt-4o-mini-transcribe",
-      audio
+      audio,
+      providerOptions: {
+        gateway: {
+          user: "opemipo",
+          tags: [
+            "agent:captain",
+            "operation:owner-voice-transcription"
+          ]
+        }
+      }
     })).text.trim();
   } catch (error) {
     if (NoTranscriptGeneratedError.isInstance(error)) return "";

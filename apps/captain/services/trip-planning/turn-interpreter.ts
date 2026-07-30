@@ -119,6 +119,13 @@ export function createTripTurnInterpreter(options: {
           `Today in ${input.timeZone}: ${localIsoDate(input.now, input.timeZone)}`
         ].join("\n\n"),
         providerOptions: {
+          gateway: {
+            user: "captain",
+            tags: [
+              "agent:captain",
+              "operation:trip-turn-interpretation"
+            ]
+          },
           openai: { reasoningEffort: "none" }
         },
         maxOutputTokens: 1_200,

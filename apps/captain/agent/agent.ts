@@ -6,6 +6,14 @@ export default defineAgent({
     fallback: "openai/gpt-5.6-terra",
     events: { "session.started": () => process.env.AI_MODEL?.trim() || null }
   }),
+  modelOptions: {
+    providerOptions: {
+      gateway: {
+        user: "opemipo",
+        tags: ["agent:captain", "operation:owner-chat"]
+      }
+    }
+  },
   limits: {
     maxInputTokensPerSession: 100_000,
     maxOutputTokensPerSession: 20_000,
