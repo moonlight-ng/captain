@@ -15,9 +15,16 @@ import {
   isSessionLimitContinuationRequest,
   looksLikeSessionBudgetPrompt,
   partitionSessionLimitRequests,
+  progressTextForRequest,
+  progressTextFromAttribute,
+  statusTextForToolNames,
   storePendingSessionRotation,
   takePendingSessionRotation,
+  TELEGRAM_PROGRESS_ATTRIBUTE,
+  TelegramProgressTracker,
   telegramMessageUpdateKey,
+  toolNamesFromActions,
+  TRAVEL_PROGRESS_FALLBACK,
   type PendingSessionRotation,
   type SessionLimitInputRequest
 } from "@agents/telegram-core";
@@ -49,10 +56,17 @@ const credentials = {
   webhookSecretToken: () => required("TELEGRAM_WEBHOOK_SECRET_TOKEN")
 };
 const pendingSessionRotations = new Map<string, PendingSessionRotation>();
-const agentProgressMessages = new Map<string, { chatId: string; messageId: string }>();
+const agentProgress = new TelegramProgressTracker();
 const pendingConfirmationPosts = new Set<string>();
 const PLANNING_PROGRESS_TEXT = "Working through the route and dates…";
-const AGENT_PROGRESS_TEXT = "Working on it…";
+const CAPTAIN_TOOL_STATUS: Readonly<Record<string, string>> = {
+  get_recent_context: "Checking the recent conversation…",
+  get_trip: "Checking your Trip…",
+  prepare_trip: PLANNING_PROGRESS_TEXT,
+  select_trip_flight: "Comparing the flight options…",
+  start_prepared_trip: "Starting your Trip…",
+  manage_trip: "Updating your Trip…"
+};
 const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. Your saved Trip is unchanged—please try again.";
 export const CAPTAIN_NEW_USER_GREETING =
   "Hi, I'm Captain! I can help you prepare for a flight by tracking suitable options and reporting price changes.";
@@ -280,7 +294,11 @@ export default telegramChannel({
           captain_user_id: user.id,
           telegram_user_id: String(telegramUserId),
           chat_id: String(telegramChatId),
-          message_id: String(messageId)
+          message_id: String(messageId),
+          [TELEGRAM_PROGRESS_ATTRIBUTE]: progressTextForRequest(content, {
+            context: "travel",
+            hasAttachments: Boolean(voice)
+          })
         },
         authenticator: "captain-telegram-webhook",
         issuer: "telegram",
@@ -408,19 +426,70 @@ export default telegramChannel({
     }
   },
   events: {
-    async "turn.started"(_data, channel, ctx) {
+    async "turn.started"(data, channel, ctx) {
       await channel.telegram.startTyping();
+      const initialStatusText = progressTextFromAttribute(
+        ctx.session.auth.current?.attributes[TELEGRAM_PROGRESS_ATTRIBUTE],
+        TRAVEL_PROGRESS_FALLBACK
+      );
+      const chatId = channel.telegram.chatId;
+      agentProgress.start({
+        sessionId: ctx.session.id,
+        chatId,
+        turnId: data.turnId,
+        statusText: initialStatusText,
+        onShow: async (statusText) => {
+          try {
+            const posted = await channel.telegram.post(statusText);
+            return posted.id ?? null;
+          } catch (error) {
+            console.error(JSON.stringify({
+              event: "captain.telegram_progress_start_failed",
+              error: error instanceof Error ? error.name : "UnknownError"
+            }));
+            return null;
+          }
+        },
+        onDiscard: async (messageId) => {
+          try {
+            await channel.telegram.request("deleteMessage", {
+              chat_id: chatId,
+              message_id: Number(messageId)
+            });
+          } catch (error) {
+            console.error(JSON.stringify({
+              event: "captain.telegram_progress_clear_failed",
+              error: error instanceof Error ? error.name : "UnknownError"
+            }));
+          }
+        },
+        onTyping: () => channel.telegram.startTyping()
+      });
+    },
+    async "actions.requested"(data, channel, ctx) {
+      await channel.telegram.startTyping();
+      const progress = agentProgress.updateStatus(ctx.session.id, data.turnId);
+      if (!progress) return;
+      const label = statusTextForToolNames(
+        toolNamesFromActions(data.actions as never),
+        CAPTAIN_TOOL_STATUS,
+        progress.statusText
+      );
+      if (label === progress.statusText) return;
+      if (!progress.messageId) {
+        progress.statusText = label;
+        return;
+      }
       try {
-        const posted = await channel.telegram.post(AGENT_PROGRESS_TEXT);
-        if (posted.id) {
-          agentProgressMessages.set(ctx.session.id, {
-            chatId: channel.telegram.chatId,
-            messageId: posted.id
-          });
-        }
+        await channel.telegram.request("editMessageText", {
+          chat_id: progress.chatId,
+          message_id: Number(progress.messageId),
+          text: label
+        });
+        progress.statusText = label;
       } catch (error) {
         console.error(JSON.stringify({
-          event: "captain.telegram_progress_start_failed",
+          event: "captain.telegram_progress_update_failed",
           error: error instanceof Error ? error.name : "UnknownError"
         }));
       }
@@ -492,7 +561,7 @@ export default telegramChannel({
     },
     async "message.completed"(data, channel, ctx) {
       if (data.finishReason === "tool-calls" || !data.message) return;
-      await clearAgentProgress(channel, ctx.session.id);
+      await clearAgentProgress(ctx.session.id);
       const userId = authUserId(ctx.session.auth.current?.attributes.captain_user_id);
       let message = data.message;
       if (userId) {
@@ -502,11 +571,11 @@ export default telegramChannel({
       }
       await channel.telegram.post(message);
     },
-    async "turn.completed"(_data, channel, ctx) {
-      await clearAgentProgress(channel, ctx.session.id);
+    async "turn.completed"(_data, _channel, ctx) {
+      await clearAgentProgress(ctx.session.id);
     },
     async "turn.failed"(_data, channel, ctx) {
-      await clearAgentProgress(channel, ctx.session.id);
+      await clearAgentProgress(ctx.session.id);
       await channel.telegram.post(PROCESSING_FAILURE_TEXT);
     }
   }
@@ -1159,28 +1228,8 @@ async function withPlanningProgress<T>(
   }
 }
 
-async function clearAgentProgress(
-  channel: {
-    telegram: {
-      request(method: string, body?: Record<string, unknown>): Promise<unknown>;
-    };
-  },
-  sessionId: string
-): Promise<void> {
-  const progress = agentProgressMessages.get(sessionId);
-  if (!progress) return;
-  agentProgressMessages.delete(sessionId);
-  try {
-    await channel.telegram.request("deleteMessage", {
-      chat_id: progress.chatId,
-      message_id: Number(progress.messageId)
-    });
-  } catch (error) {
-    console.error(JSON.stringify({
-      event: "captain.telegram_progress_clear_failed",
-      error: error instanceof Error ? error.name : "UnknownError"
-    }));
-  }
+async function clearAgentProgress(sessionId: string): Promise<void> {
+  await agentProgress.clear(sessionId);
 }
 
 export function parseTripPlanCallback(data: string | undefined): {
