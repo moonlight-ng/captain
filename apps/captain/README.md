@@ -114,6 +114,6 @@ conversations:
   runner. A validated code change is pushed to a dedicated branch and proposed
   as a pull request. Nothing is merged or deployed automatically.
 
-The GitHub repository requires `AI_GATEWAY_API_KEY` for Captain's model evals,
+The GitHub repository requires `CAPTAIN_AI_GATEWAY_API_KEY` for Captain's model evals,
 `OPENAI_API_KEY` for the Codex repair action, and
 `FLY_API_TOKEN_CAPTAIN` for the gated deployment.

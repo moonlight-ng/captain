@@ -1,4 +1,4 @@
-import { createGateway, generateObject } from "ai";
+import { generateObject } from "ai";
 import { z } from "zod";
 
 import {
@@ -13,6 +13,7 @@ import {
   type TripPlanTurnState
 } from "@agents/flight-domain";
 
+import { createCaptainGateway } from "../ai/gateway.js";
 import {
   allowedModelAirportCodes,
   orderedAirportCodesFromText
@@ -88,7 +89,7 @@ export function createTripTurnInterpreter(options: {
   if (!options.apiKey) {
     return async (input) => deterministicTripTurn(input);
   }
-  const gateway = createGateway({ apiKey: options.apiKey });
+  const gateway = createCaptainGateway(options.apiKey);
   return async (input) => {
     const fallback = deterministicTripTurn(input);
     try {
