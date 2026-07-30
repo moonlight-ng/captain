@@ -5,7 +5,6 @@ on:
   pull_request:
     paths:
       - apps/captain/**
-      - packages/conversation-core/**
       - packages/flight-domain/**
       - packages/flight-store/**
       - packages/observability/**
@@ -15,14 +14,13 @@ on:
       - pnpm-workspace.yaml
       - .github/codex/prompts/captain-self-improvement.md
       - .github/workflows/captain-ci.yml
-      - .github/workflows/captain-daily-self-test.yml
+      - .github/workflows/captain-hourly-self-test.yml
       - .github/workflows/captain-self-improvement.yml
       - .github/workflows/deploy-captain.yml
   push:
     branches: [main]
     paths:
       - apps/captain/**
-      - packages/conversation-core/**
       - packages/flight-domain/**
       - packages/flight-store/**
       - packages/observability/**
@@ -32,7 +30,7 @@ on:
       - pnpm-workspace.yaml
       - .github/codex/prompts/captain-self-improvement.md
       - .github/workflows/captain-ci.yml
-      - .github/workflows/captain-daily-self-test.yml
+      - .github/workflows/captain-hourly-self-test.yml
       - .github/workflows/captain-self-improvement.yml
       - .github/workflows/deploy-captain.yml
 
