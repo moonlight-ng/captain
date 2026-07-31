@@ -224,12 +224,12 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           excluded_airline_codes
         ),
         alerts_enabled = case
-          when ${input.notificationMode ?? null} is not null
+          when ${input.notificationMode !== undefined}
             then ${input.notificationMode !== "off"}
           else coalesce(${input.alertsEnabled ?? null}, alerts_enabled)
         end,
         notification_mode = case
-          when ${input.notificationMode ?? null} is not null
+          when ${input.notificationMode !== undefined}
             then ${input.notificationMode ?? null}
           when ${input.alertsEnabled ?? null} = false then 'off'
           when ${input.alertsEnabled ?? null} = true and notification_mode = 'off' then 'smart'
