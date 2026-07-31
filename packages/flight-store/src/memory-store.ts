@@ -6,8 +6,7 @@ import {
   TripLimitError,
   TripNotFoundError,
   TripVersionConflictError,
-  EMPTY_TRIP_PLAN_PARTIAL,
-  EMPTY_TRIP_PLAN_TURN_STATE,
+  EMPTY_TRIP_DRAFT_STATE,
   type CreateTripInput,
   type OfferSnapshot,
   type TripCreationResult,
@@ -548,11 +547,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       status: "collecting",
       revision: 1,
       conversation: [request.trim()],
-      partial: clone(EMPTY_TRIP_PLAN_PARTIAL),
-      plan: null,
-      unresolvedFields: [],
-      inferredFields: {},
-      turnState: clone(EMPTY_TRIP_PLAN_TURN_STATE),
+      state: clone(EMPTY_TRIP_DRAFT_STATE),
+      confirmationSnapshot: null,
       sourceMessageIds: sourceMessageId ? [sourceMessageId] : [],
       tripId: null,
       createIdempotencyKey: null,
@@ -625,7 +621,11 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       const watch = trip ? await this.getWatch(userId, trip.id) : null;
       return trip && watch ? { draft: current, result: { trip, watch, created: false } } : null;
     }
-    if (current.status !== "awaiting_confirmation" || current.revision !== expectedRevision || !current.plan) return null;
+    if (
+      current.status !== "awaiting_confirmation"
+      || current.revision !== expectedRevision
+      || !current.confirmationSnapshot
+    ) return null;
     const starting = this.#updateTripPlanDraft(
       userId,
       draftId,
@@ -640,7 +640,12 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     if (!starting) return null;
     const confirmation = (async () => {
       try {
-        const result = await this.createTrip(userId, current.plan!.input, specs, now);
+        const result = await this.createTrip(
+          userId,
+          current.confirmationSnapshot!.input,
+          specs,
+          now
+        );
         const started = this.#updateTripPlanDraft(
           userId,
           draftId,

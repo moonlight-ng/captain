@@ -5,7 +5,7 @@ import {
   daysBetween,
   formatCalendarDate,
   parseIsoDate,
-  tripPlanPartialSchema,
+  tripDraftStateSchema,
   weekdayName
 } from "../src/trip-planning.js";
 
@@ -26,13 +26,19 @@ describe("trip planning calendar", () => {
     expect(formatCalendarDate("2026-08-17")).toContain("Monday");
   });
 
-  it("loads drafts saved before multi-city legs were introduced", () => {
-    expect(tripPlanPartialSchema.parse({
-      originAirports: ["LOS"],
-      destinationAirports: ["NYC"],
+  it("validates the version-3 canonical state", () => {
+    expect(tripDraftStateSchema.parse({
+      version: 3,
       tripType: "round_trip",
-      departureDate: null,
-      returnDate: "2026-08-16",
+      legs: [{
+        originAirports: ["LOS"],
+        destinationAirports: ["NYC"],
+        departure: { kind: "exact", date: "2026-08-09" }
+      }, {
+        originAirports: ["NYC"],
+        destinationAirports: ["LOS"],
+        departure: { kind: "exact", date: "2026-08-16" }
+      }],
       travellers: null,
       cabin: "economy",
       maxStops: 1,
@@ -40,6 +46,6 @@ describe("trip planning calendar", () => {
       maximumPrice: null,
       preferredAirlines: [],
       excludedAirlines: []
-    }).legs).toEqual([]);
+    }).version).toBe(3);
   });
 });

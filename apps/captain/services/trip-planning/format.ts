@@ -7,10 +7,18 @@ import {
 } from "@agents/flight-domain";
 
 export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
-  if (!draft.plan) throw new Error("Cannot confirm an incomplete Trip draft");
-  const { brief } = draft.plan.input;
+  if (!draft.confirmationSnapshot) {
+    throw new Error("Cannot confirm an incomplete Trip draft");
+  }
+  const { brief } = draft.confirmationSnapshot.input;
   const travellers = totalTravellers(brief.travellers);
-  const defaults = new Set(Object.keys(draft.inferredFields));
+  const defaults = new Set([
+    ...(!draft.state.tripType ? ["tripType"] : []),
+    ...(!draft.state.travellers ? ["travellers"] : []),
+    ...(!draft.state.cabin ? ["cabin"] : []),
+    ...(draft.state.maxStops === null ? ["maxStops"] : []),
+    ...(!draft.state.currency ? ["currency"] : [])
+  ]);
   const legs = brief.legs ?? [];
   const isMultiCity = brief.tripType === "multi_city";
   const lines = [
@@ -21,10 +29,10 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
       ? legs.map((leg, index) =>
           `• Leg ${index + 1}: ${leg.originAirports.join("/")} → ${leg.destinationAirports.join("/")} · ${formatCalendarDate(leg.departureWindow.start)}`
         )
-      : [`• Depart: ${formatCalendarDate(draft.plan.departureDate)}`]),
-    ...(!isMultiCity && draft.plan.returnDate
+      : [`• Depart: ${formatCalendarDate(draft.confirmationSnapshot.departureDate)}`]),
+    ...(!isMultiCity && draft.confirmationSnapshot.returnDate
       ? [
-          `• Return: ${formatCalendarDate(draft.plan.returnDate)}`,
+          `• Return: ${formatCalendarDate(draft.confirmationSnapshot.returnDate)}`,
           `• Stay: ${brief.stayNights!.preferred} night${brief.stayNights!.preferred === 1 ? "" : "s"}`
         ]
       : !isMultiCity

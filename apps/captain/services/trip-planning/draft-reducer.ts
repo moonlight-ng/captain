@@ -1,304 +1,340 @@
 import {
-  stableJson,
-  type TripPlanFieldSource,
-  type TripPlanPartial,
-  type TripPlanPendingField,
-  type TripPlanTurnOperation,
-  type TripPlanTurnState
+  EMPTY_TRIP_DRAFT_STATE,
+  addIsoDays,
+  daysBetween,
+  isoDate,
+  parseIsoDate,
+  resolveTripDateIntent,
+  tripDraftStateSchema,
+  weekdayName,
+  type TripDraftDateSelection,
+  type TripDraftState
 } from "@agents/flight-domain";
 
-import type { InterpretedTripTurn } from "./turn-interpreter.js";
+import type {
+  ClearableField,
+  DateTarget,
+  TripDraftOperation,
+  TripTurnPatch
+} from "./turn-interpreter.js";
+import { tripTurnPatchSchema } from "./turn-interpreter.js";
 
-export type ReducedTripDraft = {
-  partial: TripPlanPartial;
-  fieldSources: Record<string, TripPlanFieldSource>;
-  operations: TripPlanTurnOperation[];
+export type AppliedTripTurnPatch = {
+  state: TripDraftState;
+  appliedOperations: TripDraftOperation[];
+  issue: string | null;
 };
 
-export function reduceTripDraft(input: {
-  prior: TripPlanPartial;
-  turnState: TripPlanTurnState;
-  turn: InterpretedTripTurn;
-  messageIndex: number;
-}): ReducedTripDraft {
-  const partial = canonicalizeTripPartial(input.prior);
-  const fieldSources = { ...input.turnState.fieldSources };
-  const operations: TripPlanTurnOperation[] = [];
-  const pending = new Set(input.turnState.pendingFields.map((item) => item.field));
-  const isEmpty = !hasRoute(partial) && !partial.departureDate;
-  const replaceItinerary = input.turn.intent === "repair"
-    || (isEmpty && input.turn.legs.length > 0)
-    || (input.turn.correction && input.turn.legs.every((leg) =>
-      leg.originAirports.length > 0 && leg.destinationAirports.length > 0
-    ));
-  const canFill = (field: TripPlanPendingField): boolean =>
-    isEmpty || replaceItinerary || input.turn.correction || pending.has(field);
+/**
+ * The only writer for TripDraftState.
+ *
+ * All operations are applied to a candidate and validated together. If any
+ * operation cannot be resolved, the entire patch is rejected and the previous
+ * state is returned unchanged.
+ */
+export function applyTripTurnPatch(input: {
+  state: TripDraftState;
+  patch: TripTurnPatch;
+  now: Date;
+  timeZone: string;
+}): AppliedTripTurnPatch {
+  const prior = tripDraftStateSchema.parse(input.state);
+  const patch = tripTurnPatchSchema.parse(input.patch);
+  const candidate = structuredClone(prior);
+  let issue: string | null = null;
 
-  if (input.turn.legs.length > 0) {
-    if (replaceItinerary) {
-      partial.legs = input.turn.legs.map((leg) => ({
-        originAirports: [...leg.originAirports],
-        destinationAirports: [...leg.destinationAirports],
-        departureDate: leg.departureDate
-      }));
-      record("legs", null, "set", replaceItinerary && !isEmpty ? "explicit itinerary revision" : "new itinerary", input.turn.sourceText);
-      source("legs", "explicit", input.turn.sourceText);
-      input.turn.legs.forEach((leg, index) => {
-        source(
-          `legs.${index}.originAirports`,
-          leg.originInferred ? "inferred" : "explicit",
-          leg.sourceText
-        );
-        source(
-          `legs.${index}.destinationAirports`,
-          leg.destinationInferred ? "inferred" : "explicit",
-          leg.sourceText
-        );
-      });
-    } else if (input.turn.correction) {
-      applyRouteCorrection();
-    } else {
-      applyPendingRoute();
+  for (const operation of patch.operations) {
+    if (operation.type === "set_route") {
+      applyRoute(candidate, operation.legs);
+      continue;
     }
+    if (operation.type === "set_date") {
+      issue = applyDate(candidate, operation.target, operation.expression, input.now, input.timeZone);
+      if (issue) break;
+      continue;
+    }
+    if (operation.type === "set_option") {
+      applyOption(candidate, operation.field, operation.value);
+      continue;
+    }
+    applyClear(candidate, operation.target);
   }
 
-  if (input.turn.departureDate) {
-    if (canFill("departureDate") || !partial.legs[0]?.departureDate) {
-      ensureFirstLeg(partial);
-      setLegDate(0, input.turn.departureDate, "departureDate");
-    } else if (partial.legs[0]?.departureDate !== input.turn.departureDate) {
-      record("departureDate", 0, "reject", "an explicit departure needs correction language", input.turn.sourceText);
-    }
-  }
-  if (input.turn.returnDate) {
-    if (canFill("returnDate") || !returnLeg(partial)?.departureDate) {
-      ensureReturnLeg(partial);
-      setLegDate(partial.legs.length - 1, input.turn.returnDate, "returnDate");
-    } else if (returnLeg(partial)?.departureDate !== input.turn.returnDate) {
-      record("returnDate", partial.legs.length - 1, "reject", "an explicit return needs correction language", input.turn.sourceText);
-    }
+  if (!issue) issue = validateStateDates(candidate, input.now, input.timeZone);
+  if (issue) {
+    return { state: structuredClone(prior), appliedOperations: [], issue };
   }
 
-  setDetail("travellers", input.turn.travellers, pending.has("travellers"));
-  setDetail("cabin", input.turn.cabin, false);
-  setDetail("maxStops", input.turn.maxStops, false);
-  setDetail("currency", input.turn.currency, pending.has("currency"));
-  setDetail("maximumPrice", input.turn.maximumPrice, false);
-  setAirlines("preferredAirlines", input.turn.preferredAirlines);
-  setAirlines("excludedAirlines", input.turn.excludedAirlines);
-
-  synchronizeDerivedFields(partial);
-  return { partial, fieldSources, operations };
-
-  function applyPendingRoute(): void {
-    const proposed = input.turn.legs;
-    if (pending.has("itineraryLegs")) {
-      partial.legs = proposed.map((leg) => ({
-        originAirports: [...leg.originAirports],
-        destinationAirports: [...leg.destinationAirports],
-        departureDate: leg.departureDate
-      }));
-      record("legs", null, "set", "filled the pending itinerary", input.turn.sourceText);
-      source("legs", "explicit", input.turn.sourceText);
-      proposed.forEach((leg, index) => {
-        source(
-          `legs.${index}.originAirports`,
-          leg.originInferred ? "inferred" : "explicit",
-          leg.sourceText
-        );
-        source(
-          `legs.${index}.destinationAirports`,
-          leg.destinationInferred ? "inferred" : "explicit",
-          leg.sourceText
-        );
-      });
-      return;
-    }
-    ensureFirstLeg(partial);
-    const candidate = proposed[0]!;
-    if (pending.has("originAirports") && candidate.originAirports.length > 0) {
-      partial.legs[0]!.originAirports = [...candidate.originAirports];
-      if (partial.legs.length === 2 && partial.legs[1]!.destinationAirports.length === 0) {
-        partial.legs[1]!.destinationAirports = [...candidate.originAirports];
-      }
-      record("originAirports", 0, "set", "answered the pending origin question", input.turn.sourceText);
-      source("legs.0.originAirports", "explicit", input.turn.sourceText);
-    }
-    if (pending.has("destinationAirports") && candidate.destinationAirports.length > 0) {
-      partial.legs[0]!.destinationAirports = [...candidate.destinationAirports];
-      if (partial.legs.length === 2 && partial.legs[1]!.originAirports.length === 0) {
-        partial.legs[1]!.originAirports = [...candidate.destinationAirports];
-      }
-      record("destinationAirports", 0, "set", "answered the pending destination question", input.turn.sourceText);
-      source("legs.0.destinationAirports", "explicit", input.turn.sourceText);
-    }
-    if (pending.has("returnDate") && candidate.destinationAirports.length > 0) {
-      ensureReturnLeg(partial);
-      partial.legs.at(-1)!.destinationAirports = [...candidate.destinationAirports];
-      record("destinationAirports", partial.legs.length - 1, "set", "completed the pending return leg", input.turn.sourceText);
-      source(`legs.${partial.legs.length - 1}.destinationAirports`, "explicit", input.turn.sourceText);
-    }
-  }
-
-  function applyRouteCorrection(): void {
-    ensureFirstLeg(partial);
-    const candidate = input.turn.legs[0]!;
-    const isReturnCorrection = /\b(?:return(?:ing)?|back)\b/iu.test(input.turn.sourceText);
-    if (isReturnCorrection && candidate.destinationAirports.length > 0) {
-      ensureReturnLeg(partial);
-      partial.legs.at(-1)!.destinationAirports = [...candidate.destinationAirports];
-      record("destinationAirports", partial.legs.length - 1, "set", "explicit return destination revision", input.turn.sourceText);
-      source(`legs.${partial.legs.length - 1}.destinationAirports`, "explicit", input.turn.sourceText);
-      return;
-    }
-    if (candidate.originAirports.length > 0) {
-      partial.legs[0]!.originAirports = [...candidate.originAirports];
-      if (partial.legs.length === 2) {
-        partial.legs[1]!.destinationAirports = [...candidate.originAirports];
-      }
-      record("originAirports", 0, "set", "explicit origin revision", input.turn.sourceText);
-      source("legs.0.originAirports", "explicit", input.turn.sourceText);
-    }
-    if (candidate.destinationAirports.length > 0) {
-      partial.legs[0]!.destinationAirports = [...candidate.destinationAirports];
-      if (partial.legs.length === 2) {
-        partial.legs[1]!.originAirports = [...candidate.destinationAirports];
-      }
-      record("destinationAirports", 0, "set", "explicit destination revision", input.turn.sourceText);
-      source("legs.0.destinationAirports", "explicit", input.turn.sourceText);
-    }
-  }
-
-  function setLegDate(index: number, value: string, field: "departureDate" | "returnDate"): void {
-    partial.legs[index]!.departureDate = value;
-    record(field, index, "set", `set the ${field === "returnDate" ? "return" : "departure"} date`, input.turn.sourceText);
-    source(`legs.${index}.departureDate`, "explicit", input.turn.sourceText);
-  }
-
-  function setDetail<K extends "travellers" | "cabin" | "maxStops" | "currency" | "maximumPrice">(
-    field: K,
-    value: TripPlanPartial[K],
-    pendingField: boolean
-  ): void {
-    if (value === null) return;
-    const current = partial[field];
-    if (current === null || input.turn.correction || input.turn.intent === "repair" || pendingField) {
-      partial[field] = value;
-      record(field, null, "set", current === null ? "filled an unset field" : "explicit field revision", input.turn.sourceText);
-      source(field, "explicit", input.turn.sourceText);
-    } else if (stableJson(current) !== stableJson(value)) {
-      record(field, null, "reject", "an explicit value needs correction language", input.turn.sourceText);
-    }
-  }
-
-  function setAirlines(
-    field: "preferredAirlines" | "excludedAirlines",
-    value: string[]
-  ): void {
-    if (value.length === 0) return;
-    const current = partial[field];
-    if (current.length === 0 || input.turn.correction || input.turn.intent === "repair") {
-      partial[field] = [...value];
-      record(field, null, "set", "explicit airline preference", input.turn.sourceText);
-      source(field, "explicit", input.turn.sourceText);
-    }
-  }
-
-  function source(field: string, kind: TripPlanFieldSource["kind"], text: string): void {
-    fieldSources[field] = { kind, messageIndex: input.messageIndex, text: text.slice(0, 500) };
-  }
-
-  function record(
-    field: string,
-    legIndex: number | null,
-    action: TripPlanTurnOperation["action"],
-    reason: string,
-    sourceText: string
-  ): void {
-    operations.push({
-      field,
-      legIndex,
-      action,
-      reason,
-      sourceText: sourceText.slice(0, 500)
-    });
-  }
-}
-
-export function canonicalizeTripPartial(value: TripPlanPartial): TripPlanPartial {
-  const partial = structuredClone(value);
-  if (partial.legs.length === 0 && (
-    partial.originAirports.length > 0
-    || partial.destinationAirports.length > 0
-    || partial.departureDate
-  )) {
-    partial.legs = [{
-      originAirports: [...partial.originAirports],
-      destinationAirports: [...partial.destinationAirports],
-      departureDate: partial.departureDate
-    }];
-    if (partial.tripType === "round_trip") {
-      partial.legs.push({
-        originAirports: [...partial.destinationAirports],
-        destinationAirports: [...partial.originAirports],
-        departureDate: partial.returnDate
-      });
-    }
-  }
-  synchronizeDerivedFields(partial);
-  return partial;
-}
-
-export function synchronizeDerivedFields(partial: TripPlanPartial): void {
-  const usable = partial.legs.filter((leg) =>
-    leg.originAirports.length > 0 || leg.destinationAirports.length > 0 || leg.departureDate
-  );
-  partial.legs = usable;
-  const first = usable[0];
-  const last = usable.at(-1);
-  const roundTrip = usable.length === 2
-    && sameAirports(usable[0]!.originAirports, usable[1]!.destinationAirports)
-    && sameAirports(usable[0]!.destinationAirports, usable[1]!.originAirports);
-  partial.tripType = usable.length >= 2 ? (roundTrip ? "round_trip" : "multi_city") : partial.tripType;
-  if (usable.length === 1 && partial.tripType !== "round_trip") partial.tripType = "one_way";
-  partial.originAirports = [...(first?.originAirports ?? [])];
-  partial.destinationAirports = [
-    ...(roundTrip ? first?.destinationAirports ?? [] : last?.destinationAirports ?? [])
-  ];
-  partial.departureDate = first?.departureDate ?? null;
-  partial.returnDate = roundTrip ? last?.departureDate ?? null : null;
-}
-
-function ensureFirstLeg(partial: TripPlanPartial): void {
-  partial.legs[0] ??= {
-    originAirports: [...partial.originAirports],
-    destinationAirports: [...partial.destinationAirports],
-    departureDate: partial.departureDate
+  return {
+    state: tripDraftStateSchema.parse(candidate),
+    appliedOperations: patch.operations,
+    issue: null
   };
 }
 
-function ensureReturnLeg(partial: TripPlanPartial): void {
-  ensureFirstLeg(partial);
-  if (partial.legs.length < 2) {
-    const outbound = partial.legs[0]!;
-    partial.legs.push({
-      originAirports: [...outbound.destinationAirports],
-      destinationAirports: [...outbound.originAirports],
-      departureDate: partial.returnDate
-    });
+export function emptyTripDraftState(): TripDraftState {
+  return structuredClone(EMPTY_TRIP_DRAFT_STATE);
+}
+
+function applyRoute(
+  state: TripDraftState,
+  legs: Array<{ originAirports: string[]; destinationAirports: string[] }>
+): void {
+  const prior = state.legs;
+  const length = Math.max(prior.length, legs.length);
+  state.legs = Array.from({ length }, (_, index) => {
+    const existing = prior[index];
+    const proposed = legs[index];
+    if (!proposed && existing) return structuredClone(existing);
+    return {
+      // An empty value in a set operation means "not supplied", not "clear".
+      originAirports: proposed!.originAirports.length > 0
+        ? unique(proposed!.originAirports)
+        : [...(existing?.originAirports ?? [])],
+      destinationAirports: proposed!.destinationAirports.length > 0
+        ? unique(proposed!.destinationAirports)
+        : [...(existing?.destinationAirports ?? [])],
+      // A route operation cannot clear or change a date.
+      departure: existing?.departure ?? null
+    };
+  });
+}
+
+function applyDate(
+  state: TripDraftState,
+  target: DateTarget,
+  expression: string,
+  now: Date,
+  timeZone: string
+): string | null {
+  const index = legIndexForTarget(state, target);
+  const current = state.legs[index]?.departure ?? null;
+  const resolved = resolveDateSelection(expression, current, now, timeZone);
+  if ("issue" in resolved) return resolved.issue;
+  ensureLeg(state, index);
+  state.legs[index]!.departure = resolved.selection;
+  return null;
+}
+
+function resolveDateSelection(
+  expression: string,
+  current: TripDraftDateSelection | null,
+  now: Date,
+  timeZone: string
+): { selection: TripDraftDateSelection } | { issue: string } {
+  const firstWeek = firstWeekSelection(expression, now, timeZone);
+  if (firstWeek) return { selection: firstWeek };
+
+  const weekday = weekdayIn(expression);
+  if (weekday && current?.kind === "window") {
+    const matches: string[] = [];
+    for (let date = current.start; daysBetween(date, current.end) >= 0; date = addIsoDays(date, 1)) {
+      if (weekdayName(date).toLowerCase() === weekday) matches.push(date);
+    }
+    if (matches.length === 1) {
+      return { selection: { kind: "exact", date: matches[0]! } };
+    }
+    if (matches.length > 1) {
+      return {
+        issue: `${titleCase(weekday)} matches ${matches.join(" or ")} in “${current.source}”. Which one should I use?`
+      };
+    }
+    return {
+      issue: `There is no ${titleCase(weekday)} in “${current.source}”. I kept that date window. Which date should I use?`
+    };
+  }
+
+  const resolved = resolveTripDateIntent(expression, now, timeZone);
+  if (resolved.issue) return { issue: resolved.issue };
+  const date = resolved.departureDate ?? resolved.returnDate;
+  if (!date) {
+    return {
+      issue: `I couldn’t resolve “${expression}” to a calendar date, so I kept the existing date.`
+    };
+  }
+  return { selection: { kind: "exact", date } };
+}
+
+function firstWeekSelection(
+  expression: string,
+  now: Date,
+  timeZone: string
+): TripDraftDateSelection | null {
+  const match = /\b(?:the\s+)?(?:first|1st)\s+week(?:\s+of)?\s+(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)(?:[\s,]+(20\d{2}))?\b/iu.exec(expression);
+  if (!match) return null;
+  const months: Readonly<Record<string, number>> = {
+    january: 0, jan: 0,
+    february: 1, feb: 1,
+    march: 2, mar: 2,
+    april: 3, apr: 3,
+    may: 4,
+    june: 5, jun: 5,
+    july: 6, jul: 6,
+    august: 7, aug: 7,
+    september: 8, sept: 8, sep: 8,
+    october: 9, oct: 9,
+    november: 10, nov: 10,
+    december: 11, dec: 11
+  };
+  const month = months[match[1]!.toLowerCase()]!;
+  const today = localDate(now, timeZone);
+  let year = match[2] ? Number(match[2]) : today.getUTCFullYear();
+  if (!match[2] && month < today.getUTCMonth()) year += 1;
+  const start = isoDate(new Date(Date.UTC(year, month, 1)));
+  return {
+    kind: "window",
+    start,
+    end: addIsoDays(start, 6),
+    source: match[0]
+  };
+}
+
+function applyOption(
+  state: TripDraftState,
+  field: Exclude<TripDraftOperation, { type: "set_route" | "set_date" | "clear" }>["field"],
+  value: Exclude<TripDraftOperation, { type: "set_route" | "set_date" | "clear" }>["value"]
+): void {
+  switch (field) {
+    case "tripType":
+      if (typeof value === "string") state.tripType = value as TripDraftState["tripType"];
+      break;
+    case "travellers":
+      if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+        state.travellers = value as NonNullable<TripDraftState["travellers"]>;
+      }
+      break;
+    case "cabin":
+      if (typeof value === "string") state.cabin = value as TripDraftState["cabin"];
+      break;
+    case "maxStops":
+      if (typeof value === "number") state.maxStops = value;
+      break;
+    case "currency":
+      if (typeof value === "string") state.currency = value.toUpperCase();
+      break;
+    case "maximumPrice":
+      if (typeof value === "number") state.maximumPrice = value;
+      break;
+    case "preferredAirlines":
+      if (Array.isArray(value)) state.preferredAirlines = unique(value);
+      break;
+    case "excludedAirlines":
+      if (Array.isArray(value)) state.excludedAirlines = unique(value);
+      break;
   }
 }
 
-function returnLeg(partial: TripPlanPartial): TripPlanPartial["legs"][number] | null {
-  return partial.legs.length >= 2 ? partial.legs.at(-1)! : null;
+function applyClear(state: TripDraftState, target: ClearableField): void {
+  switch (target) {
+    case "route":
+      state.legs = [];
+      break;
+    case "dates":
+      state.legs.forEach((leg) => {
+        leg.departure = null;
+      });
+      break;
+    case "departureDate":
+      if (state.legs[0]) state.legs[0].departure = null;
+      break;
+    case "returnDate":
+      if (state.legs.at(-1) && state.legs.length > 1) state.legs.at(-1)!.departure = null;
+      break;
+    case "tripType":
+      state.tripType = null;
+      break;
+    case "travellers":
+      state.travellers = null;
+      break;
+    case "cabin":
+      state.cabin = null;
+      break;
+    case "maxStops":
+      state.maxStops = null;
+      break;
+    case "currency":
+      state.currency = null;
+      break;
+    case "maximumPrice":
+      state.maximumPrice = null;
+      break;
+    case "preferredAirlines":
+      state.preferredAirlines = [];
+      break;
+    case "excludedAirlines":
+      state.excludedAirlines = [];
+      break;
+  }
 }
 
-function hasRoute(partial: TripPlanPartial): boolean {
-  return partial.legs.some((leg) =>
-    leg.originAirports.length > 0 || leg.destinationAirports.length > 0
+function validateStateDates(state: TripDraftState, now: Date, timeZone: string): string | null {
+  const exactDates = state.legs.map((leg) =>
+    leg.departure?.kind === "exact" ? leg.departure.date : null
   );
+  const today = isoDate(localDate(now, timeZone));
+  if (exactDates[0] && daysBetween(today, exactDates[0]) < 0) {
+    return "The departure date is in the past. I kept the previous date.";
+  }
+  if (
+    state.tripType === "round_trip"
+    && exactDates[0]
+    && exactDates.at(-1)
+    && daysBetween(exactDates[0], exactDates.at(-1)!) <= 0
+  ) {
+    return "The return date must be after the departure date. I kept the previous dates.";
+  }
+  for (let index = 1; index < exactDates.length; index += 1) {
+    const prior = exactDates[index - 1];
+    const current = exactDates[index];
+    if (prior && current && daysBetween(prior, current) < 0) {
+      return "Trip leg dates must be in order. I kept the previous dates.";
+    }
+  }
+  return null;
 }
 
-function sameAirports(left: string[], right: string[]): boolean {
-  return stableJson(left) === stableJson(right);
+function legIndexForTarget(state: TripDraftState, target: DateTarget): number {
+  if (target.field === "leg") return target.legIndex;
+  if (target.field === "departure") return 0;
+  return Math.max(1, state.legs.length - 1);
+}
+
+function ensureLeg(state: TripDraftState, index: number): void {
+  while (state.legs.length <= index) {
+    const first = state.legs[0];
+    state.legs.push(index === 1 && first
+      ? {
+          originAirports: [...first.destinationAirports],
+          destinationAirports: [...first.originAirports],
+          departure: null
+        }
+      : { originAirports: [], destinationAirports: [], departure: null });
+  }
+}
+
+function weekdayIn(expression: string): string | null {
+  return /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/iu
+    .exec(expression)?.[1]?.toLowerCase() ?? null;
+}
+
+function localDate(now: Date, timeZone: string): Date {
+  try {
+    const value = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(now);
+    return parseIsoDate(value);
+  } catch {
+    return parseIsoDate(now.toISOString().slice(0, 10));
+  }
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function titleCase(value: string): string {
+  return `${value[0]!.toUpperCase()}${value.slice(1)}`;
 }

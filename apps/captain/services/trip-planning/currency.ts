@@ -1,20 +1,12 @@
-import type { TripPlanPartial } from "@agents/flight-domain";
+import type { TripDraftState } from "@agents/flight-domain";
 import { isSupportedTripCurrency } from "@agents/flight-domain";
 
 import { airportMarket } from "./airport-catalog.js";
 
 export function isDomesticRoute(
-  partial: Pick<
-    TripPlanPartial,
-    "originAirports" | "destinationAirports" | "tripType" | "legs"
-  >
+  state: Pick<TripDraftState, "tripType" | "legs">
 ): boolean {
-  const routes = partial.tripType === "multi_city" && partial.legs.length > 0
-    ? partial.legs
-    : [{
-        originAirports: partial.originAirports,
-        destinationAirports: partial.destinationAirports
-      }];
+  const routes = state.legs;
   if (routes.some((route) =>
     route.originAirports.length === 0 || route.destinationAirports.length === 0
   )) {
@@ -28,22 +20,26 @@ export function isDomesticRoute(
 }
 
 export function suggestedTripCurrency(
-  partial: Pick<
-    TripPlanPartial,
-    "originAirports" | "destinationAirports" | "tripType" | "legs"
-  >,
+  state: Pick<TripDraftState, "tripType" | "legs">,
   defaultCurrency: string
 ): string {
-  void partial;
-  return isSupportedTripCurrency(defaultCurrency) ? defaultCurrency.toUpperCase() : "USD";
+  if (isSupportedTripCurrency(defaultCurrency)) return defaultCurrency.toUpperCase();
+  const routeCurrencies = [
+    ...state.legs.toReversed().flatMap((leg) =>
+      leg.destinationAirports.map((airport) => airportMarket(airport)?.currency)
+    ),
+    ...state.legs.flatMap((leg) =>
+      leg.originAirports.map((airport) => airportMarket(airport)?.currency)
+    )
+  ];
+  return routeCurrencies.find((currency): currency is string =>
+    Boolean(currency && isSupportedTripCurrency(currency))
+  ) ?? "USD";
 }
 
 /** Domestic routes default to 1 stop; cross-border routes default to 2. */
 export function suggestedMaxStops(
-  partial: Pick<
-    TripPlanPartial,
-    "originAirports" | "destinationAirports" | "tripType" | "legs"
-  >
+  state: Pick<TripDraftState, "tripType" | "legs">
 ): 1 | 2 {
-  return isDomesticRoute(partial) ? 1 : 2;
+  return isDomesticRoute(state) ? 1 : 2;
 }

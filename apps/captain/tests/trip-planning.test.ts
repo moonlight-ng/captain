@@ -83,7 +83,7 @@ describe("Captain Trip planning", () => {
     const second = await planning.prepare(user.id, "Lagos just me", null, first.draft.id);
     expect(second.status).toBe("awaiting_confirmation");
     if (second.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
-    expect(second.draft.plan?.input.brief).toMatchObject({
+    expect(second.draft.confirmationSnapshot?.input.brief).toMatchObject({
       originAirports: ["LOS"],
       destinationAirports: ["NYC"],
       departureWindow: { start: "2025-08-17", end: "2025-08-17" },
@@ -149,7 +149,7 @@ describe("Captain Trip planning", () => {
 
     expect(ready.status).toBe("awaiting_confirmation");
     if (ready.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
-    expect(ready.draft.plan?.input).toMatchObject({
+    expect(ready.draft.confirmationSnapshot?.input).toMatchObject({
       title: "LOS to NYC to LON",
       brief: {
         originAirports: ["LOS"],
@@ -200,7 +200,7 @@ describe("Captain Trip planning", () => {
     );
     expect(ready.status).toBe("awaiting_confirmation");
     if (ready.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
-    expect(ready.draft.plan?.input.brief.legs).toEqual([
+    expect(ready.draft.confirmationSnapshot?.input.brief.legs).toEqual([
       expect.objectContaining({
         originAirports: ["LOS"],
         destinationAirports: ["NYC"],
@@ -257,7 +257,7 @@ describe("Captain Trip planning", () => {
     );
     expect(result.status).toBe("awaiting_confirmation");
     if (result.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
-    expect(result.draft.plan?.input.brief).toMatchObject({
+    expect(result.draft.confirmationSnapshot?.input.brief).toMatchObject({
       originAirports: ["LOS"],
       destinationAirports: ["ANA"],
       tripType: "one_way",
@@ -277,7 +277,7 @@ describe("Captain Trip planning", () => {
 
     expect(result.status).toBe("awaiting_confirmation");
     if (result.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
-    expect(result.draft.plan?.input.brief).toMatchObject({
+    expect(result.draft.confirmationSnapshot?.input.brief).toMatchObject({
       originAirports: ["LON"],
       destinationAirports: ["NYC"],
       tripType: "round_trip",
@@ -287,12 +287,10 @@ describe("Captain Trip planning", () => {
     expect(result.confirmation).toContain("LON → NYC");
     expect(result.confirmation).toContain("Monday, 17 Aug 2026");
     expect(result.confirmation).toContain("Sunday, 23 Aug 2026");
-    expect(result.draft.turnState.fieldSources["legs.0.originAirports"]).toMatchObject({
-      kind: "inferred"
-    });
-    expect(result.draft.turnState.fieldSources["legs.0.destinationAirports"]).toMatchObject({
-      kind: "explicit"
-    });
+    expect(result.draft.state.legs).toMatchObject([
+      { originAirports: ["LON"], destinationAirports: ["NYC"] },
+      { originAirports: ["NYC"], destinationAirports: ["LON"] }
+    ]);
   });
 
   it("scopes a follow-up to the pending return leg without overwriting departure", async () => {
@@ -313,16 +311,17 @@ describe("Captain Trip planning", () => {
     );
     expect(completed.status).toBe("awaiting_confirmation");
     if (completed.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
-    expect(completed.draft.plan).toMatchObject({
+    expect(completed.draft.confirmationSnapshot).toMatchObject({
       departureDate: "2025-08-17",
       returnDate: "2025-08-23"
     });
-    expect(completed.draft.turnState.lastOperations).toEqual(expect.arrayContaining([
-      expect.objectContaining({ field: "returnDate", action: "set" })
-    ]));
+    expect(completed.draft.state.legs.map((leg) => leg.departure)).toEqual([
+      { kind: "exact", date: "2025-08-17" },
+      { kind: "exact", date: "2025-08-23" }
+    ]);
   });
 
-  it("protects explicit route and date facts from an unmarked rewrite", async () => {
+  it("applies only the route and date operations expressed by a follow-up", async () => {
     const { planning, user } = await setup();
     const first = await planning.prepare(
       user.id,
@@ -339,18 +338,15 @@ describe("Captain Trip planning", () => {
     );
     expect(attemptedRewrite.status).toBe("awaiting_confirmation");
     if (attemptedRewrite.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
-    expect(attemptedRewrite.draft.plan).toMatchObject({
-      departureDate: "2025-08-17",
+    expect(attemptedRewrite.draft.confirmationSnapshot).toMatchObject({
+      departureDate: "2025-08-23",
       input: {
         brief: {
           originAirports: ["LOS"],
-          destinationAirports: ["NYC"]
+          destinationAirports: ["LON"]
         }
       }
     });
-    expect(attemptedRewrite.draft.turnState.lastOperations).toEqual(expect.arrayContaining([
-      expect.objectContaining({ field: "departureDate", action: "reject" })
-    ]));
   });
 
   it("applies a targeted correction without erasing unrelated explicit facts", async () => {
@@ -369,7 +365,7 @@ describe("Captain Trip planning", () => {
     );
     expect(corrected.status).toBe("awaiting_confirmation");
     if (corrected.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
-    expect(corrected.draft.plan).toMatchObject({
+    expect(corrected.draft.confirmationSnapshot).toMatchObject({
       departureDate: "2025-08-17",
       input: {
         brief: {
@@ -380,7 +376,7 @@ describe("Captain Trip planning", () => {
     });
   });
 
-  it("rereads the source message instead of repeating an unchanged clarification", async () => {
+  it("does not reconstruct missing facts from conversation history", async () => {
     const { planning, user } = await setup();
     const first = await planning.prepare(
       user.id,
@@ -398,10 +394,8 @@ describe("Captain Trip planning", () => {
     );
     expect(repair.status).toBe("needs_input");
     if (repair.status !== "needs_input") throw new Error("Expected a repaired clarification");
-    expect(repair.prompt).toContain("I reread the Trip");
-    expect(repair.prompt).toContain("• Route: ? → NYC");
-    expect(repair.prompt).not.toBe(first.prompt);
-    expect(repair.draft.turnState.repeatedPromptCount).toBe(1);
+    expect(repair.prompt).toBe(first.prompt);
+    expect(repair.draft.state).toEqual(first.draft.state);
   });
 
   it("does not let an open draft consume an unrelated Telegram message", async () => {
@@ -437,7 +431,7 @@ describe("Captain Trip planning", () => {
     expect(replacement?.status).toBe("awaiting_confirmation");
     if (replacement?.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
     expect(replacement.draft.id).not.toBe(first.draft.id);
-    expect(replacement.draft.plan).toMatchObject({
+    expect(replacement.draft.confirmationSnapshot).toMatchObject({
       departureDate: "2025-08-20",
       input: {
         brief: {
@@ -466,7 +460,7 @@ describe("Captain Trip planning", () => {
     expect(replacement?.status).toBe("awaiting_confirmation");
     if (replacement?.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
     expect(replacement.draft.id).not.toBe(stale.draft.id);
-    expect(replacement.draft.plan).toMatchObject({
+    expect(replacement.draft.confirmationSnapshot).toMatchObject({
       departureDate: "2026-08-17",
       returnDate: "2026-08-23",
       input: {
@@ -498,7 +492,7 @@ describe("Captain Trip planning", () => {
     );
     expect(completed.status).toBe("awaiting_confirmation");
     if (completed.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
-    expect(completed.draft.plan).toMatchObject({
+    expect(completed.draft.confirmationSnapshot).toMatchObject({
       departureDate: "2026-08-02",
       returnDate: "2026-08-03",
       input: {
@@ -518,7 +512,7 @@ describe("Captain Trip planning", () => {
     );
     expect(repaired.status).toBe("awaiting_confirmation");
     if (repaired.status !== "awaiting_confirmation") throw new Error("Expected repaired confirmation");
-    expect(repaired.draft.plan).toMatchObject({
+    expect(repaired.draft.confirmationSnapshot).toMatchObject({
       departureDate: "2026-08-02",
       returnDate: "2026-08-03",
       input: {
@@ -540,7 +534,9 @@ describe("Captain Trip planning", () => {
     );
     expect(first.status).toBe("needs_input");
     if (first.status !== "needs_input") throw new Error("Expected a departure-date question");
-    expect(first.prompt).toBe("What date would you like to depart?");
+    expect(first.prompt).toBe(
+      "Which exact departure date should I use within 2026-09-01 to 2026-09-07?"
+    );
 
     const completed = await planning.prepare(
       user.id,
@@ -550,7 +546,7 @@ describe("Captain Trip planning", () => {
     );
     expect(completed.status).toBe("awaiting_confirmation");
     if (completed.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
-    expect(completed.draft.plan).toMatchObject({
+    expect(completed.draft.confirmationSnapshot).toMatchObject({
       departureDate: "2026-09-06",
       input: {
         brief: {
@@ -580,7 +576,7 @@ describe("Captain Trip planning", () => {
     );
     expect(corrected.status).toBe("awaiting_confirmation");
     if (corrected.status !== "awaiting_confirmation") throw new Error("Expected corrected confirmation");
-    expect(corrected.draft.plan?.departureDate).toBe("2026-09-06");
+    expect(corrected.draft.confirmationSnapshot?.departureDate).toBe("2026-09-06");
   });
 
   it("does not silently create a multi-traveller Trip in the one-adult beta", async () => {
@@ -610,9 +606,14 @@ describe("Captain Trip planning", () => {
       null,
       ready.draft.id
     );
-    expect(revised.status).toBe("needs_input");
-    if (revised.status !== "needs_input") throw new Error("Expected date clarification");
-    expect(revised.prompt).toContain("return date must be after");
+    expect(revised.status).toBe("awaiting_confirmation");
+    if (revised.status !== "awaiting_confirmation") throw new Error("Expected retained confirmation");
+    expect(revised.confirmation).toContain("return date must be after");
+    expect(revised.confirmation).toContain("I kept the previous dates");
+    expect(revised.draft.confirmationSnapshot).toMatchObject({
+      departureDate: "2025-08-17",
+      returnDate: "2025-08-24"
+    });
     expect(await trips.list(user.id)).toHaveLength(0);
   });
 
@@ -688,7 +689,7 @@ describe("Captain Trip planning", () => {
     expect(ready.status).toBe("awaiting_confirmation");
     if (ready.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
     expect(ready.draft.id).toBe(first.draft.id);
-    expect(ready.draft.plan?.returnDate).toBe("2025-08-24");
+    expect(ready.draft.confirmationSnapshot?.returnDate).toBe("2025-08-24");
   });
 
   it("supports typed confirmation, cancellation, edits, and grounded Where replies", async () => {

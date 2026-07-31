@@ -1,32 +1,25 @@
 import {
   DEFAULT_CADENCE_HOURS,
-  EMPTY_TRIP_PLAN_PARTIAL,
-  EMPTY_TRIP_PLAN_TURN_STATE,
+  EMPTY_TRIP_DRAFT_STATE,
   MAX_ACTIVE_TRIPS_PER_USER,
   SUPPORTED_CURRENCY_MESSAGE,
   addIsoDays,
   buildSearchSpecs,
   createTripSchema,
   daysBetween,
-  formatCalendarDate,
   isSupportedTripCurrency,
   stableJson,
   totalTravellers,
   type Trip,
   type TripCreationReceipt,
+  type TripDraftState,
   type TripPlanDraft,
-  type TripPlanPartial,
-  type TripPlanPendingField,
   type TripPlanResult
 } from "@agents/flight-domain";
 import type { CaptainPlatformStore } from "@agents/flight-store";
 
 import type { TripService } from "../trips/service.js";
-import {
-  canonicalizeTripPartial,
-  reduceTripDraft,
-  synchronizeDerivedFields
-} from "./draft-reducer.js";
+import { applyTripTurnPatch } from "./draft-reducer.js";
 import {
   formatActiveTripList,
   formatActiveTripLocation,
@@ -34,10 +27,9 @@ import {
   formatTripPlanConfirmation
 } from "./format.js";
 import { suggestedMaxStops, suggestedTripCurrency } from "./currency.js";
-import { orderedAirportCodesFromText } from "./airport-catalog.js";
 import {
   createTripTurnInterpreter,
-  type InterpretedTripTurn,
+  type TripPlannerQuestion,
   type TripTurnInterpreter
 } from "./turn-interpreter.js";
 
@@ -88,6 +80,18 @@ export class TripPlanningService {
     sourceMessageId: string | null = null,
     draftId?: string
   ): Promise<TripPlanResult> {
+    const result = await this.#prepareTurn(userId, request, sourceMessageId, draftId, false);
+    if (!result) throw new Error("A direct Trip-planning request was not handled");
+    return result;
+  }
+
+  async #prepareTurn(
+    userId: string,
+    request: string,
+    sourceMessageId: string | null,
+    draftId: string | undefined,
+    allowUnhandled: boolean
+  ): Promise<TripPlanResult | null> {
     const now = this.#now();
     let draft = draftId
       ? await this.#store.getTripPlanDraft(userId, draftId, now)
@@ -101,119 +105,89 @@ export class TripPlanningService {
     const sourceMessageIds = sourceMessageId && !draft.sourceMessageIds.includes(sourceMessageId)
       ? [...draft.sourceMessageIds, sourceMessageId].slice(-40)
       : draft.sourceMessageIds;
-    const priorTurnState = draft.turnState.pendingFields.length === 0
-      && draft.unresolvedFields.length > 0
-      ? {
-          ...draft.turnState,
-          pendingFields: pendingFieldsFor(draft.partial, draft.unresolvedFields)
-        }
-      : draft.turnState;
     const user = await this.#store.getUser(userId);
     const timeZone = user?.timezone ?? "UTC";
-    const initialTurn = await this.#interpret({
+    const priorMissingFields = missingTripFields(draft.state, null);
+    const turn = await this.#interpret({
       request,
       conversation,
-      prior: canonicalizeTripPartial(draft.partial),
-      turnState: priorTurnState,
+      state: draft.state,
+      activeQuestion: draft.revision === 1 && draft.state.legs.length === 0
+        ? null
+        : activeQuestionFor(priorMissingFields),
       now,
       timeZone
     });
-    const turn = initialTurn.intent === "repair"
-      ? await this.#repairTurn({
-          request: repairSource(conversation),
-          conversation,
-          prior: canonicalizeTripPartial(draft.partial),
-          now,
-          timeZone
-        })
-      : initialTurn;
+    if (allowUnhandled && turn.intent === "unrelated" && turn.operations.length === 0) {
+      return null;
+    }
+    const beforeHash = stableJson(draft.state);
+    const reduced = applyTripTurnPatch({
+      state: turn.intent === "replace_trip"
+        ? structuredClone(EMPTY_TRIP_DRAFT_STATE)
+        : draft.state,
+      patch: turn,
+      now,
+      timeZone
+    });
+    const state = reduced.state;
     const unsupportedParty = Boolean(
-      turn.travellers
+      state.travellers
       && (
-        turn.travellers.adults !== 1
-        || turn.travellers.childrenAges.length > 0
-        || turn.travellers.infants !== 0
+        state.travellers.adults !== 1
+        || state.travellers.childrenAges.length > 0
+        || state.travellers.infants !== 0
       )
     );
-    const beforeHash = stableJson(canonicalizeTripPartial(draft.partial));
-    const reduced = reduceTripDraft({
-      prior: draft.partial,
-      turnState: priorTurnState,
-      turn,
-      messageIndex: conversation.length - 1
-    });
-    const partial = reduced.partial;
-    const dateIssue = validateMergedDates(partial, turn.dateIssue, now, timeZone);
     const profile = await this.#store.ensureProfile(userId, now);
-    const suggestedCurrency = suggestedTripCurrency(partial, profile.defaultCurrency);
-    const inferredFields = inferDefaults(partial, turn, draft.inferredFields, suggestedCurrency);
-    applyDefaults(partial, suggestedCurrency);
-    synchronizeDerivedFields(partial);
-    const fieldSources = { ...reduced.fieldSources };
-    for (const [field, description] of Object.entries(inferredFields)) {
-      fieldSources[field] ??= {
-        kind: field === "currency" || field === "destinationAirports" ? "inferred" : "default",
-        messageIndex: conversation.length - 1,
-        text: description.slice(0, 500)
-      };
-    }
-    if (unsupportedParty) partial.travellers = null;
+    const suggestedCurrency = suggestedTripCurrency(state, profile.defaultCurrency);
+    const effectiveCurrency = state.currency ?? suggestedCurrency;
     const unsupportedCurrency = Boolean(
-      partial.currency && !isSupportedTripCurrency(partial.currency)
+      effectiveCurrency && !isSupportedTripCurrency(effectiveCurrency)
     );
-    const missingFields = missingTripFields(partial, dateIssue);
-    const plan = missingFields.length === 0 && !unsupportedCurrency
-      ? completePlan(partial, draft.id)
+    const missingFields = missingTripFields(state, reduced.issue);
+    if (unsupportedParty && !missingFields.includes("travellers")) {
+      missingFields.push("travellers");
+    }
+    const confirmationSnapshot = (
+      missingFields.length === 0
+      && !unsupportedCurrency
+      && !unsupportedParty
+    )
+      ? completePlan(state, draft.id, suggestedCurrency)
       : null;
-    const activeTrips = plan
+    const activeTrips = confirmationSnapshot
       ? (await this.#store.listTrips(userId)).filter((trip) =>
           !["cancelled", "completed", "archived"].includes(trip.status)
         )
       : [];
     const tripLimitReached = Boolean(
-      plan
+      confirmationSnapshot
       && activeTrips.length >= MAX_ACTIVE_TRIPS_PER_USER
-      && !activeTrips.some((trip) => stableJson(trip.brief) === stableJson(plan.input.brief))
+      && !activeTrips.some((trip) =>
+        stableJson(trip.brief) === stableJson(confirmationSnapshot.input.brief)
+      )
     );
-    const basePrompt = !plan || tripLimitReached
+    const basePrompt = !confirmationSnapshot || tripLimitReached
       ? tripLimitReached
         ? "You’re already tracking three Trips. Open /preferences, stop tracking one Trip, then reply “continue” here."
         : unsupportedParty
           ? "Captain’s beta currently tracks fares for exactly one adult. Reply “just me” to continue, or cancel this Trip."
           : unsupportedCurrency
             ? SUPPORTED_CURRENCY_MESSAGE
-            : dateIssue ?? clarificationPrompt(missingFields)
+            : reduced.issue ?? clarificationPrompt(missingFields, state)
       : null;
-    const repeatedPromptCount = basePrompt && priorTurnState.lastPrompt === basePrompt
-      ? priorTurnState.repeatedPromptCount + 1
-      : 0;
-    const responsePrompt = basePrompt && repeatedPromptCount > 0
-      ? repairClarification(partial, missingFields, basePrompt, repeatedPromptCount)
-      : basePrompt;
-    const turnState = {
-      version: 2 as const,
-      pendingFields: plan && !tripLimitReached ? [] : pendingFieldsFor(partial, missingFields),
-      lastPrompt: basePrompt,
-      repeatedPromptCount,
-      fieldSources,
-      interpreterVersion: "trip_interpreter_v2" as const,
-      parser: turn.parser,
-      model: turn.model,
-      lastIntent: turn.intent,
-      lastOperations: reduced.operations
-    };
     const revised = await this.#store.reviseTripPlanDraft(
       userId,
       draft.id,
       draft.revision,
       {
-        status: plan && !tripLimitReached ? "awaiting_confirmation" : "collecting",
+        status: confirmationSnapshot && !tripLimitReached
+          ? "awaiting_confirmation"
+          : "collecting",
         conversation,
-        partial,
-        plan,
-        unresolvedFields: missingFields,
-        inferredFields,
-        turnState,
+        state,
+        confirmationSnapshot: tripLimitReached ? null : confirmationSnapshot,
         sourceMessageIds
       },
       now
@@ -225,54 +199,34 @@ export class TripPlanningService {
       revision: revised.revision,
       status: revised.status,
       missing_fields: missingFields,
-      date_conflict: Boolean(dateIssue),
-      parser: turn.parser,
-      interpreter_model: turn.model,
+      date_conflict: Boolean(reduced.issue),
       turn_intent: turn.intent,
-      accepted_operations: reduced.operations.filter((operation) => operation.action !== "reject").length,
-      rejected_operations: reduced.operations.filter((operation) => operation.action === "reject").length,
+      operation_types: reduced.appliedOperations.map((operation) => operation.type),
       before_hash: beforeHash,
-      after_hash: stableJson(partial),
-      repeated_prompt_count: repeatedPromptCount
+      after_hash: stableJson(state)
     }));
-    if (!plan || tripLimitReached) {
+    if (!confirmationSnapshot || tripLimitReached) {
       return {
         status: "needs_input",
         draft: revised,
-        prompt: responsePrompt!,
+        prompt: basePrompt!,
         missingFields
       };
     }
     return {
       status: "awaiting_confirmation",
       draft: revised,
-      confirmation: formatTripPlanConfirmation(revised)
+      confirmation: reduced.issue
+        ? `${reduced.issue}\n\n${formatTripPlanConfirmation(revised)}`
+        : formatTripPlanConfirmation(revised)
     };
-  }
-
-  async #repairTurn(input: {
-    request: string;
-    conversation: string[];
-    prior: TripPlanPartial;
-    now: Date;
-    timeZone: string;
-  }): Promise<InterpretedTripTurn> {
-    const repaired = await this.#interpret({
-      request: input.request,
-      conversation: input.conversation,
-      prior: input.prior,
-      turnState: structuredClone(EMPTY_TRIP_PLAN_TURN_STATE),
-      now: input.now,
-      timeZone: input.timeZone
-    });
-    return { ...repaired, intent: "repair", parser: "repair" };
   }
 
   async confirm(userId: string, draftId: string, expectedRevision: number): Promise<TripPlanResult> {
     const now = this.#now();
     const draft = await this.#store.getTripPlanDraft(userId, draftId, now);
-    if (!draft?.plan) throw new Error("Trip draft is incomplete or expired");
-    const specs = buildSearchSpecs(draft.plan.input.brief);
+    if (!draft?.confirmationSnapshot) throw new Error("Trip draft is incomplete or expired");
+    const specs = buildSearchSpecs(draft.confirmationSnapshot.input.brief);
     let confirmed;
     try {
       confirmed = await this.#store.confirmTripPlanDraft(
@@ -458,13 +412,7 @@ export class TripPlanningService {
       await this.cancel(userId, draft.id, draft.revision);
       return this.prepare(userId, request, sourceMessageId);
     }
-    if (
-      !TripPlanningService.isTripPlanningRequest(request)
-      && !looksLikeDraftContinuation(draft, request)
-    ) {
-      return null;
-    }
-    return this.prepare(userId, request, sourceMessageId, draft.id);
+    return this.#prepareTurn(userId, request, sourceMessageId, draft.id, true);
   }
 
   static isTripPlanningRequest(text: string): boolean {
@@ -480,306 +428,142 @@ export class TripPlanningService {
   }
 }
 
-function inferDefaults(
-  partial: TripPlanPartial,
-  facts: InterpretedTripTurn,
-  previous: Record<string, string>,
-  suggestedCurrency: string
-): Record<string, string> {
-  const inferred = { ...previous };
-  if (facts.travellers) delete inferred.travellers;
-  else if (!partial.travellers) inferred.travellers = "default — one adult";
-  if (facts.cabin) delete inferred.cabin;
-  else if (!partial.cabin) inferred.cabin = "default — economy";
-  if (facts.maxStops !== null) delete inferred.maxStops;
-  else if (partial.maxStops === null) {
-    const stops = suggestedMaxStops(partial);
-    inferred.maxStops = stops === 1
-      ? "default — at most one stop"
-      : "default — at most two stops for this cross-border route";
-  }
-  if (/\bone[ -]?way\b/iu.test(facts.sourceText)) delete inferred.tripType;
-  else if (partial.tripType === "one_way" && partial.legs.length <= 1) {
-    inferred.tripType = "default — one-way";
-  } else delete inferred.tripType;
-  if (facts.currency) delete inferred.currency;
-  else if (!partial.currency) {
-    inferred.currency = `suggested for this route — ${suggestedCurrency}`;
-  }
-  inferred.cadenceHours = "adaptive — every 3, 6, or 12 hours";
-  if (partial.destinationAirports.includes("NYC")) {
-    inferred.destinationAirports = "New York metropolitan area";
-  } else delete inferred.destinationAirports;
-  return inferred;
-}
-
-function applyDefaults(partial: TripPlanPartial, suggestedCurrency: string): void {
-  partial.tripType ??= "one_way";
-  partial.travellers ??= { adults: 1, childrenAges: [], infants: 0 };
-  partial.cabin ??= "economy";
-  partial.maxStops ??= suggestedMaxStops(partial);
-  partial.currency ??= suggestedCurrency;
-}
-
-function missingTripFields(partial: TripPlanPartial, dateIssue: string | null): string[] {
-  if (dateIssue) return ["dates"];
-  if (partial.tripType === "multi_city") {
-    return [
-      ...(partial.originAirports.length === 0 ? ["originAirports"] : []),
-      ...(partial.destinationAirports.length === 0 ? ["destinationAirports"] : []),
-      ...(partial.legs.length < 2 || partial.legs.some((leg) =>
+function missingTripFields(state: TripDraftState, dateIssue: string | null): string[] {
+  const first = state.legs[0];
+  const tripType = effectiveTripType(state);
+  let missing: string[];
+  if (tripType === "multi_city") {
+    missing = [
+      ...(!first || first.originAirports.length === 0 ? ["originAirports"] : []),
+      ...(!state.legs.at(-1) || state.legs.at(-1)!.destinationAirports.length === 0
+        ? ["destinationAirports"]
+        : []),
+      ...(state.legs.length < 2 || state.legs.some((leg) =>
         leg.originAirports.length === 0
         || leg.destinationAirports.length === 0
-        || !leg.departureDate
+        || leg.departure?.kind !== "exact"
       )
         ? ["itineraryLegs"]
-        : []),
-      ...(!partial.travellers ? ["travellers"] : []),
-      ...(!partial.currency ? ["currency"] : [])
+        : [])
+    ];
+  } else {
+    missing = [
+      ...(!first || first.originAirports.length === 0 ? ["originAirports"] : []),
+      ...(!first || first.destinationAirports.length === 0 ? ["destinationAirports"] : []),
+      ...(first?.departure?.kind !== "exact" ? ["departureDate"] : []),
+      ...(tripType === "round_trip" && state.legs.at(-1)?.departure?.kind !== "exact"
+        ? ["returnDate"]
+        : [])
     ];
   }
-  return [
-    ...(partial.originAirports.length === 0 ? ["originAirports"] : []),
-    ...(partial.destinationAirports.length === 0 ? ["destinationAirports"] : []),
-    ...(!partial.departureDate ? ["departureDate"] : []),
-    ...(!partial.tripType ? ["tripType"] : []),
-    ...(partial.tripType === "round_trip" && !partial.returnDate ? ["returnDate"] : []),
-    ...(!partial.travellers ? ["travellers"] : []),
-    ...(!partial.currency ? ["currency"] : [])
-  ];
+  return dateIssue && missing.length > 0 ? ["dates"] : missing;
 }
 
-function validateMergedDates(
-  partial: TripPlanPartial,
-  currentIssue: string | null,
-  now: Date,
-  timeZone: string
-): string | null {
-  if (currentIssue) return currentIssue;
-  const today = localIsoDate(now, timeZone);
-  if (partial.departureDate && daysBetween(today, partial.departureDate) < 0) {
-    return "The departure date is in the past. What future departure date should I use?";
-  }
-  if (
-    partial.departureDate
-    && partial.returnDate
-    && daysBetween(partial.departureDate, partial.returnDate) <= 0
-  ) {
-    return "The return date must be after the departure date. Which return date should I use?";
-  }
-  if (partial.tripType === "multi_city") {
-    for (let index = 1; index < partial.legs.length; index += 1) {
-      const previous = partial.legs[index - 1]!.departureDate;
-      const current = partial.legs[index]!.departureDate;
-      if (previous && current && daysBetween(previous, current) < 0) {
-        return "Multi-city leg dates must be in order. Which dates should I use?";
-      }
-    }
-  }
-  return null;
-}
-
-function localIsoDate(now: Date, timeZone: string): string {
-  try {
-    return new Intl.DateTimeFormat("en-CA", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit"
-    }).format(now);
-  } catch {
-    return now.toISOString().slice(0, 10);
-  }
-}
-
-function completePlan(partial: TripPlanPartial, draftId: string): TripPlanDraft["plan"] {
-  if (
-    !partial.departureDate
-    || !partial.tripType
-    || !partial.travellers
-    || !partial.cabin
-    || partial.maxStops === null
-    || !partial.currency
-  ) {
+function completePlan(
+  state: TripDraftState,
+  _draftId: string,
+  suggestedCurrency: string
+): TripPlanDraft["confirmationSnapshot"] {
+  const first = state.legs[0];
+  const last = state.legs.at(-1);
+  const tripType = effectiveTripType(state);
+  const departureDate = exactDate(first);
+  const returnDate = tripType === "round_trip" ? exactDate(last) : null;
+  if (!first || !last || !departureDate || (tripType === "round_trip" && !returnDate)) {
     throw new Error("Cannot complete a Trip with unresolved fields");
   }
-  const stayNights = partial.tripType === "round_trip" && partial.returnDate
-    ? daysBetween(partial.departureDate, partial.returnDate)
+  const travellers = state.travellers ?? { adults: 1 as const, childrenAges: [], infants: 0 as const };
+  const cabin = state.cabin ?? "economy";
+  const maxStops = state.maxStops ?? suggestedMaxStops(state);
+  const currency = state.currency ?? suggestedCurrency;
+  const stayNights = tripType === "round_trip" && returnDate
+    ? daysBetween(departureDate, returnDate)
     : null;
   const input = createTripSchema.parse({
-    title: partial.tripType === "multi_city"
+    title: tripType === "multi_city"
       ? [
-          partial.legs[0]!.originAirports.join("/"),
-          ...partial.legs.map((leg) => leg.destinationAirports.join("/"))
+          first.originAirports.join("/"),
+          ...state.legs.map((leg) => leg.destinationAirports.join("/"))
         ].join(" to ")
-      : `${partial.originAirports.join("/")} to ${partial.destinationAirports.join("/")}`,
+      : `${first.originAirports.join("/")} to ${first.destinationAirports.join("/")}`,
     brief: {
-      originAirports: partial.originAirports,
-      destinationAirports: partial.destinationAirports,
-      tripType: partial.tripType,
-      departureWindow: { start: partial.departureDate, end: partial.departureDate },
+      originAirports: first.originAirports,
+      destinationAirports: tripType === "multi_city"
+        ? last.destinationAirports
+        : first.destinationAirports,
+      tripType,
+      departureWindow: { start: departureDate, end: departureDate },
       stayNights: stayNights
         ? { minimum: stayNights, preferred: stayNights, maximum: stayNights }
         : null,
-      legs: partial.tripType === "multi_city"
-        ? partial.legs.map((leg) => ({
+      legs: tripType === "multi_city"
+        ? state.legs.map((leg) => ({
             originAirports: leg.originAirports,
             destinationAirports: leg.destinationAirports,
             departureWindow: {
-              start: leg.departureDate!,
-              end: leg.departureDate!
+              start: exactDate(leg)!,
+              end: exactDate(leg)!
             }
           }))
         : undefined,
-      travellers: partial.travellers,
-      cabin: partial.cabin,
-      maxStops: partial.maxStops,
-      currency: partial.currency,
-      maximumPrice: partial.maximumPrice,
-      preferredAirlines: partial.preferredAirlines,
-      excludedAirlines: partial.excludedAirlines,
+      travellers,
+      cabin,
+      maxStops,
+      currency,
+      maximumPrice: state.maximumPrice,
+      preferredAirlines: state.preferredAirlines,
+      excludedAirlines: state.excludedAirlines,
       context: ""
     },
     cadenceHours: DEFAULT_CADENCE_HOURS
   });
   return {
     input,
-    departureDate: partial.departureDate,
-    returnDate: partial.tripType === "round_trip" ? partial.returnDate : null
+    departureDate,
+    returnDate
   };
 }
 
-function clarificationPrompt(missingFields: string[]): string {
+function clarificationPrompt(missingFields: string[], state: TripDraftState): string {
   const missing = new Set(missingFields);
-  if (missing.has("originAirports") && missing.has("travellers")) {
-    return "Where are you flying from, and how many people will be travelling?";
-  }
   if (missing.has("originAirports")) return "Where are you flying from?";
   if (missing.has("destinationAirports")) return "Where would you like to fly to?";
-  if (missing.has("departureDate")) return "What date would you like to depart?";
-  if (missing.has("tripType")) return "Is this one-way or a return Trip?";
+  if (missing.has("departureDate")) {
+    const selection = state.legs[0]?.departure;
+    if (selection?.kind === "window") {
+      return `Which exact departure date should I use within ${selection.start} to ${selection.end}?`;
+    }
+    return "What date would you like to depart?";
+  }
   if (missing.has("returnDate")) return "What date would you like to return?";
   if (missing.has("itineraryLegs")) {
     return "What city and departure date should I use for each leg of the trip?";
   }
-  if (missing.has("travellers")) return "How many people will be travelling?";
-  if (missing.has("currency")) return "Which currency should I use for prices?";
   return "What should I add to the Trip?";
 }
 
-function pendingFieldsFor(
-  partial: TripPlanPartial,
-  missingFields: string[]
-): Array<{ field: TripPlanPendingField; legIndex: number | null }> {
-  return missingFields.flatMap((field) => {
-    if (!isPendingField(field)) return [];
-    const legIndex = field === "originAirports"
-      || field === "destinationAirports"
-      || field === "departureDate"
-      ? 0
-      : field === "returnDate"
-        ? Math.max(1, partial.legs.length - 1)
-        : null;
-    return [{ field, legIndex }];
-  });
+function activeQuestionFor(missingFields: string[]): TripPlannerQuestion {
+  const first = missingFields[0];
+  if (
+    first === "originAirports"
+    || first === "destinationAirports"
+    || first === "departureDate"
+    || first === "returnDate"
+    || first === "itineraryLegs"
+  ) {
+    return first;
+  }
+  return null;
 }
 
-function isPendingField(value: string): value is TripPlanPendingField {
-  return [
-    "originAirports",
-    "destinationAirports",
-    "departureDate",
-    "returnDate",
-    "itineraryLegs",
-    "travellers",
-    "currency",
-    "dates"
-  ].includes(value);
+function effectiveTripType(state: TripDraftState): "one_way" | "round_trip" | "multi_city" {
+  return state.tripType ?? (state.legs.length > 1 ? "multi_city" : "one_way");
 }
 
-function repairClarification(
-  partial: TripPlanPartial,
-  missingFields: string[],
-  basePrompt: string,
-  repeatedPromptCount: number
-): string {
-  const route = partial.legs.length > 0
-    ? [
-        partial.legs[0]!.originAirports.join("/") || "?",
-        ...partial.legs.map((leg) => leg.destinationAirports.join("/") || "?")
-      ].join(" → ")
-    : `${partial.originAirports.join("/") || "?"} → ${partial.destinationAirports.join("/") || "?"}`;
-  const dates = partial.legs
-    .map((leg, index) =>
-      leg.departureDate ? `• Leg ${index + 1}: ${formatCalendarDate(leg.departureDate)}` : null
-    )
-    .filter((line): line is string => Boolean(line));
-  return [
-    repeatedPromptCount === 1
-      ? "I reread the Trip instead of asking the same question again."
-      : `I’ve reread the draft ${repeatedPromptCount} times and won’t guess the missing detail.`,
-    "",
-    `• Route: ${route}`,
-    ...dates,
-    "",
-    missingFields.length > 0 ? basePrompt : "Tell me which part I should correct."
-  ].join("\n");
-}
-
-function repairSource(conversation: string[]): string {
-  const messages = conversation.filter((message) =>
-    !/\b(?:already told|in (?:the|my) message|read (?:it|that|the message) again|reread|(?:i|we)\s+(?:already\s+)?(?:said|told you)|as i said)\b/iu.test(message)
-  );
-  const bounded = messages.length <= 8
-    ? messages
-    : [messages[0]!, ...messages.slice(-7)];
-  return bounded.join("\nThen: ").slice(0, 4_000) || conversation[0] || "";
-}
-
-function looksLikeDraftContinuation(draft: TripPlanDraft, request: string): boolean {
-  const text = request.trim();
-  if (!text) return false;
-  if (
-    /\b(?:already told|in (?:the|my) message|read (?:it|that|the message) again|reread|actually|change|instead|make it|correction|rather)\b/iu.test(text)
-  ) {
-    return true;
-  }
-  if (
-    /\b(?:economy|premium economy|business|first class|non[ -]?stop|direct|stops?|currency|NGN|USD|GBP|EUR|KES)\b/iu.test(text)
-  ) {
-    return true;
-  }
-  const missing = new Set(draft.unresolvedFields);
-  if (
-    (missing.has("originAirports")
-      || missing.has("destinationAirports")
-      || missing.has("itineraryLegs"))
-    && orderedAirportCodesFromText(text).length > 0
-  ) {
-    return true;
-  }
-  if (
-    missing.has("departureDate")
-    || missing.has("returnDate")
-    || missing.has("dates")
-    || missing.has("itineraryLegs")
-  ) {
-    if (
-      /\b(?:today|tomorrow|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|\d{1,2}(?:st|nd|rd|th)?|\d{4}-\d{2}-\d{2})\b/iu.test(text)
-    ) {
-      return true;
-    }
-  }
-  if (
-    missing.has("travellers")
-    && /\b(?:just|only)\s+me\b|\bsolo\b|\bmyself\b|\b\d+\s+(?:adult|person|people|traveller|traveler|passenger)s?\b/iu.test(text)
-  ) {
-    return true;
-  }
-  return draft.status === "awaiting_confirmation" && (
-    orderedAirportCodesFromText(text).length > 0
-    || /\b(?:return|depart|one[ -]?way|round[ -]?trip|airline|prefer|avoid)\b/iu.test(text)
-  );
+function exactDate(
+  leg: TripDraftState["legs"][number] | undefined
+): string | null {
+  return leg?.departure?.kind === "exact" ? leg.departure.date : null;
 }
 
 function buildReceipt(
@@ -788,12 +572,14 @@ function buildReceipt(
   created: boolean,
   dashboardUrl: string
 ): TripCreationReceipt {
-  if (!draft.plan) throw new Error("Started Trip is missing its persisted plan");
+  if (!draft.confirmationSnapshot) {
+    throw new Error("Started Trip is missing its persisted confirmation snapshot");
+  }
   return buildReceiptFromTrip(
     trip,
     created,
-    draft.plan.departureDate,
-    draft.plan.returnDate,
+    draft.confirmationSnapshot.departureDate,
+    draft.confirmationSnapshot.returnDate,
     dashboardUrl
   );
 }
@@ -829,6 +615,6 @@ function buildReceiptFromTrip(
   };
 }
 
-export function defaultTripPlanPartial(): TripPlanPartial {
-  return structuredClone(EMPTY_TRIP_PLAN_PARTIAL);
+export function defaultTripDraftState(): TripDraftState {
+  return structuredClone(EMPTY_TRIP_DRAFT_STATE);
 }

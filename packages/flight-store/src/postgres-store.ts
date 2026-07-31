@@ -6,11 +6,9 @@ import {
   TripLimitError,
   TripNotFoundError,
   TripVersionConflictError,
-  EMPTY_TRIP_PLAN_PARTIAL,
-  EMPTY_TRIP_PLAN_TURN_STATE,
-  plannedTripSchema,
-  tripPlanPartialSchema,
-  tripPlanTurnStateSchema,
+  EMPTY_TRIP_DRAFT_STATE,
+  tripPlanConfirmationSnapshotSchema,
+  tripDraftStateSchema,
   type CreateTripInput,
   type FlightSearchProviderId,
   type OfferSnapshot,
@@ -589,13 +587,11 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       const expiresAt = new Date(now.getTime() + 86_400_000);
       const rows = await tx<TripPlanDraftRow[]>`
         insert into captain.trip_plan_drafts (
-          id, user_id, status, revision, conversation, partial, plan, unresolved_fields,
-          inferred_fields, turn_state, source_message_ids, trip_id, create_idempotency_key,
-          created_at, updated_at, expires_at
+          id, user_id, status, revision, conversation, draft_state, confirmation_snapshot,
+          source_message_ids, trip_id, create_idempotency_key, created_at, updated_at, expires_at
         ) values (
           ${id}, ${userId}, 'collecting', 1, ${tx.json([request.trim()])},
-          ${tx.json(json(EMPTY_TRIP_PLAN_PARTIAL))}, null,
-          ${tx.json([])}, ${tx.json({})}, ${tx.json(json(EMPTY_TRIP_PLAN_TURN_STATE))},
+          ${tx.json(json(EMPTY_TRIP_DRAFT_STATE))}, null,
           ${tx.json(sourceMessageId ? [sourceMessageId] : [])},
           null, null, ${now}, ${now}, ${expiresAt}
         )
@@ -636,11 +632,10 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         status = ${revision.status},
         revision = revision + 1,
         conversation = ${this.#sql.json(json(revision.conversation))},
-        partial = ${this.#sql.json(json(revision.partial))},
-        plan = ${revision.plan ? this.#sql.json(json(revision.plan)) : null},
-        unresolved_fields = ${this.#sql.json(json(revision.unresolvedFields))},
-        inferred_fields = ${this.#sql.json(json(revision.inferredFields))},
-        turn_state = ${this.#sql.json(json(revision.turnState))},
+        draft_state = ${this.#sql.json(json(revision.state))},
+        confirmation_snapshot = ${revision.confirmationSnapshot
+          ? this.#sql.json(json(revision.confirmationSnapshot))
+          : null},
         source_message_ids = ${this.#sql.json(json(revision.sourceMessageIds))},
         updated_at = ${now},
         expires_at = ${new Date(now.getTime() + 86_400_000)}
@@ -719,7 +714,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       if (
         current.status !== "awaiting_confirmation"
         || current.revision !== expectedRevision
-        || !current.plan
+        || !current.confirmationSnapshot
       ) {
         return null;
       }
@@ -732,7 +727,13 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         where id = ${draftId}
       `;
       await tx`select pg_advisory_xact_lock(hashtext(${userId}))`;
-      const result = await createTripInTransaction(tx, userId, current.plan.input, specs, now);
+      const result = await createTripInTransaction(
+        tx,
+        userId,
+        current.confirmationSnapshot.input,
+        specs,
+        now
+      );
       const startedRows = await tx<TripPlanDraftRow[]>`
         update captain.trip_plan_drafts set
           status = 'started',
@@ -2378,11 +2379,8 @@ type TripPlanDraftRow = {
   status: TripPlanDraft["status"];
   revision: number;
   conversation: string[];
-  partial: unknown;
-  plan: unknown | null;
-  unresolved_fields: string[];
-  inferred_fields: Record<string, string>;
-  turn_state: unknown;
+  draft_state: unknown;
+  confirmation_snapshot: unknown | null;
   source_message_ids: string[];
   trip_id: string | null;
   create_idempotency_key: string | null;
@@ -2493,11 +2491,10 @@ function toTripPlanDraft(row: TripPlanDraftRow): TripPlanDraft {
     status: row.status,
     revision: row.revision,
     conversation: row.conversation,
-    partial: tripPlanPartialSchema.parse(row.partial),
-    plan: row.plan ? plannedTripSchema.parse(row.plan) : null,
-    unresolvedFields: row.unresolved_fields,
-    inferredFields: row.inferred_fields,
-    turnState: tripPlanTurnStateSchema.parse(row.turn_state ?? EMPTY_TRIP_PLAN_TURN_STATE),
+    state: tripDraftStateSchema.parse(row.draft_state),
+    confirmationSnapshot: row.confirmation_snapshot
+      ? tripPlanConfirmationSnapshotSchema.parse(row.confirmation_snapshot)
+      : null,
     sourceMessageIds: row.source_message_ids,
     tripId: row.trip_id,
     createIdempotencyKey: row.create_idempotency_key,

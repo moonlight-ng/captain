@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 import {
-  EMPTY_TRIP_PLAN_PARTIAL,
-  type TripPlanPartial
+  EMPTY_TRIP_DRAFT_STATE,
+  type TripDraftState
 } from "@agents/flight-domain";
 
 import {
@@ -39,7 +39,7 @@ export type TripFactExtraction = z.infer<typeof extractionSchema>;
 
 export function fallbackTripFactExtraction(
   request: string,
-  prior: TripPlanPartial = EMPTY_TRIP_PLAN_PARTIAL
+  prior: TripDraftState = EMPTY_TRIP_DRAFT_STATE
 ): TripFactExtraction {
   const normalized = request.trim();
   const lower = normalized.toLowerCase();
@@ -73,7 +73,7 @@ export function fallbackTripFactExtraction(
   }
   if (
     originAirports.length === 0
-    && prior.originAirports.length === 0
+    && (prior.legs[0]?.originAirports.length ?? 0) === 0
     && !/\bto\b/iu.test(normalized)
   ) {
     const bare = locationCode(normalized.replace(/\b(?:just\s+me|only\s+me|one\s+adult|for\s+me)\b/giu, "").trim());
@@ -81,7 +81,7 @@ export function fallbackTripFactExtraction(
   }
   if (
     destinationAirports.length === 0
-    && prior.destinationAirports.length === 0
+    && (prior.legs[0]?.destinationAirports.length ?? 0) === 0
     && !/\bfrom\s+new york\b/iu.test(lower)
     && /\bnew york\b/iu.test(lower)
   ) {

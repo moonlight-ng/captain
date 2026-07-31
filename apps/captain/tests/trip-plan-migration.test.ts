@@ -15,4 +15,18 @@ describe("Trip plan draft migration", () => {
     expect(migration).toContain("captain_trip_plan_drafts_trip_idx");
     expect(migration).toContain("captain_trip_plan_drafts_idempotency_idx");
   });
+
+  it("transactionally converts v2 drafts to canonical v3 state and retires merge columns", () => {
+    const migration = readFileSync(join(
+      process.cwd(),
+      "database/migrations/003_trip_planner_v3.sql"
+    ), "utf8");
+    expect(migration).toContain("add column draft_state jsonb");
+    expect(migration).toContain("'version', 3");
+    expect(migration).toContain("'kind', 'exact'");
+    expect(migration).toContain("confirmation_snapshot = draft.plan");
+    expect(migration).toContain("alter column draft_state set not null");
+    expect(migration).toContain("drop column partial");
+    expect(migration).toContain("drop column turn_state");
+  });
 });
