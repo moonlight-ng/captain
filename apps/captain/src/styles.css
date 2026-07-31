@@ -197,6 +197,7 @@ h2 { margin-bottom: 7px; font-size: var(--type-body); font-weight: 610; letter-s
 .tabs button span {
   margin-left: 5px;
   color: var(--quiet);
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -235,6 +236,14 @@ h2 { margin-bottom: 7px; font-size: var(--type-body); font-weight: 610; letter-s
 
 .recommendation-card { padding: 16px 16px 14px; }
 .recommendation-card.selected { border-color: rgba(167, 196, 154, .34); }
+button.recommendation-card {
+  display: block;
+  width: 100%;
+  color: inherit;
+  text-align: left;
+  transition: transform var(--duration-press-out) var(--ease-out);
+}
+button.recommendation-card:active { transform: scale(.99); }
 a.recommendation-card {
   display: block;
   color: inherit;
@@ -273,8 +282,263 @@ a.recommendation-card:active { transform: scale(.99); }
 }
 .metrics .airline { color: var(--quiet); }
 .metrics span:not(:last-child)::after { margin-left: 6px; content: "·"; }
-.why { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: var(--type-body); line-height: 1.45; }
+.schedule-line {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--quiet);
+  font-size: var(--type-body);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  line-height: 1.45;
+}
+.schedule-point {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.schedule-point-end { color: var(--muted); font-weight: 600; }
+.schedule-point-stop { color: var(--quiet); font-weight: 650; }
+.schedule-connector {
+  flex: 1 1 auto;
+  min-width: 18px;
+  height: 0;
+  margin: 0 10px;
+  border-top: 1px dotted var(--quiet);
+}
 .set-note { margin: 13px 2px 0; color: var(--quiet); font-size: var(--type-body); line-height: 1.45; }
+
+.watchlist-detail {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 8px 20px 32px;
+}
+.watchlist-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.watchlist-detail-summary {
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: var(--radius-card);
+  background: linear-gradient(145deg, rgba(21, 27, 37, .8), rgba(14, 14, 17, .76));
+}
+.watchlist-detail-summary .price { margin-top: 0; font-size: 22px; font-weight: 650; }
+.watchlist-airline {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: var(--type-body);
+}
+.watchlist-detail-summary .metrics { margin-top: 10px; }
+.watchlist-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: var(--radius-card);
+  background: rgba(14, 14, 17, .55);
+}
+.watchlist-panel h2 {
+  margin: 0;
+  color: rgba(255, 255, 255, .78);
+  font-size: var(--type-body);
+  font-weight: 650;
+}
+.flight-details-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.flight-details-heading p {
+  margin: 0;
+  color: var(--quiet);
+  font-size: var(--type-body);
+}
+.flight-details-heading .stop-count {
+  color: rgba(220, 160, 150, .92);
+  font-weight: 650;
+}
+.flight-timeline {
+  margin: 0;
+  padding: 2px 0 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.timeline-leg {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.timeline-node {
+  display: grid;
+  grid-template-columns: 72px 12px minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: start;
+}
+.timeline-node strong {
+  padding-top: 1px;
+  font-size: var(--type-body);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  text-align: right;
+}
+.timeline-dot {
+  position: relative;
+  z-index: 1;
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border: 1.5px solid rgba(255, 255, 255, .55);
+  border-radius: 50%;
+  background: #121215;
+  justify-self: center;
+}
+.timeline-node-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding-bottom: 2px;
+}
+.timeline-node-body b {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+.timeline-node-body small {
+  color: var(--quiet);
+  font-size: var(--type-body);
+}
+.timeline-rail {
+  display: grid;
+  grid-template-columns: 72px 12px minmax(0, 1fr);
+  column-gap: 10px;
+  min-height: 36px;
+  align-items: center;
+}
+.timeline-rail-line {
+  grid-column: 2;
+  justify-self: center;
+  align-self: stretch;
+  width: 0;
+  border-left: 1px dotted rgba(255, 255, 255, .28);
+}
+.timeline-travel {
+  grid-column: 3;
+  margin: 0;
+  color: var(--quiet);
+  font-size: var(--type-body);
+}
+.timeline-layover {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 12px 0 14px;
+  color: rgba(220, 160, 150, .9);
+  font-size: var(--type-body);
+  font-weight: 600;
+}
+.timeline-layover::before,
+.timeline-layover::after {
+  flex: 1 1 auto;
+  height: 0;
+  border-top: 1px solid var(--line);
+  content: "";
+}
+.peer-plot { display: flex; flex-direction: column; gap: 10px; }
+.peer-plot-track {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(167, 196, 154, .34), rgba(255, 255, 255, .08) 55%, rgba(180, 110, 100, .28));
+  overflow: visible;
+}
+.peer-plot-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: rgba(190, 212, 179, .28);
+}
+.peer-plot-median {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 14px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, .35);
+  transform: translateX(-1px);
+}
+.peer-plot-pin {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(244, 244, 241, .92);
+  border-radius: 50%;
+  background: #bed4b3;
+  box-shadow: 0 0 0 4px rgba(190, 212, 179, .16);
+  transform: translate(-50%, -50%);
+}
+.peer-plot-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--quiet);
+  font-size: var(--type-body);
+  font-variant-numeric: tabular-nums;
+}
+.sources-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--type-body);
+}
+.sources-table th, .sources-table td {
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+.sources-table th {
+  color: var(--quiet);
+  font-weight: 600;
+}
+.sources-table a {
+  color: rgba(199, 220, 189, .9);
+  text-decoration: none;
+}
+.sources-table a:hover { text-decoration: underline; }
+.watch-checks { margin: 0; }
+.watch-checks div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+.watch-checks div:first-child { border-top: 0; padding-top: 0; }
+.remove-watchlist {
+  margin-top: 4px;
+  padding: 14px 16px;
+  border: 1px solid rgba(180, 110, 100, .28);
+  border-radius: 14px;
+  background: rgba(120, 48, 42, .16);
+  color: rgba(232, 180, 172, .92);
+  font-size: var(--type-body);
+  font-weight: 650;
+  transition: transform var(--duration-press-out) var(--ease-out);
+}
+.remove-watchlist:active { transform: scale(.99); }
 
 .airline-card {
   width: 100%;
@@ -486,49 +750,50 @@ a.offer-row:active { transform: scale(.99); }
 }
 .settings-disclosure { padding: 0; overflow: hidden; }
 .settings-disclosure > summary {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 16px;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 11px 14px;
+  column-gap: 10px;
+  min-height: 44px;
+  padding: 10px 14px;
   cursor: pointer;
   list-style: none;
 }
 .settings-disclosure > summary::-webkit-details-marker { display: none; }
 .settings-disclosure > summary::after {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  margin-top: -1px;
+  box-sizing: border-box;
+  width: 7px;
+  height: 7px;
+  justify-self: end;
   border-right: 1.5px solid rgba(255, 255, 255, .48);
   border-bottom: 1.5px solid rgba(255, 255, 255, .48);
   content: "";
-  transform: rotate(45deg);
+  transform: translateY(-1px) rotate(45deg);
+  transform-origin: 50% 50%;
   transition: transform 160ms var(--ease-out);
 }
 .settings-disclosure[open] > summary::after {
-  margin-top: 2px;
-  transform: rotate(225deg);
+  transform: translateY(1px) rotate(225deg);
 }
 .settings-disclosure > summary > span {
   display: flex;
   min-width: 0;
-  flex: 1;
   align-items: center;
   gap: 8px;
 }
 .settings-disclosure > summary strong {
-  line-height: 1.2;
+  display: block;
+  line-height: 1.25;
   font-size: var(--type-body);
   font-weight: 620;
 }
 .settings-disclosure > summary em {
-  display: inline-flex;
-  align-items: center;
-  line-height: 1.2;
+  display: block;
+  line-height: 1.25;
   color: var(--quiet);
   font-size: var(--type-body);
   font-style: normal;
+  text-align: right;
 }
 .settings-body {
   padding: 4px 14px 16px;

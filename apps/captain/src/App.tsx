@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type KeyboardEvent, type ReactNode, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, Fragment, type Dispatch, type FormEvent, type KeyboardEvent, type ReactNode, type SetStateAction } from "react";
 
 import {
   ApiError,
@@ -7,6 +7,7 @@ import {
   getSession,
   getTrip,
   initializeAccessToken,
+  setTripFlightSelection,
   tripAction,
   updateProfile,
   updateTripBrief
@@ -18,9 +19,11 @@ import {
   sortAndFilterOffers,
   type BrowsePreferences,
   type RankingMode,
+  type Segment,
   type TravellerProfile,
   type TripPayload,
-  type VerifiedOffer
+  type VerifiedOffer,
+  type Watch
 } from "./domain";
 import {
   airlineLabel,
@@ -31,9 +34,14 @@ import { airlineGroups } from "./airline-groups";
 
 type Tab = "flights" | "airlines" | "browse";
 const tabLabels: Record<Tab, string> = {
-  flights: "Options",
+  flights: "Watchlist",
   airlines: "Airlines",
   browse: "Flights"
+};
+
+type WatchlistFocus = {
+  offerId: string;
+  mode?: RankingMode;
 };
 
 export function App() {
@@ -47,6 +55,8 @@ export function App() {
   const [browsePreferences, setBrowsePreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
   const [filterOpen, setFilterOpen] = useState(false);
   const [draftPreferences, setDraftPreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
+  const [watchlistFocus, setWatchlistFocus] = useState<WatchlistFocus | null>(null);
+  const [dismissedItineraryKeys, setDismissedItineraryKeys] = useState<string[]>([]);
   const preferencesPage = window.location.pathname === "/preferences";
 
   async function load() {
@@ -123,6 +133,26 @@ export function App() {
           <h1>Tell Captain where you want to go.</h1>
           <p>Return to Telegram to create a Trip. Captain can track up to three at once.</p>
         </section>
+      ) : watchlistFocus ? (
+        <>
+          {error && <div className="notice">{error}</div>}
+          <WatchlistDetail
+            offer={offers.find((item) => item.id === watchlistFocus.offerId) ?? null}
+            {...(watchlistFocus.mode ? { mode: watchlistFocus.mode } : {})}
+            offers={offers}
+            watch={tripData?.watch ?? null}
+            activity={tripData?.activity ?? []}
+            tripId={trip.id}
+            onBack={() => setWatchlistFocus(null)}
+            onRemoved={(itineraryKey) => {
+              setDismissedItineraryKeys((current) =>
+                current.includes(itineraryKey) ? current : [...current, itineraryKey]
+              );
+              setWatchlistFocus(null);
+            }}
+            onError={setError}
+          />
+        </>
       ) : (
         <>
           <section className="trip-heading">
@@ -162,7 +192,15 @@ export function App() {
 
           <section className="workspace">
             {tab === "flights" && (
-              <FlightsTab offers={offers} profile={profile!} />
+              <FlightsTab
+                offers={offers}
+                profile={profile!}
+                dismissedItineraryKeys={dismissedItineraryKeys}
+                onOpen={(offer, mode) => {
+                  setError("");
+                  setWatchlistFocus({ offerId: offer.id, mode });
+                }}
+              />
             )}
             {tab === "airlines" && (
               <AirlinesTab
@@ -195,6 +233,10 @@ export function App() {
                   setBrowsePreferences(EMPTY_BROWSE_PREFERENCES);
                   setDraftPreferences(EMPTY_BROWSE_PREFERENCES);
                 }}
+                onOpen={(offer) => {
+                  setError("");
+                  setWatchlistFocus({ offerId: offer.id });
+                }}
               />
             )}
           </section>
@@ -204,7 +246,18 @@ export function App() {
   );
 }
 
-function FlightsTab({ offers, profile }: { offers: VerifiedOffer[]; profile: TravellerProfile }) {
+function FlightsTab({
+  offers,
+  profile,
+  dismissedItineraryKeys,
+  onOpen
+}: {
+  offers: VerifiedOffer[];
+  profile: TravellerProfile;
+  dismissedItineraryKeys: string[];
+  onOpen: (offer: VerifiedOffer, mode: RankingMode) => void;
+}) {
+  const dismissed = useMemo(() => new Set(dismissedItineraryKeys), [dismissedItineraryKeys]);
   const recommendations = useMemo(() => ({
     cheapest: rankOffers(offers, "cheapest", profile.preferredAirlineCodes)[0],
     balanced: rankOffers(offers, "balanced", profile.preferredAirlineCodes)[0],
@@ -213,23 +266,34 @@ function FlightsTab({ offers, profile }: { offers: VerifiedOffer[]; profile: Tra
   if (offers.length === 0) return <ResultsEmpty />;
   const modes = (["cheapest", "balanced", "fastest"] as RankingMode[])
     .sort((left, right) => Number(right === profile.rankingMode) - Number(left === profile.rankingMode));
-  return (
-    <>
-      <div className="recommendation-grid">
-        {modes.map((mode) => {
-          const offer = recommendations[mode];
-          return offer ? (
-            <RecommendationCard
-              key={mode}
-              offer={offer}
-              mode={mode}
-              selected={profile.rankingMode === mode}
-              offers={offers}
-            />
-          ) : null;
-        })}
+  const visible = modes
+    .map((mode) => {
+      const offer = recommendations[mode];
+      if (!offer || dismissed.has(offer.itineraryKey)) return null;
+      return { mode, offer };
+    })
+    .filter((item): item is { mode: RankingMode; offer: VerifiedOffer } => item !== null);
+  if (visible.length === 0) {
+    return (
+      <div className="results-empty compact">
+        <span>⌁</span>
+        <h2>Watchlist is clear</h2>
+        <p>Removed options stay out of this list until you reload the page.</p>
       </div>
-    </>
+    );
+  }
+  return (
+    <div className="recommendation-grid">
+      {visible.map(({ mode, offer }) => (
+        <RecommendationCard
+          key={`${mode}-${offer.id}`}
+          offer={offer}
+          mode={mode}
+          selected={profile.rankingMode === mode}
+          onOpen={() => onOpen(offer, mode)}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -237,20 +301,23 @@ function RecommendationCard({
   offer,
   mode,
   selected,
-  offers
+  onOpen
 }: {
   offer: VerifiedOffer;
   mode: RankingMode;
   selected: boolean;
-  offers: VerifiedOffer[];
+  onOpen: () => void;
 }) {
-  const evidence = offer.evidence[0];
-  const className = `recommendation-card ${selected ? "selected" : ""}`;
-  const body = (
-    <>
+  const schedule = offerScheduleSpine(offer);
+  return (
+    <button
+      type="button"
+      className={`recommendation-card ${selected ? "selected" : ""}`}
+      onClick={onOpen}
+    >
       <div className="card-top">
-        {selected && <span className="pill">Your preference</span>}
         <span className="mode-label">{label(mode)}</span>
+        {selected && <span className="pill">Your preference</span>}
       </div>
       <strong className="price">{money(offer)}</strong>
       <div className="metrics">
@@ -258,15 +325,246 @@ function RecommendationCard({
         <span>{duration(offer)}</span>
         <span>{stops(offer)}</span>
       </div>
-      <p className="why">{whyLabel(mode, offer, offers)}</p>
-    </>
+      {schedule ? <ScheduleSpine spine={schedule} /> : null}
+    </button>
   );
-  return evidence ? (
-    <a className={className} href={evidence.url} target="_blank" rel="noreferrer">
-      {body}
-    </a>
-  ) : (
-    <article className={className}>{body}</article>
+}
+
+function WatchlistDetail({
+  offer,
+  mode,
+  offers,
+  watch,
+  activity,
+  tripId,
+  onBack,
+  onRemoved,
+  onError
+}: {
+  offer: VerifiedOffer | null;
+  mode?: RankingMode;
+  offers: VerifiedOffer[];
+  watch: Watch | null;
+  activity: TripPayload["activity"];
+  tripId: string;
+  onBack: () => void;
+  onRemoved: (itineraryKey: string) => void;
+  onError: (message: string) => void;
+}) {
+  const [removing, setRemoving] = useState(false);
+  if (!offer) {
+    return (
+      <section className="watchlist-detail">
+        <button type="button" className="back-link" onClick={onBack}>Back</button>
+        <div className="results-empty compact">
+          <span>⌁</span>
+          <h2>Option unavailable</h2>
+          <p>That fare is no longer in the verified set.</p>
+        </div>
+      </section>
+    );
+  }
+
+  const outbound = outboundSegments(offer.snapshot.segments ?? []);
+  const comparison = peerPriceComparison(offer, offers);
+
+  async function remove() {
+    setRemoving(true);
+    onError("");
+    try {
+      await setTripFlightSelection(tripId, offer!.itineraryKey, false);
+      onRemoved(offer!.itineraryKey);
+    } catch (cause) {
+      onError(cause instanceof ApiError ? cause.message : "Couldn’t remove that option.");
+      setRemoving(false);
+    }
+  }
+
+  return (
+    <section className="watchlist-detail">
+      <header className="watchlist-detail-header">
+        <button type="button" className="back-link" onClick={onBack}>Back</button>
+        <span className="mode-label">
+          {mode ? label(mode) : airlineName(offer.primaryAirlineCode, [offer])}
+        </span>
+      </header>
+
+      <div className="watchlist-detail-summary">
+        <strong className="price">{money(offer)}</strong>
+        <p className="watchlist-airline">
+          {airlineName(offer.primaryAirlineCode, [offer])}
+          {isMixed(offer) ? ` · Mixed · ${offer.participatingAirlineCodes.join(", ")}` : ""}
+        </p>
+        <div className="metrics">
+          <span>{duration(offer)}</span>
+          <span>{stops(offer)}</span>
+        </div>
+      </div>
+
+      {outbound.length > 0 && (
+        <div className="watchlist-panel">
+          <div className="flight-details-heading">
+            <h2>Flight details</h2>
+            <p>
+              Departing
+              {" · "}
+              <span className={outbound.length > 1 ? "stop-count" : undefined}>
+                {outbound.length > 1
+                  ? `${outbound.length - 1} stop${outbound.length === 2 ? "" : "s"}`
+                  : "Nonstop"}
+              </span>
+            </p>
+          </div>
+          <FlightTimeline segments={outbound} />
+        </div>
+      )}
+
+      <div className="watchlist-panel">
+        <h2>How it compares</h2>
+        <PeerPricePlot comparison={comparison} currency={offer.currency} />
+        <p className="set-note">Among verified options for this Trip.</p>
+      </div>
+
+      <div className="watchlist-panel">
+        <h2>Sources</h2>
+        {offer.evidence.length > 0 ? (
+          <table className="sources-table">
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Title</th>
+              </tr>
+            </thead>
+            <tbody>
+              {offer.evidence.map((item) => (
+                <tr key={item.url}>
+                  <td>
+                    <a href={item.url} target="_blank" rel="noreferrer">{item.domain}</a>
+                  </td>
+                  <td>{item.title}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="set-note">No provider evidence links on this fare.</p>
+        )}
+        <p className="set-note">
+          Last verified {relativeTime(offer.verifiedAt)}
+          {offer.observedAt !== offer.verifiedAt ? ` · Observed ${relativeTime(offer.observedAt)}` : ""}
+        </p>
+      </div>
+
+      <div className="watchlist-panel">
+        <h2>Agent activity</h2>
+        <dl className="watch-checks">
+          <div>
+            <dt>Last check</dt>
+            <dd>{watch?.lastCheckAt ? relativeTime(watch.lastCheckAt) : "Not yet"}</dd>
+          </div>
+          <div>
+            <dt>Next check</dt>
+            <dd>{watch?.nextCheckAt ? scheduleTime(watch.nextCheckAt) : "Unscheduled"}</dd>
+          </div>
+        </dl>
+        {activity.length > 0 ? (
+          <div className="activity-list">
+            {activity.slice(0, 8).map((item) => (
+              <article key={item.id}>
+                <i />
+                <span>
+                  <strong>{activityLabel(item.eventType)}</strong>
+                  <small>{timestampLabel(item.createdAt)}</small>
+                </span>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="set-note">Activity appears here as Captain works.</p>
+        )}
+      </div>
+
+      <button
+        type="button"
+        className="remove-watchlist"
+        disabled={removing}
+        onClick={() => { void remove(); }}
+      >
+        {removing ? "Removing…" : "Remove from watchlist"}
+      </button>
+    </section>
+  );
+}
+
+function FlightTimeline({ segments }: { segments: Segment[] }) {
+  return (
+    <ol className="flight-timeline">
+      {segments.map((segment, index) => {
+        const next = segments[index + 1];
+        const travelSeconds = Math.max(
+          0,
+          (Date.parse(segment.arrival) - Date.parse(segment.departure)) / 1000
+        );
+        const layoverMs = next
+          ? Date.parse(next.departure) - Date.parse(segment.arrival)
+          : null;
+        const showLayover = layoverMs !== null && Number.isFinite(layoverMs) && layoverMs > 0;
+        return (
+          <li key={`${segment.flightNumber}-${segment.departure}`} className="timeline-leg">
+            <div className="timeline-node">
+              <strong>{clockLabel(segment.departure)}</strong>
+              <span className="timeline-dot" aria-hidden="true" />
+              <div className="timeline-node-body">
+                <b>{segment.origin}</b>
+              </div>
+            </div>
+            <div className="timeline-rail">
+              <span className="timeline-rail-line" aria-hidden="true" />
+              <p className="timeline-travel">Travel {formatDurationSeconds(travelSeconds)}</p>
+            </div>
+            <div className="timeline-node">
+              <strong>{clockLabel(segment.arrival)}</strong>
+              <span className="timeline-dot" aria-hidden="true" />
+              <div className="timeline-node-body">
+                <b>{segment.destination}</b>
+                <small>{segment.airline} · {segment.flightNumber}</small>
+              </div>
+            </div>
+            {showLayover && (
+              <p className="timeline-layover">
+                {formatDurationSeconds(layoverMs / 1000)} layover · {segment.destination}
+              </p>
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function PeerPricePlot({
+  comparison,
+  currency
+}: {
+  comparison: { min: number; max: number; median: number; value: number };
+  currency: string;
+}) {
+  const span = Math.max(comparison.max - comparison.min, 1);
+  const position = Math.min(100, Math.max(0, ((comparison.value - comparison.min) / span) * 100));
+  const medianPosition = Math.min(100, Math.max(0, ((comparison.median - comparison.min) / span) * 100));
+  return (
+    <div className="peer-plot" aria-label="Price compared with other verified options">
+      <div className="peer-plot-track">
+        <span className="peer-plot-fill" style={{ width: `${position}%` }} />
+        <span className="peer-plot-median" style={{ left: `${medianPosition}%` }} title="Median" />
+        <span className="peer-plot-pin" style={{ left: `${position}%` }} />
+      </div>
+      <div className="peer-plot-labels">
+        <span>{formatMoney(comparison.min, currency)}</span>
+        <span>{formatMoney(comparison.value, currency)}</span>
+        <span>{formatMoney(comparison.max, currency)}</span>
+      </div>
+    </div>
   );
 }
 
@@ -317,7 +615,8 @@ function BrowseTab({
   onDraftPreferences,
   onCloseFilters,
   onApplyFilters,
-  onClearFilters
+  onClearFilters,
+  onOpen
 }: {
   offers: VerifiedOffer[];
   preferences: BrowsePreferences;
@@ -328,6 +627,7 @@ function BrowseTab({
   onCloseFilters: () => void;
   onApplyFilters: () => void;
   onClearFilters: () => void;
+  onOpen: (offer: VerifiedOffer) => void;
 }) {
   const visible = useMemo(() => sortAndFilterOffers(offers, preferences), [offers, preferences]);
   const activeFilters = countFilters(preferences);
@@ -364,10 +664,11 @@ function BrowseTab({
         </div>
       ) : (
         <div className="offer-list">
-          {visible.map((offer) => <OfferRow offer={offer} key={offer.id} />)}
+          {visible.map((offer) => (
+            <OfferRow offer={offer} key={offer.id} onOpen={() => onOpen(offer)} />
+          ))}
         </div>
       )}
-      <p className="set-note">Captain shows the verified options it found across airlines. This is not an exhaustive market listing.</p>
       <FilterSheet
         open={filterOpen}
         preferences={draftPreferences}
@@ -380,40 +681,22 @@ function BrowseTab({
   );
 }
 
-function OfferRow({ offer }: { offer: VerifiedOffer }) {
-  const evidence = offer.evidence[0];
-  const body = (
-    <>
-      <div className="carrier">
-        <span className="airline-monogram">{offer.primaryAirlineCode.slice(0, 2)}</span>
-        <div>
-          <strong>{airlineName(offer.primaryAirlineCode, [offer])}</strong>
-          <p>{isMixed(offer) ? `Mixed · ${offer.participatingAirlineCodes.join(", ")}` : "Primary airline"}</p>
-        </div>
+function OfferRow({ offer, onOpen }: { offer: VerifiedOffer; onOpen: () => void }) {
+  const schedule = offerScheduleSpine(offer);
+  return (
+    <button type="button" className="recommendation-card" onClick={onOpen}>
+      <div className="card-top">
+        <span className="mode-label">{airlineName(offer.primaryAirlineCode, [offer])}</span>
+        {isMixed(offer) && <span className="pill">Mixed</span>}
       </div>
-      <div className="route">
-        <strong>{offer.snapshot.route || "Verified itinerary"}</strong>
-        <p>{(offer.snapshot.flightNumbers ?? []).join(" · ")}</p>
+      <strong className="price">{money(offer)}</strong>
+      <div className="metrics">
+        <span className="airline">{offer.primaryAirlineCode}</span>
+        <span>{duration(offer)}</span>
+        <span>{stops(offer)}</span>
       </div>
-      <div className="trip-stats">
-        <div className="metrics compact">
-          <span>{duration(offer)}</span>
-          <span>{stops(offer)}</span>
-        </div>
-        <span>Checked {relativeTime(offer.verifiedAt)}</span>
-      </div>
-      <div className="fare">
-        <strong>{money(offer)}</strong>
-        <span>1 adult total</span>
-      </div>
-    </>
-  );
-  return evidence ? (
-    <a className="offer-row" href={evidence.url} target="_blank" rel="noreferrer">
-      {body}
-    </a>
-  ) : (
-    <article className="offer-row">{body}</article>
+      {schedule ? <ScheduleSpine spine={schedule} /> : null}
+    </button>
   );
 }
 
@@ -959,8 +1242,7 @@ function Preferences({
                 <dt>{watch?.status === "scheduled" ? "Tracking starts" : "Next check"}</dt>
                 <dd>{watch?.nextCheckAt ? scheduleTime(watch.nextCheckAt) : "Not scheduled"}</dd>
               </div>
-              <div><dt>Verified results</dt><dd>{tripData.offers.length}</dd></div>
-              <div><dt>Schedule</dt><dd>Adaptive</dd></div>
+              <div><dt>Flights</dt><dd>{tripData.offers.length}</dd></div>
             </dl>
             <p>Captain checks more often as departure approaches. Manual refresh is available once every six hours.</p>
             {trackingError && <p className="form-error" role="alert">{trackingError}</p>}
@@ -1262,7 +1544,6 @@ function Preferences({
           <em>{label(ranking)}</em>
         </summary>
         <div className="settings-body">
-          <p>Ranking and airlines apply to every tracked Trip. Default currency applies only to future Trips.</p>
           <form onSubmit={(event) => void saveProfile(event, "preferences")}>
           <label>
             Default currency
@@ -1401,12 +1682,115 @@ function rankOffers(offers: VerifiedOffer[], mode: RankingMode, preferred: strin
   });
 }
 
-function whyLabel(mode: RankingMode, offer: VerifiedOffer, offers: VerifiedOffer[]): string {
-  if (mode === "cheapest") return `Lowest verified fare; then time and stops break ties.`;
-  if (mode === "fastest") return `Shortest summed journey time; destination stays are excluded.`;
-  const cheapest = Math.min(...offers.map((item) => item.price));
-  const premium = cheapest > 0 ? Math.round((offer.price / cheapest - 1) * 100) : 0;
-  return `${premium > 0 ? `${premium}% above the lowest fare, with` : "Combines"} time and stop trade-offs.`;
+function outboundSegments(segments: Segment[]): Segment[] {
+  if (segments.length <= 1) return segments;
+  const origin = segments[0]!.origin;
+  if (segments.at(-1)!.destination !== origin) return segments;
+  let splitAfter = 0;
+  let bestGap = -1;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const gap = Date.parse(segments[index + 1]!.departure) - Date.parse(segments[index]!.arrival);
+    if (Number.isFinite(gap) && gap > bestGap) {
+      bestGap = gap;
+      splitAfter = index;
+    }
+  }
+  return segments.slice(0, splitAfter + 1);
+}
+
+type ScheduleSpineData = {
+  origin: string;
+  departure: string;
+  destination: string;
+  arrival: string;
+  stops: string[];
+};
+
+function offerScheduleSpine(offer: VerifiedOffer): ScheduleSpineData | null {
+  const segments = outboundSegments(offer.snapshot.segments ?? []);
+  if (segments.length === 0) return null;
+  const first = segments[0]!;
+  const last = segments.at(-1)!;
+  const dayOffset = calendarDayOffset(first.departure, last.arrival);
+  return {
+    origin: first.origin,
+    departure: clockLabel(first.departure),
+    destination: last.destination,
+    arrival: `${clockLabel(last.arrival)}${dayOffset > 0 ? `+${dayOffset}` : ""}`,
+    stops: segments.slice(0, -1).map((segment) => segment.destination)
+  };
+}
+
+function ScheduleSpine({ spine }: { spine: ScheduleSpineData }) {
+  const points = [
+    { key: "origin", label: `${spine.origin} ${spine.departure}`, kind: "end" as const },
+    ...spine.stops.map((airport, index) => ({
+      key: `stop-${airport}-${index}`,
+      label: airport,
+      kind: "stop" as const
+    })),
+    { key: "destination", label: `${spine.arrival} ${spine.destination}`, kind: "end" as const }
+  ];
+  return (
+    <div className="schedule-line" aria-label={`${spine.origin} to ${spine.destination}`}>
+      {points.map((point, index) => (
+        <Fragment key={point.key}>
+          {index > 0 ? <span className="schedule-connector" aria-hidden="true" /> : null}
+          <span className={`schedule-point schedule-point-${point.kind}`}>{point.label}</span>
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+function clockLabel(value: string): string {
+  return new Intl.DateTimeFormat("en", {
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+function calendarDayOffset(start: string, end: string): number {
+  const startDay = Date.UTC(
+    new Date(start).getFullYear(),
+    new Date(start).getMonth(),
+    new Date(start).getDate()
+  );
+  const endDay = Date.UTC(
+    new Date(end).getFullYear(),
+    new Date(end).getMonth(),
+    new Date(end).getDate()
+  );
+  return Math.max(0, Math.round((endDay - startDay) / 86_400_000));
+}
+
+function peerPriceComparison(offer: VerifiedOffer, offers: VerifiedOffer[]) {
+  const prices = offers.map((item) => item.price).sort((left, right) => left - right);
+  const min = prices[0] ?? offer.price;
+  const max = prices.at(-1) ?? offer.price;
+  const mid = Math.floor(prices.length / 2);
+  const median = prices.length === 0
+    ? offer.price
+    : prices.length % 2 === 0
+      ? ((prices[mid - 1] ?? offer.price) + (prices[mid] ?? offer.price)) / 2
+      : prices[mid] ?? offer.price;
+  return { min, max, median, value: offer.price };
+}
+
+function formatDurationSeconds(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.round((total % 3600) / 60);
+  if (hours <= 0) return `${minutes}m`;
+  return `${hours}h ${minutes}m`;
+}
+
+function formatMoney(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("en", { style: "currency", currency, maximumFractionDigits: 0 }).format(amount);
+  } catch {
+    return `${currency} ${amount}`;
+  }
 }
 
 function routeLabel(trip: NonNullable<TripPayload["trip"]>): string {
@@ -1420,6 +1804,8 @@ function durationSeconds(offer: VerifiedOffer): number {
   return Number(offer.snapshot.durationSeconds) || 0;
 }
 function stopCount(offer: VerifiedOffer): number {
+  const outbound = outboundSegments(offer.snapshot.segments ?? []);
+  if (outbound.length > 0) return Math.max(0, outbound.length - 1);
   return Number(offer.snapshot.stops) || 0;
 }
 function duration(offer: VerifiedOffer): string {

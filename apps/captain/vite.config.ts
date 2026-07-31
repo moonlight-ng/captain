@@ -10,6 +10,11 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 4178,
     strictPort: true,
+    watch: {
+      // Native FSEvents can miss edits in this environment; polling keeps HMR alive.
+      usePolling: true,
+      interval: 300
+    },
     proxy: {
       "/api": {
         target: apiProxyTarget,

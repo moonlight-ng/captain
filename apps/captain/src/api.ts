@@ -82,6 +82,17 @@ export async function updateTripBrief(
   });
 }
 
+export async function setTripFlightSelection(
+  tripId: string,
+  itineraryKey: string,
+  selected: boolean
+): Promise<{ tripId: string; itineraryKey: string; selected: boolean }> {
+  return api(`/api/me/trip/selections?${new URLSearchParams({ trip: tripId }).toString()}`, {
+    method: "POST",
+    body: JSON.stringify({ itineraryKey, selected })
+  });
+}
+
 export async function deleteAccount(): Promise<void> {
   await api("/api/me/account", { method: "DELETE", body: "{}" });
 }

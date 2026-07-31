@@ -31,6 +31,7 @@ export default defineChannel({
     GET("/api/me/trip", authenticated(getTrip)),
     PATCH("/api/me/trip", authenticatedMutation(updateTrip)),
     POST("/api/me/trip/actions", authenticatedMutation(tripAction)),
+    POST("/api/me/trip/selections", authenticatedMutation(setTripSelection)),
     DELETE("/api/me/account", authenticatedMutation(deleteAccount))
   ]
 });
@@ -250,6 +251,32 @@ async function tripAction(
   const action = tripActionSchema.parse(await requestJson(request));
   const updated = await services.trips.action(userId, trip.id, action);
   return Response.json({ trip: updated }, { status: 202, headers: noStore() });
+}
+
+async function setTripSelection(
+  request: Request,
+  _context: RouteContext,
+  userId: string
+): Promise<Response> {
+  const services = await getCaptainServices();
+  const requestedTripId = new URL(request.url).searchParams.get("trip");
+  const trip = requestedTripId
+    ? await services.platformStore.getTrip(userId, requestedTripId)
+    : await services.platformStore.getActiveTrip(userId);
+  if (!trip) throw new TripNotFoundError();
+  if (["cancelled", "completed", "archived"].includes(trip.status)) throw new TripNotFoundError();
+  const body = z.object({
+    itineraryKey: z.string().trim().min(1).max(500),
+    selected: z.boolean()
+  }).strict().parse(await requestJson(request));
+  const result = await services.trips.selectFlight(
+    userId,
+    trip.id,
+    body.itineraryKey,
+    body.selected
+  );
+  if (!result) throw new TripNotFoundError();
+  return Response.json(result, { headers: noStore() });
 }
 
 async function deleteAccount(
