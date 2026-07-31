@@ -7,16 +7,13 @@ describe("Smart notifications migration", () => {
   it("allows the scheduled watch status before backfilling it", () => {
     const migration = readFileSync(join(
       process.cwd(),
-      "migrations/019_smart_notifications.sql"
+      "database/migrations/001_captain_baseline.sql"
     ), "utf8");
 
     const constraintReplacement = migration.indexOf(
-      "check (status in ('active', 'scheduled', 'paused', 'completed'))"
+      "status text not null check (status in ('active', 'scheduled', 'paused', 'completed'))"
     );
-    const scheduledBackfill = migration.indexOf("set status = 'scheduled'");
-
     expect(constraintReplacement).toBeGreaterThan(-1);
-    expect(scheduledBackfill).toBeGreaterThan(-1);
-    expect(constraintReplacement).toBeLessThan(scheduledBackfill);
+    expect(migration).not.toContain("set status = 'scheduled'");
   });
 });

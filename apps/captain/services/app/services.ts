@@ -8,6 +8,7 @@ import { CaptainWebAuth } from "../auth/web-session.js";
 import { TripPlanningService } from "../trip-planning/service.js";
 import { TripService } from "../trips/service.js";
 import { loadEnv, type CaptainEnv } from "./env.js";
+import { assertCaptainDatabase } from "./project-guard.js";
 
 export type CaptainServices = {
   env: CaptainEnv;
@@ -29,6 +30,7 @@ export function getCaptainServices(): Promise<CaptainServices> {
 
 export async function createCaptainServices(): Promise<CaptainServices> {
   const env = loadEnv();
+  if (env.databaseUrl) await assertCaptainDatabase(env.databaseUrl);
   process.env.CAPTAIN_BETA_USER_LIMIT = String(env.betaUserLimit);
   process.env.CAPTAIN_PUBLIC_BETA_ENABLED = String(env.publicBetaEnabled);
   const platformStore: CaptainPlatformStore = env.databaseUrl

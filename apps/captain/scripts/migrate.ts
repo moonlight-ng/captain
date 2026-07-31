@@ -4,8 +4,10 @@ import { resolve } from "node:path";
 import postgres from "postgres";
 import { buildSearchSpecs, tripBriefSchema } from "@agents/flight-domain";
 
-const databaseUrl = process.env.DATABASE_URL?.trim();
-if (!databaseUrl) throw new Error("DATABASE_URL is required for migrations");
+const databaseUrl = process.env.MIGRATION_DATABASE_URL?.trim();
+if (!databaseUrl) {
+  throw new Error("MIGRATION_DATABASE_URL is required for migrations");
+}
 
 const sql = postgres(databaseUrl, { max: 1 });
 try {
@@ -16,17 +18,7 @@ try {
       applied_at timestamptz not null default now()
     )
   `;
-  const legacyLedger = await sql<Array<{ ledger: string | null }>>`
-    select to_regclass('flight_agent.schema_migrations')::text as ledger
-  `;
-  if (legacyLedger[0]?.ledger) {
-    await sql.unsafe(`
-      insert into captain.schema_migrations (version, applied_at)
-      select version, applied_at from flight_agent.schema_migrations
-      on conflict (version) do nothing
-    `);
-  }
-  const migrationDirectory = resolve("migrations");
+  const migrationDirectory = resolve("database/migrations");
   const files = (await readdir(migrationDirectory))
     .filter((file) => file.endsWith(".sql"))
     .sort();
