@@ -49,6 +49,7 @@ import {
 import {
   adaptiveWatchIntervalMs,
   CURRENT_OFFER_RETENTION_MS,
+  DIGEST_TRIP_LIMIT,
   DISCOVERY_SEARCH_SPEC_LIMIT,
   PRICE_HISTORY_RETENTION_MS,
   retainSearchOffers,
@@ -867,7 +868,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       from captain.trip_flight_selections selection
       join captain.trips trip on trip.id = selection.trip_id
       where selection.trip_id = ${tripId} and trip.user_id = ${userId}
-      order by selected_at desc
+      order by selected_at desc, selected_by, itinerary_key
     `;
     return rows.map((row) => ({
       tripId: row.trip_id,
@@ -1337,7 +1338,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           and trip.status not in ('paused', 'cancelled', 'completed', 'archived')
           and watch.status = 'active'
         order by trip.updated_at desc
-        limit 3
+        limit ${DIGEST_TRIP_LIMIT}
       `;
       if (trips.length === 0) continue;
       const recent = await this.#sql<Array<{ exists: boolean }>>`

@@ -1,0 +1,53 @@
+name: Flight Worker CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - apps/flight-worker/**
+      - packages/flight-domain/**
+      - packages/flight-store/**
+      - packages/observability/**
+      - packages/provider-duffel/**
+      - packages/provider-flysoar/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/flight-worker-ci.yml
+      - .github/workflows/deploy-flight-worker.yml
+  push:
+    branches: [main]
+    paths:
+      - apps/flight-worker/**
+      - packages/flight-domain/**
+      - packages/flight-store/**
+      - packages/observability/**
+      - packages/provider-duffel/**
+      - packages/provider-flysoar/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/flight-worker-ci.yml
+      - .github/workflows/deploy-flight-worker.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flight-worker-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      # The worker ships raw TypeScript through `--import tsx`, so its
+      # Dockerfile never typechecks it. `pnpm check` is the only gate.
+      - run: pnpm check

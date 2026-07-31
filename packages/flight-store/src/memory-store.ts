@@ -44,6 +44,7 @@ import {
 import {
   adaptiveWatchIntervalMs,
   CURRENT_OFFER_RETENTION_MS,
+  DIGEST_TRIP_LIMIT,
   DISCOVERY_SEARCH_SPEC_LIMIT,
   INACTIVITY_AUTO_PAUSE_MS,
   INACTIVITY_CHECKIN_MS,
@@ -750,7 +751,14 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         selectedBy: "person",
         selectedAt
       }));
-    return clone([...agentSelections, ...personSelections]);
+    // Newest first, matching the Postgres ordering, with a deterministic
+    // tiebreak so an agent and a person selection made in the same instant
+    // cannot swap between reads.
+    const selections = [...agentSelections, ...personSelections].sort((left, right) =>
+      right.selectedAt.localeCompare(left.selectedAt)
+      || left.selectedBy.localeCompare(right.selectedBy)
+      || left.itineraryKey.localeCompare(right.itineraryKey));
+    return clone(selections);
   }
 
   async setTripFlightSelection(
@@ -1025,7 +1033,9 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         if (trip.userId !== userId || !isActiveTripStatus(trip.status)) return false;
         const watch = [...this.#watches.values()].find((candidate) => candidate.tripId === trip.id);
         return watch?.status === "active" && this.#recommendations.has(trip.id);
-      });
+      })
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+        .slice(0, DIGEST_TRIP_LIMIT);
       if (trips.length === 0) continue;
       const recentImmediate = [...this.#notifications.values()].some((notification) =>
         notification.userId === userId
@@ -1043,10 +1053,16 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         "daily_digest",
         `${userId}:daily_digest:${localDateKey(now, user.timezone)}`,
         {
+          // The filter above guarantees a recommendation for every trip here.
+          // This shape is the contract Telegram renders from; keep it aligned
+          // with the Postgres digest query.
           trips: trips.map((trip) => ({
             tripId: trip.id,
             tripTitle: trip.title,
-            recommendation: this.#recommendations.get(trip.id),
+            price: this.#recommendations.get(trip.id)!.price,
+            currency: this.#recommendations.get(trip.id)!.currency,
+            summary: this.#recommendations.get(trip.id)!.summary,
+            snapshot: this.#recommendations.get(trip.id)!.snapshot,
             priceRise: this.#digestPriceRise(trip.id, now)
           }))
         },
@@ -1147,7 +1163,15 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       if (offer.searchSpecId === run.searchSpecId) this.#offers.delete(offerId);
     }
     for (const offer of retained) {
-      const stored: OfferSnapshot = { ...clone(offer), id: randomUUID(), searchRunId: runId, searchSpecId: run.searchSpecId };
+      const stored: OfferSnapshot = {
+        ...clone(offer),
+        id: randomUUID(),
+        searchRunId: runId,
+        searchSpecId: run.searchSpecId,
+        observedAt: isoTimestamp(offer.observedAt),
+        verifiedAt: isoTimestamp(offer.verifiedAt),
+        expiresAt: offer.expiresAt === null ? null : isoTimestamp(offer.expiresAt)
+      };
       this.#offers.set(stored.id, stored);
       this.#priceHistory.push({
         itineraryKey: stored.itineraryKey,
@@ -1646,13 +1670,11 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     for (const trip of trips) {
       const recommendation = this.#recommendations.get(trip.id);
       if (!recommendation?.snapshot.pendingDigestChange) continue;
-      this.#recommendations.set(trip.id, {
-        ...recommendation,
-        snapshot: {
-          ...recommendation.snapshot,
-          pendingDigestChange: null
-        }
-      });
+      // Postgres clears this with the jsonb `-` operator, which drops the key
+      // outright. The field is optional, so drop it here too rather than
+      // leaving an explicit null the real store never returns.
+      const { pendingDigestChange: _cleared, ...snapshot } = recommendation.snapshot;
+      this.#recommendations.set(trip.id, { ...recommendation, snapshot });
     }
   }
 
@@ -1762,6 +1784,16 @@ function localParts(now: Date, timezone: string): { date: string; hour: number }
     date: `${value("year")}-${value("month")}-${value("day")}`,
     hour: Number(value("hour"))
   };
+}
+
+/**
+ * Postgres round-trips every timestamp through `timestamptz` and reads it back
+ * in canonical form, so a caller-supplied "2026-08-01T12:00:01Z" comes out as
+ * "2026-08-01T12:00:01.000Z". Normalising on the way in keeps this store's
+ * observable output identical rather than echoing whatever the caller wrote.
+ */
+function isoTimestamp(value: string): string {
+  return new Date(value).toISOString();
 }
 
 function clone<T>(value: T): T {

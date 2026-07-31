@@ -14,6 +14,15 @@ with the project owner. Use separate login roles for:
 
 Never give the Workflow login membership in `captain_runtime`.
 
+`scripts/migrate.ts` reads `MIGRATION_DATABASE_URL`, not `DATABASE_URL`. When
+the target already holds a Captain project it verifies the
+`captain.project_meta` sentinel before applying anything, so a migration run
+cannot land in another product's database. Installing the baseline into a
+database with no Captain project is a separate, explicit decision: set
+`CAPTAIN_ALLOW_BASELINE=1`. Disposable test and evaluation databases are the
+expected users of that flag; production never needs it after the first
+install.
+
 Before the first Workflow bootstrap, apply `workflow-bootstrap.sql` as the
 project owner. Run the pinned `bootstrap` binary with the Workflow login, then
 apply `workflow-claim-ownership.sql` as that login and immediately apply

@@ -49,13 +49,7 @@ jobs:
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - name: Deterministic regression suite
-        run: |
-          pnpm --filter @agents/flight-domain test
-          pnpm --filter @agents/telegram-core test
-          pnpm --filter @agents/flight-store test
-          pnpm --filter @agents/captain test
-          pnpm --filter @agents/captain typecheck
-          pnpm --filter @agents/captain build
+        run: pnpm check
       - name: Verify model-test credential
         run: test -n "$AI_GATEWAY_API_KEY"
       - name: Synthetic conversation evals
@@ -103,7 +97,13 @@ jobs:
                 '
             )
 
-            DATABASE_URL="$eval_database_url" \
+            # The eval role is the single CI superuser, so it stands in for the
+            # separate captain_migrator login that production uses. Each eval
+            # database is created blank a few lines above, so the baseline
+            # install has to be opted into explicitly.
+            MIGRATION_DATABASE_URL="$eval_database_url" \
+              CAPTAIN_ALLOW_BASELINE=1 \
+              DATABASE_URL="$eval_database_url" \
               WORKFLOW_POSTGRES_URL="$eval_database_url" \
               WORKFLOW_POSTGRES_JOB_PREFIX="captain_eval_${eval_slug}" \
               pnpm --filter @agents/captain db:migrate
