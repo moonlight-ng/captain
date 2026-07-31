@@ -48,13 +48,9 @@ alter default privileges in schema captain grant all on tables to captain_migrat
 alter default privileges in schema captain grant all on sequences to captain_migrator;
 alter default privileges in schema captain grant execute on functions to captain_migrator;
 
-create schema if not exists workflow authorization captain_workflow;
-revoke all on schema workflow from public;
-grant usage, create on schema workflow to captain_workflow;
-alter role captain_workflow set search_path = workflow;
+alter role captain_workflow set search_path = workflow, public;
 
 revoke all on schema captain from captain_workflow;
-revoke all on schema workflow from captain_runtime;
 
 alter schema captain owner to captain_migrator;
 

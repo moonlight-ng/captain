@@ -11,7 +11,17 @@ if (!databaseUrl) {
 
 const sql = postgres(databaseUrl, { max: 1 });
 try {
-  await sql`create schema if not exists captain`;
+  const [project] = await sql<Array<{
+    project_kind: string;
+    schema_version: number;
+  }>>`
+    select project_kind, schema_version
+    from captain.project_meta
+    where singleton = true
+  `;
+  if (project?.project_kind !== "captain" || project.schema_version !== 1) {
+    throw new Error("Captain database sentinel mismatch");
+  }
   await sql`
     create table if not exists captain.schema_migrations (
       version text primary key,

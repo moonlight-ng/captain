@@ -13,3 +13,10 @@ with the project owner. Use separate login roles for:
 - `WORKFLOW_POSTGRES_URL` → member of `captain_workflow`
 
 Never give the Workflow login membership in `captain_runtime`.
+
+Before the first Workflow bootstrap, apply `workflow-bootstrap.sql` as the
+project owner. Run the pinned `bootstrap` binary with the Workflow login, then
+apply `workflow-claim-ownership.sql` as that login and immediately apply
+`workflow-harden.sql` as the project owner. Later releases use
+`scripts/release.mjs`, which only bootstraps when the Workflow schemas are
+genuinely missing.

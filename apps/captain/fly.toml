@@ -5,7 +5,7 @@ primary_region = "lhr"
   dockerfile = "Dockerfile"
 
 [deploy]
-  release_command = "/bin/sh -c 'node --import tsx scripts/migrate.ts && ./node_modules/.bin/bootstrap'"
+  release_command = "node scripts/release.mjs"
 
 [env]
   AI_MODEL = "openai/gpt-5.6-terra"
