@@ -924,11 +924,14 @@ export function explainNotification(notification: CaptainNotification): string |
     const lines = notification.payload.trips.flatMap((value) => {
       const trip = record(value);
       if (!trip) return [];
-      const recommendation = record(trip.recommendation);
+      // Digest entries carry the snapshot directly. Older queued digests
+      // nested it under `recommendation`, so both are still read here.
+      const snapshot = record(trip.snapshot)
+        ?? record(record(trip.recommendation)?.snapshot);
       const digestSnapshot = snapshotFromPayload(
-        record(recommendation?.snapshot)?.pendingDigestChange
-          ? { snapshot: record(recommendation?.snapshot)!.pendingDigestChange }
-          : { snapshot: recommendation?.snapshot }
+        snapshot?.pendingDigestChange
+          ? { snapshot: snapshot.pendingDigestChange }
+          : { snapshot }
       );
       const current = digestSnapshot?.current;
       if (!current) return [];

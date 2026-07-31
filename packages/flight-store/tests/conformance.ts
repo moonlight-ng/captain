@@ -147,14 +147,18 @@ export function describeCaptainPlatformStore(
         true,
         new Date("2026-08-01T12:00:04Z")
       );
+      // Newest selection first: the person picked at 12:00:04, the agent
+      // recommended at 12:00:01.
       expect(await store.listTripFlightSelections(ada.id, trip.id)).toEqual([
         expect.objectContaining({
           itineraryKey: offer!.itineraryKey,
-          selectedBy: "agent"
+          selectedBy: "person",
+          selectedAt: "2026-08-01T12:00:04.000Z"
         }),
         expect.objectContaining({
           itineraryKey: offer!.itineraryKey,
-          selectedBy: "person"
+          selectedBy: "agent",
+          selectedAt: "2026-08-01T12:00:01.000Z"
         })
       ]);
       const notifications = await store.listPendingNotifications(new Date("2026-08-01T12:00:03Z"), 10);
@@ -559,17 +563,20 @@ export function describeCaptainPlatformStore(
         new Date("2026-08-01T12:05:00Z"),
         10
       );
+      // Telegram renders the digest from this shape, so it is part of the
+      // contract: the snapshot sits directly on each trip entry.
       const trips = digest!.payload.trips as Array<{
-        recommendation: TripRecommendation;
+        tripId: string;
+        snapshot: TripRecommendation["snapshot"];
       }>;
-      expect(trips[0]?.recommendation.snapshot.pendingDigestChange).toMatchObject({
+      expect(trips[0]?.snapshot.pendingDigestChange).toMatchObject({
         current: { price: 150 },
         previous: { price: 200 },
         reasonCodes: ["better_balance"]
       });
       expect((await store.getRecommendation(
         ada.id,
-        trips[0]!.recommendation.tripId
+        trips[0]!.tripId
       ))?.snapshot.pendingDigestChange).toBeNull();
     });
 
