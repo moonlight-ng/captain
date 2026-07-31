@@ -45,6 +45,25 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: captain_conformance
+          POSTGRES_PASSWORD: captain_test
+          POSTGRES_USER: captain
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U captain -d captain_conformance"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Opts the store conformance suite into its Postgres run. Without this
+      # the suite only exercises the in-memory twin, which is how the two
+      # implementations were able to drift.
+      CAPTAIN_TEST_DATABASE_URL: postgresql://captain:captain_test@127.0.0.1:5432/captain_conformance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -52,13 +71,12 @@ jobs:
           node-version: 24
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - run: pnpm check:boundaries
-      - run: pnpm --filter @agents/flight-domain test
-      - run: pnpm --filter @agents/telegram-core test
-      - run: pnpm --filter @agents/flight-store test
-      - run: pnpm --filter @agents/captain test
-      - run: pnpm --filter @agents/flight-domain typecheck
-      - run: pnpm --filter @agents/telegram-core typecheck
-      - run: pnpm --filter @agents/flight-store typecheck
-      - run: pnpm --filter @agents/captain typecheck
-      - run: pnpm --filter @agents/captain build
+      - name: Install the Captain schema into the conformance database
+        run: pnpm --filter @agents/captain db:migrate
+        env:
+          MIGRATION_DATABASE_URL: postgresql://captain:captain_test@127.0.0.1:5432/captain_conformance
+          CAPTAIN_ALLOW_BASELINE: "1"
+      # `pnpm check` runs the boundary guard and every workspace package's
+      # test, typecheck, and build. Enumerating packages here instead let
+      # flight-worker and the provider adapters fall out of CI unnoticed.
+      - run: pnpm check

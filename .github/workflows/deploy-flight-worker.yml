@@ -1,20 +1,13 @@
 name: Deploy Flight Worker
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - apps/flight-worker/**
-      - packages/flight-domain/**
-      - packages/flight-store/**
-      - packages/observability/**
-      - packages/provider-duffel/**
-      - packages/provider-web/**
-      - package.json
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - .github/workflows/deploy-flight-worker.yml
+  workflow_run:
+    workflows: ["Flight Worker CI"]
+    types: [completed]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: deploy-flight-worker
@@ -22,9 +15,16 @@ concurrency:
 
 jobs:
   deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - run: flyctl deploy . --config apps/flight-worker/fly.toml --remote-only
         env:
