@@ -1670,13 +1670,11 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     for (const trip of trips) {
       const recommendation = this.#recommendations.get(trip.id);
       if (!recommendation?.snapshot.pendingDigestChange) continue;
-      this.#recommendations.set(trip.id, {
-        ...recommendation,
-        snapshot: {
-          ...recommendation.snapshot,
-          pendingDigestChange: null
-        }
-      });
+      // Postgres clears this with the jsonb `-` operator, which drops the key
+      // outright. The field is optional, so drop it here too rather than
+      // leaving an explicit null the real store never returns.
+      const { pendingDigestChange: _cleared, ...snapshot } = recommendation.snapshot;
+      this.#recommendations.set(trip.id, { ...recommendation, snapshot });
     }
   }
 

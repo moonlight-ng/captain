@@ -574,10 +574,11 @@ export function describeCaptainPlatformStore(
         previous: { price: 200 },
         reasonCodes: ["better_balance"]
       });
+      // Sending the digest clears the pending change by removing the key.
       expect((await store.getRecommendation(
         ada.id,
         trips[0]!.tripId
-      ))?.snapshot.pendingDigestChange).toBeNull();
+      ))?.snapshot.pendingDigestChange).toBeUndefined();
     });
 
     it("checks in after seven inactive days and pauses once after another 48 hours", async () => {
