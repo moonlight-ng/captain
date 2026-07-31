@@ -42,9 +42,8 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
     `• Cabin: ${label(brief.cabin)}${defaults.has("cabin") ? " (default)" : ""}`,
     `• Stops: ${stopLabel(brief.maxStops)}${defaults.has("maxStops") ? " (default)" : ""}`,
     `• Currency: ${brief.currency}${defaults.has("currency") ? " (default)" : ""}`,
-    "• Tracking: adaptive — every 12, 6, or 3 hours as departure approaches",
     "",
-    "Reply Yes to create it, or tell me what to change."
+    "Tap Create or Cancel below, or reply with what you’d like to change."
   ];
   return lines.join("\n");
 }
