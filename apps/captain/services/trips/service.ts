@@ -9,15 +9,6 @@ import {
 } from "@agents/flight-domain";
 import type { CaptainPlatformStore } from "@agents/flight-store";
 
-const MANUAL_REFRESH_INTERVAL_MS = 6 * 3_600_000;
-
-export class ManualRefreshLimitError extends Error {
-  constructor(readonly retryAfterSeconds: number) {
-    super(`Manual refresh is available again in ${retryAfterSeconds} seconds`);
-    this.name = "ManualRefreshLimitError";
-  }
-}
-
 export class TripService {
   readonly #store: CaptainPlatformStore;
   readonly #now: () => Date;
@@ -44,18 +35,7 @@ export class TripService {
 
   async action(userId: string, tripId: string, value: TripAction) {
     const action = tripActionSchema.parse(value);
-    const now = this.#now();
-    if (action.type === "refresh") {
-      const watch = await this.#store.getWatch(userId, tripId);
-      const lastManualRefresh = watch?.lastManualRefreshAt
-        ? Date.parse(watch.lastManualRefreshAt)
-        : 0;
-      const remaining = lastManualRefresh + MANUAL_REFRESH_INTERVAL_MS - now.getTime();
-      if (remaining > 0) {
-        throw new ManualRefreshLimitError(Math.ceil(remaining / 1_000));
-      }
-    }
-    return this.#store.applyTripAction(userId, tripId, action, now);
+    return this.#store.applyTripAction(userId, tripId, action, this.#now());
   }
 
   async update(userId: string, tripId: string, value: UpdateTripBrief) {

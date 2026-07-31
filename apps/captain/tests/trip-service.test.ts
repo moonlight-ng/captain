@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { MemoryCaptainPlatformStore } from "@agents/flight-store";
 import { TripLimitError, TripNotFoundError } from "@agents/flight-domain";
-import {
-  ManualRefreshLimitError,
-  TripService
-} from "../services/trips/service.js";
+import { TripService } from "../services/trips/service.js";
 import { defaultTestBrief } from "./support.js";
 
 describe("Trip service", () => {
@@ -27,8 +24,8 @@ describe("Trip service", () => {
     expect(paused).toMatchObject({ status: "paused", version: 2 });
   });
 
-  it("limits manual refreshes independently of automatic checks", async () => {
-    let now = new Date("2026-08-01T12:00:00Z");
+  it("allows consecutive manual refreshes", async () => {
+    const now = new Date("2026-08-01T12:00:00Z");
     const store = new MemoryCaptainPlatformStore();
     const owner = await store.ensureTelegramUser({
       telegramUserId: 1,
@@ -47,11 +44,6 @@ describe("Trip service", () => {
       type: "refresh",
       expectedVersion: 1
     });
-    await expect(service.action(owner.id, created.trip.id, {
-      type: "refresh",
-      expectedVersion: refreshed.version
-    })).rejects.toBeInstanceOf(ManualRefreshLimitError);
-    now = new Date(now.getTime() + 6 * 3_600_000);
     await expect(service.action(owner.id, created.trip.id, {
       type: "refresh",
       expectedVersion: refreshed.version

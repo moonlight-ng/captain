@@ -13,7 +13,6 @@ import {
 import { ZodError, z } from "zod";
 
 import { getCaptainServices } from "../../services/app/services.js";
-import { ManualRefreshLimitError } from "../../services/trips/service.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 export default defineChannel({
@@ -63,12 +62,6 @@ function safely(handler: Handler): Handler {
       }
       if (error instanceof TripLimitError) {
         return Response.json({ error: "trip_limit", limit: 3 }, { status: 409 });
-      }
-      if (error instanceof ManualRefreshLimitError) {
-        return Response.json(
-          { error: "refresh_limited", retryAfterSeconds: error.retryAfterSeconds },
-          { status: 429 }
-        );
       }
       if (error instanceof Error && error.message === "body_too_large") {
         return Response.json({ error: "body_too_large" }, { status: 413 });

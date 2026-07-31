@@ -1080,11 +1080,8 @@ function TripControls({
         return;
       }
       await onChanged();
-    } catch (cause) {
-      const retry = cause instanceof ApiError && cause.status === 429;
-      onError(retry
-        ? "Manual refresh is available once every six hours. Captain will keep checking automatically."
-        : "That action didn’t complete. Reload and try again.");
+    } catch {
+      onError("That action didn’t complete. Reload and try again.");
     } finally {
       setBusy(false);
     }
@@ -1244,7 +1241,7 @@ function Preferences({
               </div>
               <div><dt>Flights</dt><dd>{tripData.offers.length}</dd></div>
             </dl>
-            <p>Captain checks more often as departure approaches. Manual refresh is available once every six hours.</p>
+            <p>Captain checks more often as departure approaches. You can also refresh manually anytime.</p>
             {trackingError && <p className="form-error" role="alert">{trackingError}</p>}
             <TripControls
               data={tripData}
