@@ -4,7 +4,8 @@ import { MemoryCaptainPlatformStore } from "@agents/flight-store";
 import {
   hasDeliveredTripConfirmation,
   isCaptainGreeting,
-  parseTripPlanCallback
+  parseTripPlanCallback,
+  tripPlanConfirmationReplyMarkup
 } from "../agent/channels/telegram.js";
 import { TripPlanningService } from "../services/trip-planning/service.js";
 import {
@@ -39,6 +40,15 @@ async function setup(clock = now) {
 describe("Captain Trip planning", () => {
   it("parses revision-bound Telegram confirmation buttons", () => {
     const id = "11111111-1111-4111-8111-111111111111";
+    expect(tripPlanConfirmationReplyMarkup({ id, revision: 3 })).toEqual({
+      inline_keyboard: [[{
+        text: "Create",
+        callback_data: `captain-trip:start:${id}:3`
+      }, {
+        text: "Cancel",
+        callback_data: `captain-trip:cancel:${id}:3`
+      }]]
+    });
     expect(parseTripPlanCallback(`captain-trip:start:${id}:3`)).toEqual({
       type: "start",
       draftId: id,
@@ -172,7 +182,9 @@ describe("Captain Trip planning", () => {
     });
     expect(ready.confirmation).toContain("LOS → NYC → LON");
     expect(ready.confirmation).toContain("Travellers: 1 (default)");
-    expect(ready.confirmation).toContain("Reply Yes to create it");
+    expect(ready.confirmation).toContain(
+      "Tap Create or Cancel below, or reply with what you’d like to change."
+    );
 
     const started = await planning.confirm(user.id, ready.draft.id, ready.draft.revision);
     expect(started.status).toBe("started");
@@ -715,7 +727,15 @@ describe("Captain Trip planning", () => {
       "Create a one-way trip from Lagos to London on August 20 2025 for one adult."
     );
     if (next.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
-    const cancelled = await planning.cancel(user.id, next.draft.id, next.draft.revision);
+    const revised = await planning.handleOpenDraftText(
+      user.id,
+      "Change the departure to August 21 2025",
+      null
+    );
+    expect(revised?.status).toBe("awaiting_confirmation");
+    if (revised?.status !== "awaiting_confirmation") throw new Error("Expected revised confirmation");
+    expect(revised.draft.confirmationSnapshot?.departureDate).toBe("2025-08-21");
+    const cancelled = await planning.cancel(user.id, revised.draft.id, revised.draft.revision);
     expect(cancelled.status).toBe("cancelled");
   });
 

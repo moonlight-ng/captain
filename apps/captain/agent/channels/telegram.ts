@@ -1133,26 +1133,26 @@ async function postTripConfirmationOnce(
     if (hasDeliveredTripConfirmation(draft, message, conversation.recentMessages)) return;
     await telegram.post({
       text: message,
-      reply_markup: {
-        inline_keyboard: [
-          [{
-            text: "Create Trip",
-            callback_data: `captain-trip:start:${draft.id}:${draft.revision}`
-          }],
-          [{
-            text: "Edit",
-            callback_data: `captain-trip:edit:${draft.id}:${draft.revision}`
-          }, {
-            text: "Cancel",
-            callback_data: `captain-trip:cancel:${draft.id}:${draft.revision}`
-          }]
-        ]
-      }
+      reply_markup: tripPlanConfirmationReplyMarkup(draft)
     });
     await services.platformStore.appendMessage(userId, "assistant", message, new Date());
   } finally {
     pendingConfirmationPosts.delete(key);
   }
+}
+
+export function tripPlanConfirmationReplyMarkup(
+  draft: Pick<TripPlanDraft, "id" | "revision">
+) {
+  return {
+    inline_keyboard: [[{
+      text: "Create",
+      callback_data: `captain-trip:start:${draft.id}:${draft.revision}`
+    }, {
+      text: "Cancel",
+      callback_data: `captain-trip:cancel:${draft.id}:${draft.revision}`
+    }]]
+  };
 }
 
 export function hasDeliveredTripConfirmation(
