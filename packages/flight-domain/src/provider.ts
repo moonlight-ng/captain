@@ -71,7 +71,7 @@ export function primaryFlightInventoryProvider(_input?: {
 }
 
 export const INVENTORY_GAP_MESSAGE =
-  "No fares yet for this Trip — Captain’s current inventory sources don’t cover these airlines/routes right now. Tracking stays on and will update if options appear.";
+  "No fares yet for this trip — Captain’s current inventory sources don’t cover these airlines/routes right now. Tracking stays on and will update if options appear.";
 
 export const SUPPORTED_CURRENCY_MESSAGE =
   "Captain currently tracks fares in USD or GBP only.";

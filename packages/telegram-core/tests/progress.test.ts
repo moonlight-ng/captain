@@ -41,7 +41,7 @@ describe("Telegram progress copy", () => {
       context: "travel"
     })).toBe("Reviewing that recommendation…");
     expect(progressTextForRequest("Pause this", { context: "travel" })).toBe(
-      "Updating your Trip…"
+      "Updating your trip…"
     );
     expect(progressTextForRequest("Help me with this", { context: "travel" })).toBe(
       TRAVEL_PROGRESS_FALLBACK
@@ -57,8 +57,8 @@ describe("Telegram progress copy", () => {
     expect(statusTextForToolNames(
       ["internal_database_v2"],
       {},
-      "Checking your Trip…"
-    )).toBe("Checking your Trip…");
+      "Checking your trip…"
+    )).toBe("Checking your trip…");
   });
 
   it("extracts action names and validates stored progress copy", () => {

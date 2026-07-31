@@ -5,7 +5,7 @@ import { getCaptainServices } from "../../services/app/services.js";
 import { requireCaptainUser } from "../lib/principal.js";
 
 export default defineTool({
-  description: "List the traveller's active Trips and get verified offers for the selected or requested Trip.",
+  description: "List the traveller's active trips and get verified offers for the selected or requested trip.",
   inputSchema: z.object({ tripId: z.uuid().optional() }).strict(),
   async execute({ tripId }, ctx) {
     const userId = requireCaptainUser(ctx);

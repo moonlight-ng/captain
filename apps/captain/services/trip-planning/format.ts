@@ -8,7 +8,7 @@ import {
 
 export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
   if (!draft.confirmationSnapshot) {
-    throw new Error("Cannot confirm an incomplete Trip draft");
+    throw new Error("Cannot confirm an incomplete trip draft");
   }
   const { brief } = draft.confirmationSnapshot.input;
   const travellers = totalTravellers(brief.travellers);
@@ -22,7 +22,7 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
   const legs = brief.legs ?? [];
   const isMultiCity = brief.tripType === "multi_city";
   const lines = [
-    "Ready to create this Trip:",
+    "Ready to create this trip:",
     "",
     `• Route: ${isMultiCity ? formatLegRoute(legs) : `${brief.originAirports.join("/")} → ${brief.destinationAirports.join("/")}`}`,
     ...(isMultiCity
@@ -50,7 +50,7 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
 
 export function formatTripCreationReceipt(receipt: TripCreationReceipt): string {
   return [
-    receipt.created ? "Your Trip is saved and tracking." : "That Trip was already saved; I’m using the existing one.",
+    receipt.created ? "Your trip is saved and tracking." : "That trip was already saved; I’m using the existing one.",
     "",
     ...formatTripSummaryLines(receipt),
     "",
@@ -90,7 +90,7 @@ export function formatActiveTripLocation(input: ActiveTripFormatInput): string {
 
 export function formatActiveTripList(inputs: ActiveTripFormatInput[]): string {
   return [
-    `You’re tracking ${inputs.length} Trips:`,
+    `You’re tracking ${inputs.length} trips:`,
     "",
     ...inputs.flatMap((input) => {
       const route = input.legs && input.legs.length >= 2
@@ -138,8 +138,8 @@ function label(value: string): string {
 }
 
 function activeTripStatusLine(status: TripStatus): string {
-  if (status === "recommended") return "Your Trip has verified results.";
-  return `Your Trip is ${label(status).toLowerCase()}.`;
+  if (status === "recommended") return "I’ve found some flights for your trip.";
+  return `Your trip is ${label(status).toLowerCase()}.`;
 }
 
 function formatTripSummaryLines(input: {

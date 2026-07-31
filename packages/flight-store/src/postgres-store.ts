@@ -1554,7 +1554,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       `;
       const run = runs[0];
       if (!run) throw new Error("Search run lease is not owned by this worker");
-      // Empty verified sets keep the last good offers rather than wiping the Trip blank.
+      // Empty verified sets keep the last good offers rather than wiping the trip blank.
       if (retainedOffers.length === 0) {
         await tx`
           update captain.watches watch set last_check_at = ${now},
@@ -1969,7 +1969,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         )
         update captain.notifications notification set
           status = 'superseded',
-          error = 'A newer Trip update was available before delivery',
+          error = 'A newer trip update was available before delivery',
           updated_at = ${now}
         from ranked
         where notification.id = ranked.id

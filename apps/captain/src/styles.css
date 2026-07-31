@@ -278,7 +278,7 @@ a.recommendation-card:active { transform: scale(.99); }
 }
 .metrics span {
   color: var(--quiet);
-  font-size: var(--type-body);
+  font-size: 10px;
 }
 .metrics .airline { color: var(--quiet); }
 .metrics span:not(:last-child)::after { margin-left: 6px; content: "·"; }
@@ -979,7 +979,12 @@ a.offer-row:active { transform: scale(.99); }
 }
 .activity-list article > span { display: flex; flex-direction: column; gap: 4px; }
 .activity-list strong { font-size: var(--type-body); font-weight: 590; }
-.activity-list small { color: var(--quiet); }
+.activity-list small {
+  color: var(--quiet);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.35;
+}
 fieldset { padding: 0; border: 0; }
 legend { margin-bottom: 11px; color: var(--quiet); font-size: var(--type-body); }
 .ranking-options { display: flex; flex-direction: column; gap: 7px; }

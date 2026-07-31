@@ -1,7 +1,7 @@
 import { defineAgent, defineDynamic } from "eve";
 
 export default defineAgent({
-  description: "Captain is a public travel agent that creates Trips, tracks verified flight prices in USD or GBP, discovers the strongest options, and explains important changes.",
+  description: "Captain is a public travel agent that creates trips, tracks verified flight prices in USD or GBP, discovers the strongest options, and explains important changes.",
   model: defineDynamic({
     fallback: "openai/gpt-5.6-terra",
     events: { "session.started": () => process.env.AI_MODEL?.trim() || null }

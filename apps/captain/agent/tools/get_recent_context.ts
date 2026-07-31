@@ -7,8 +7,8 @@ import { requireCaptainUser } from "../lib/principal.js";
 export default defineTool({
   description: [
     "Retrieve a bounded window of this traveller’s recent Captain messages.",
-    "Use only when the current message is genuinely referential and cannot be resolved from the structured active Trip or draft.",
-    "Never use for greetings, new Trip requests, confirmations, or as a substitute for Trip state."
+    "Use only when the current message is genuinely referential and cannot be resolved from the structured active trip or draft.",
+    "Never use for greetings, new trip requests, confirmations, or as a substitute for trip state."
   ].join(" "),
   inputSchema: z.object({
     reason: z.enum(["ambiguous_reference", "prior_explanation"])

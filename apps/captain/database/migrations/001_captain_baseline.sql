@@ -489,7 +489,7 @@ begin
     and trip.status not in ('cancelled', 'completed', 'archived');
 
   if active_trip_count >= 3 then
-    raise exception 'A traveller may have at most 3 active Trips'
+    raise exception 'A traveller may have at most 3 active trips'
       using errcode = 'check_violation',
         constraint = 'captain_trips_max_three_active';
   end if;

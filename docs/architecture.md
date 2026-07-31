@@ -4,27 +4,27 @@
 
 `apps/captain` and `apps/flight-worker` are independently deployable and share
 Captain's PostgreSQL database and public Telegram bot token. Captain owns
-onboarding, the one-active-Trip flow, secure web sessions, and the dashboard.
+onboarding, the one-active-trip flow, secure web sessions, and the dashboard.
 The worker owns scheduled fare research and Telegram alerts.
 
 Pilot is a separate private product. It has no Captain client, flight tools,
-shared credentials, redirects, or access to Captain profiles and Trips.
+shared credentials, redirects, or access to Captain profiles and trips.
 
-## Profile, Trip, and authentication flow
+## Profile, trip, and authentication flow
 
 Each Telegram traveller has one `TravellerProfile` and up to three active or
-paused Trips. A fourth Trip requires stopping or completing an existing Trip.
-Confirmed Trip currency is immutable; changing the profile default affects
-only future Trips.
+paused trips. A fourth trip requires stopping or completing an existing trip.
+Confirmed trip currency is immutable; changing the profile default affects
+only future trips.
 
 Dashboard links contain a single-use login token in the URL fragment. Tokens
 expire after 15 minutes and exchange for a hashed, revocable, HttpOnly,
 SameSite session lasting 30 days. The authenticated API exposes only the
-current profile and the traveller’s selected Trip.
+current profile and the traveller’s selected trip.
 
 ## Search flow
 
-Each Trip has one canonical `SearchSpec`. Matching Watches may share fresh
+Each trip has one canonical `SearchSpec`. Matching Watches may share fresh
 results. `official_duffel` is primary. If its request fails or returns no
 offers, the worker calls Flysoar's public `soar_search_flights` MCP tool and
 records successful fallback inventory as `flysoar_mcp`. The direct adapter

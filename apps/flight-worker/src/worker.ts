@@ -146,8 +146,8 @@ export class FlightWorker {
             durationSeconds: metrics.durationSeconds,
             conditions: {
               fareBasis: result.provider === "official_duffel"
-                ? "One-adult Duffel total converted into Trip currency when needed"
-                : "One-adult Flysoar total converted into Trip currency when needed"
+                ? "One-adult Duffel total converted into trip currency when needed"
+                : "One-adult Flysoar total converted into trip currency when needed"
             },
             segments: metrics.segments,
             slices: offer.slices
@@ -284,13 +284,13 @@ export class FlightWorker {
 }
 
 export function notificationText(notification: CaptainNotification): string {
-  const title = stringField(notification.payload, "tripTitle") || "your Trip";
+  const title = stringField(notification.payload, "tripTitle") || "your trip";
   const route = shortRoute(title);
   if (notification.kind === "daily_digest") {
     const trips = arrayField(notification.payload, "trips");
     const lines = trips.slice(0, 3).flatMap((value) => {
       if (!recordValue(value)) return [];
-      const tripTitle = shortRoute(stringField(value, "tripTitle") || "Trip");
+      const tripTitle = shortRoute(stringField(value, "tripTitle") || "trip");
       const snapshot = digestSnapshot(value);
       if (!snapshot) {
         const summary = stringField(value, "summary");

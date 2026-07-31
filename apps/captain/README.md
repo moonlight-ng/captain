@@ -1,32 +1,32 @@
 # Captain
 
 Captain is a Telegram-first flight tracker for one traveller profile and up to
-three active Trips. It researches fares but does not book, take payments, or collect
+three active trips. It researches fares but does not book, take payments, or collect
 passport data.
 
 ## Product contract
 
 - `/start` sets a default currency, ranking mode, and optional preferred or
   avoided airlines.
-- A traveller can have up to three active or paused Trips. A fourth Trip
-  requires stopping or completing one of the existing Trips.
-- Captain currently supports USD and GBP Trips. The confirmed display
+- A traveller can have up to three active or paused trips. A fourth trip
+  requires stopping or completing one of the existing trips.
+- Captain currently supports USD and GBP trips. The confirmed display
   currency stays fixed; Duffel and Flysoar USD/GBP results are normalized into it.
 - The dashboard has **Flights**, **Airlines**, and **Browse** views. It only
   displays verified provider offers and never describes the set as exhaustive.
-- During product design, Trip and Agent settings use direct reusable links
+- During product design, trip and Agent settings use direct reusable links
   containing an opaque access key. Public-beta session authentication is
   deferred until the interaction design settles.
-- Archived Trips and their evidence are retained for 90 days. `/delete_account`
-  removes the traveller, Trip, sessions, and retained evidence.
+- Archived trips and their evidence are retained for 90 days. `/delete_account`
+  removes the traveller, trip, sessions, and retained evidence.
 
 ## Architecture
 
-`apps/captain` owns Telegram onboarding, Trip setup, authenticated profile and
-Trip APIs, and the dashboard. `apps/flight-worker` owns scheduled searches and
+`apps/captain` owns Telegram onboarding, trip setup, authenticated profile and
+trip APIs, and the dashboard. `apps/flight-worker` owns scheduled searches and
 notifications. Both use `@agents/flight-store`.
 
-Trip setup uses a versioned turn interpreter. It keeps one ordered list of
+trip setup uses a versioned turn interpreter. It keeps one ordered list of
 dated legs, records the pending question and field provenance, and applies
 validated draft operations instead of merging extracted fields. GPT-5.6 Luna
 handles the schema-constrained semantic pass with reasoning disabled for this
@@ -77,7 +77,7 @@ Optional worker controls include `DUFFEL_BASE_URL`, `FLYSOAR_MCP_URL`,
 `TRACKING_KILL_SWITCH`, and the worker scheduling controls.
 
 Captain uses `AI_MODEL=openai/gpt-5.6-terra` for its general agent and
-`TRIP_INTERPRETER_MODEL=openai/gpt-5.6-luna` for strict, low-latency Trip
+`TRIP_INTERPRETER_MODEL=openai/gpt-5.6-luna` for strict, low-latency trip
 interpretation. Relative Telegram dates use the traveller timezone selected in
 Agent settings.
 

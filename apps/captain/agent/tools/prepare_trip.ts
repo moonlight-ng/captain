@@ -6,8 +6,8 @@ import { requireCaptainUser } from "../lib/principal.js";
 
 export default defineTool({
   description: [
-    "Prepare or revise one durable Trip draft from the traveller's exact words.",
-    "Use this instead of constructing Trip fields yourself.",
+    "Prepare or revise one durable trip draft from the traveller's exact words.",
+    "Use this instead of constructing trip fields yourself.",
     "Return the service prompt or confirmation verbatim; do not recalculate dates or rewrite defaults."
   ].join(" "),
   inputSchema: z.object({

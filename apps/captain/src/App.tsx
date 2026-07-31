@@ -88,7 +88,7 @@ export function App() {
     void load();
   }, []);
 
-  if (loading) return <CenteredState title="Opening Captain…" detail="Loading your Trip." />;
+  if (loading) return <CenteredState title="Opening Captain…" detail="Loading your trip." />;
   if (!authenticated) {
     return (
       <CenteredState
@@ -129,9 +129,9 @@ export function App() {
 
       {!trip ? (
         <section className="empty-hero">
-          <p className="eyebrow">No active Trip</p>
+          <p className="eyebrow">No active trip</p>
           <h1>Tell Captain where you want to go.</h1>
-          <p>Return to Telegram to create a Trip. Captain can track up to three at once.</p>
+          <p>Return to Telegram to create a trip. Captain can track up to three at once.</p>
         </section>
       ) : watchlistFocus ? (
         <>
@@ -422,19 +422,13 @@ function WatchlistDetail({
       <div className="watchlist-panel">
         <h2>How it compares</h2>
         <PeerPricePlot comparison={comparison} currency={offer.currency} />
-        <p className="set-note">Among verified options for this Trip.</p>
+        <p className="set-note">Among verified options for this trip.</p>
       </div>
 
       <div className="watchlist-panel">
         <h2>Sources</h2>
         {offer.evidence.length > 0 ? (
           <table className="sources-table">
-            <thead>
-              <tr>
-                <th>Source</th>
-                <th>Title</th>
-              </tr>
-            </thead>
             <tbody>
               {offer.evidence.map((item) => (
                 <tr key={item.url}>
@@ -1145,7 +1139,7 @@ function Preferences({
     if (!current) return null;
     return {
       ...current,
-      context: /^Prepared from confirmed Captain Trip draft\b/iu.test(current.context)
+      context: /^Prepared from confirmed Captain trip draft\b/iu.test(current.context)
         ? ""
         : current.context
     };
@@ -1204,8 +1198,8 @@ function Preferences({
       await onTripChanged();
     } catch (cause) {
       setSaveError(cause instanceof ApiError && cause.status === 409
-        ? "This Trip changed elsewhere. Reload it from Telegram before editing."
-        : "Captain couldn’t update this Trip brief. Check the fields and try again.");
+        ? "This trip changed elsewhere. Reload it from Telegram before editing."
+        : "Captain couldn’t update this trip brief. Check the fields and try again.");
     } finally {
       setBusy(false);
     }
@@ -1217,14 +1211,14 @@ function Preferences({
       <header className="topbar">
         {tripStopped
           ? <span className="back-link inactive">Trip stopped</span>
-          : <button className="back-link" onClick={onBack}>← Trip</button>}
+          : <button className="back-link" onClick={onBack}>← trip</button>}
         <span className="name">{displayName}</span>
       </header>
       <section className="settings-intro">
         <h1>{trip ? routeLabel(trip) : "Captain"}</h1>
         <p>{trip
           ? dateRangeLabel(trip.brief.departureWindow.start, trip.brief.departureWindow.end)
-          : "Trip tracking has stopped. Choose another Trip from Telegram."}</p>
+          : "Trip tracking has stopped. Choose another trip from Telegram."}</p>
       </section>
       {trip && tripData && (
         <details className="settings-card settings-disclosure" open>
@@ -1259,7 +1253,7 @@ function Preferences({
             <em>{dateLabel(brief.departureWindow.start)}</em>
           </summary>
           <div className="settings-body">
-            <p>Editing the brief starts a fresh verified search for this Trip.</p>
+            <p>Editing the brief starts a fresh verified search for this trip.</p>
             <form onSubmit={(event) => void saveBrief(event)}>
               {brief.tripType === "multi_city" ? (
                 <div className="read-only-field">
@@ -1392,7 +1386,7 @@ function Preferences({
                 </label>
               </div>
               <label>
-                Preferred airlines for this Trip
+                Preferred airlines for this trip
                 <AirlineSearchSelect
                   values={brief.preferredAirlines}
                   placeholder="Search airlines"
@@ -1400,7 +1394,7 @@ function Preferences({
                 />
               </label>
               <label>
-                Avoid airlines for this Trip
+                Avoid airlines for this trip
                 <AirlineSearchSelect
                   values={brief.excludedAirlines}
                   placeholder="Search airlines to avoid"
@@ -1418,7 +1412,7 @@ function Preferences({
               </label>
               {saveError && <p className="form-error" role="alert">{saveError}</p>}
               <button className="save-button" disabled={busy}>
-                {busy ? "Saving…" : saved === "brief" ? "Trip updated" : "Update Trip"}
+                {busy ? "Saving…" : saved === "brief" ? "Trip updated" : "Update trip"}
               </button>
             </form>
           </div>
@@ -1634,8 +1628,8 @@ function ResultsEmpty() {
   return (
     <div className="results-empty">
       <span>⌁</span>
-      <h2>No verified results yet</h2>
-      <p>Captain only shows fares when two web checks agree on the route, dates, segments, airline, cabin, price, currency and evidence.</p>
+      <h2>No flights found</h2>
+      <p>Captain is checking the internet for flights. You’ll get a notification in Telegram when new options come up.</p>
     </div>
   );
 }

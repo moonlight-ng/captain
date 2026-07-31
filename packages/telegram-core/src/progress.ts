@@ -3,7 +3,7 @@ export const TELEGRAM_PROGRESS_DELAY_MS = 1_000;
 export const TELEGRAM_TYPING_KEEPALIVE_MS = 4_000;
 
 export const GENERAL_PROGRESS_FALLBACK = "Thinking that through…";
-export const TRAVEL_PROGRESS_FALLBACK = "Thinking through your Trip…";
+export const TRAVEL_PROGRESS_FALLBACK = "Thinking through your trip…";
 
 type ProgressContext = "general" | "travel";
 
@@ -68,7 +68,7 @@ const GENERAL_RULES: readonly ProgressRule[] = [
 const TRAVEL_RULES: readonly ProgressRule[] = [
   {
     pattern: /\b(?:cancel|pause|resume|refresh|remove|stop tracking|change|update|edit)\b/iu,
-    text: "Updating your Trip…"
+    text: "Updating your trip…"
   },
   {
     pattern: /\b(?:why|explain|reason|recommendation)\b/iu,
@@ -80,7 +80,7 @@ const TRAVEL_RULES: readonly ProgressRule[] = [
   },
   {
     pattern: /\b(?:where|status|current|tracked|tracking|trip)\b/iu,
-    text: "Checking your Trip…"
+    text: "Checking your trip…"
   }
 ];
 

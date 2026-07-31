@@ -189,7 +189,7 @@ export class TripVersionConflictError extends Error {
 
 export class TripLimitError extends Error {
   constructor() {
-    super(`A user may have at most ${MAX_ACTIVE_TRIPS_PER_USER} active Trips`);
+    super(`A user may have at most ${MAX_ACTIVE_TRIPS_PER_USER} active trips`);
     this.name = "TripLimitError";
   }
 }

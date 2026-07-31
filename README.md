@@ -3,7 +3,7 @@
 Captain is a private Moonlight repository for the Telegram-first travel agent,
 its flight-search worker, and their shared flight platform.
 
-- `apps/captain` owns onboarding, Trip planning, authenticated APIs, and the
+- `apps/captain` owns onboarding, trip planning, authenticated APIs, and the
   traveller dashboard.
 - `apps/flight-worker` owns scheduled provider searches, ranking, retention,
   and notifications.

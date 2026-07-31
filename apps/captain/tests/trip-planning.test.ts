@@ -37,7 +37,7 @@ async function setup(clock = now) {
   return { store, user, trips, planning };
 }
 
-describe("Captain Trip planning", () => {
+describe("Captain trip planning", () => {
   it("parses revision-bound Telegram confirmation buttons", () => {
     const id = "11111111-1111-4111-8111-111111111111";
     expect(tripPlanConfirmationReplyMarkup({ id, revision: 3 })).toEqual({
@@ -74,8 +74,8 @@ describe("Captain Trip planning", () => {
   it("routes only standalone greetings away from conversational history", () => {
     expect(isCaptainGreeting("Hi there")).toBe(true);
     expect(isCaptainGreeting("Good morning!")).toBe(true);
-    expect(isCaptainGreeting("Hi, plan a Trip to New York")).toBe(false);
-    expect(isCaptainGreeting("Where is my Trip?")).toBe(false);
+    expect(isCaptainGreeting("Hi, plan a trip to New York")).toBe(false);
+    expect(isCaptainGreeting("Where is my trip?")).toBe(false);
   });
 
   it("reproduces the Lagos-to-New-York conversation without changing dates", async () => {
@@ -109,7 +109,7 @@ describe("Captain Trip planning", () => {
 
     const started = await planning.confirm(user.id, second.draft.id, second.draft.revision);
     expect(started.status).toBe("started");
-    if (started.status !== "started") throw new Error("Expected started Trip");
+    if (started.status !== "started") throw new Error("Expected started trip");
     expect(started.receipt).toMatchObject({
       created: true,
       originAirports: ["LOS"],
@@ -128,14 +128,14 @@ describe("Captain Trip planning", () => {
       .resolves.toBe(started.message);
     await expect(planning.groundAssistantMessage(
       user.id,
-      `Your Trip has been set up. Trip reference: ${started.receipt.tripId}`
-    )).resolves.toBe("I couldn’t verify a Trip-creation receipt. Send /trips to check your Trips.");
-    await expect(planning.groundAssistantMessage(user.id, "Your Trip has been set up."))
-      .resolves.toBe("I couldn’t verify a Trip-creation receipt. Send /trips to check your Trips.");
+      `Your trip has been set up. trip reference: ${started.receipt.tripId}`
+    )).resolves.toBe("I couldn’t verify a trip-creation receipt. Send /trips to check your trips.");
+    await expect(planning.groundAssistantMessage(user.id, "Your trip has been set up."))
+      .resolves.toBe("I couldn’t verify a trip-creation receipt. Send /trips to check your trips.");
     for (const greeting of [
-      "Hi there! I can help you get started planning a Trip. Where would you like to go?",
-      "Let’s get your Trip started. Where are you flying from?",
-      "I can help you set up a Trip whenever you’re ready."
+      "Hi there! I can help you get started planning a trip. Where would you like to go?",
+      "Let’s get your trip started. Where are you flying from?",
+      "I can help you set up a trip whenever you’re ready."
     ]) {
       await expect(planning.groundAssistantMessage(user.id, greeting)).resolves.toBe(greeting);
     }
@@ -147,7 +147,7 @@ describe("Captain Trip planning", () => {
     expect(await trips.list(user.id)).toHaveLength(1);
   });
 
-  it("prepares and starts a Lagos to New York to London multi-city Trip", async () => {
+  it("prepares and starts a Lagos to New York to London multi-city trip", async () => {
     const { planning, trips, user } = await setup();
     expect(TripPlanningService.isTripPlanningRequest(
       "What are the best options to fly from Lagos to New York and back to London from Aug 16 - 23?"
@@ -188,7 +188,7 @@ describe("Captain Trip planning", () => {
 
     const started = await planning.confirm(user.id, ready.draft.id, ready.draft.revision);
     expect(started.status).toBe("started");
-    if (started.status !== "started") throw new Error("Expected started Trip");
+    if (started.status !== "started") throw new Error("Expected started trip");
     expect(started.receipt.legs).toHaveLength(2);
     expect(started.message).toContain("LOS → NYC → LON");
     const saved = await trips.list(user.id);
@@ -204,7 +204,7 @@ describe("Captain Trip planning", () => {
     });
   });
 
-  it("binds every date to its own leg in a longer multi-city Trip", async () => {
+  it("binds every date to its own leg in a longer multi-city trip", async () => {
     const { planning, user } = await setup();
     const ready = await planning.prepare(
       user.id,
@@ -249,7 +249,7 @@ describe("Captain Trip planning", () => {
     expect(await trips.list(user.id)).toHaveLength(1);
   });
 
-  it("clarifies weekday conflicts and never creates the inconsistent Trip", async () => {
+  it("clarifies weekday conflicts and never creates the inconsistent trip", async () => {
     const { planning, trips, user } = await setup();
     const result = await planning.prepare(
       user.id,
@@ -261,7 +261,7 @@ describe("Captain Trip planning", () => {
     expect(await trips.list(user.id)).toHaveLength(0);
   });
 
-  it("resolves a relative departure and defaults an unspecified Trip to one-way", async () => {
+  it("resolves a relative departure and defaults an unspecified trip to one-way", async () => {
     const { planning, user } = await setup();
     const result = await planning.prepare(
       user.id,
@@ -591,7 +591,7 @@ describe("Captain Trip planning", () => {
     expect(corrected.draft.confirmationSnapshot?.departureDate).toBe("2026-09-06");
   });
 
-  it("does not silently create a multi-traveller Trip in the one-adult beta", async () => {
+  it("does not silently create a multi-traveller trip in the one-adult beta", async () => {
     const { planning, trips, user } = await setup();
     const result = await planning.prepare(
       user.id,
@@ -649,10 +649,10 @@ describe("Captain Trip planning", () => {
     expect(await trips.list(user.id)).toHaveLength(0);
   });
 
-  it("tracks a different confirmed Trip alongside the current Trip", async () => {
+  it("tracks a different confirmed trip alongside the current trip", async () => {
     const { planning, trips, user } = await setup();
     const current = await trips.create(user.id, {
-      title: "Existing London Trip",
+      title: "Existing London trip",
       brief: defaultTestBrief({
         originAirports: ["LOS"],
         destinationAirports: ["LHR"],
@@ -669,7 +669,7 @@ describe("Captain Trip planning", () => {
     expect(ready.confirmation).not.toContain("archive");
     const added = await planning.confirm(user.id, ready.draft.id, ready.draft.revision);
     expect(added.status).toBe("started");
-    if (added.status !== "started") throw new Error("Expected started Trip");
+    if (added.status !== "started") throw new Error("Expected started trip");
     const saved = await trips.list(user.id);
     expect(saved).toHaveLength(2);
     expect(saved.find((trip) => trip.id === current.trip.id)).toMatchObject({
@@ -715,7 +715,7 @@ describe("Captain Trip planning", () => {
     const started = await planning.handleOpenDraftText(user.id, "Yes", null);
     expect(started?.status).toBe("started");
     expect(await planning.activeTripLocation(user.id)).toBe(
-      "Your Trip is tracking.\n\n"
+      "Your trip is tracking.\n\n"
       + "• LOS → NYC\n"
       + "• Depart: Sunday, 17 Aug 2025\n"
       + "• 1 traveller, Economy, At most 2 stops, USD\n\n"
@@ -739,7 +739,7 @@ describe("Captain Trip planning", () => {
     expect(cancelled.status).toBe("cancelled");
   });
 
-  it("turns Telegram into the selector when several Trips are active", async () => {
+  it("turns Telegram into the selector when several trips are active", async () => {
     const { planning, trips, user } = await setup();
     const anambra = await trips.create(user.id, {
       title: "Anambra",
@@ -763,7 +763,7 @@ describe("Captain Trip planning", () => {
     });
 
     const message = await planning.activeTripsLocation(user.id);
-    expect(message).toContain("You’re tracking 2 Trips:");
+    expect(message).toContain("You’re tracking 2 trips:");
     expect(message).toContain("• LOS → ANA");
     expect(message).toContain("• LOS → LHR");
     const rendered = telegramDashboardMessage(message!);

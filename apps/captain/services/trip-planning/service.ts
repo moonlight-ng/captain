@@ -45,7 +45,7 @@ const CREATION_SUCCESS_PATTERNS = [
   /\btrip\b\s+(?:has\s+been|was)\s+(?:successfully\s+)?(?:created|saved|set\s+up|started)\b/iu
 ] as const;
 const UUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/iu;
-const UNGROUNDED_CREATION_MESSAGE = "I couldn’t verify a Trip-creation receipt. Send /trips to check your Trips.";
+const UNGROUNDED_CREATION_MESSAGE = "I couldn’t verify a trip-creation receipt. Send /trips to check your trips.";
 
 export class TripPlanningService {
   readonly #store: CaptainPlatformStore;
@@ -81,7 +81,7 @@ export class TripPlanningService {
     draftId?: string
   ): Promise<TripPlanResult> {
     const result = await this.#prepareTurn(userId, request, sourceMessageId, draftId, false);
-    if (!result) throw new Error("A direct Trip-planning request was not handled");
+    if (!result) throw new Error("A direct trip-planning request was not handled");
     return result;
   }
 
@@ -170,9 +170,9 @@ export class TripPlanningService {
     );
     const basePrompt = !confirmationSnapshot || tripLimitReached
       ? tripLimitReached
-        ? "You’re already tracking three Trips. Open /preferences, stop tracking one Trip, then reply “continue” here."
+        ? "You’re already tracking three trips. Open /preferences, stop tracking one trip, then reply “continue” here."
         : unsupportedParty
-          ? "Captain’s beta currently tracks fares for exactly one adult. Reply “just me” to continue, or cancel this Trip."
+          ? "Captain’s beta currently tracks fares for exactly one adult. Reply “just me” to continue, or cancel this trip."
           : unsupportedCurrency
             ? SUPPORTED_CURRENCY_MESSAGE
             : reduced.issue ?? clarificationPrompt(missingFields, state)
@@ -275,7 +275,7 @@ export class TripPlanningService {
       this.#now()
     );
     if (!draft) throw new Error("Trip draft is stale or expired");
-    return { status: "cancelled", draft, message: "Okay—the Trip draft was cancelled." };
+    return { status: "cancelled", draft, message: "Okay—the trip draft was cancelled." };
   }
 
   async reopen(userId: string, draftId: string, expectedRevision: number): Promise<TripPlanDraft> {
@@ -470,7 +470,7 @@ function completePlan(
   const departureDate = exactDate(first);
   const returnDate = tripType === "round_trip" ? exactDate(last) : null;
   if (!first || !last || !departureDate || (tripType === "round_trip" && !returnDate)) {
-    throw new Error("Cannot complete a Trip with unresolved fields");
+    throw new Error("Cannot complete a trip with unresolved fields");
   }
   const travellers = state.travellers ?? { adults: 1 as const, childrenAges: [], infants: 0 as const };
   const cabin = state.cabin ?? "economy";
@@ -539,7 +539,7 @@ function clarificationPrompt(missingFields: string[], state: TripDraftState): st
   if (missing.has("itineraryLegs")) {
     return "What city and departure date should I use for each leg of the trip?";
   }
-  return "What should I add to the Trip?";
+  return "What should I add to the trip?";
 }
 
 function activeQuestionFor(missingFields: string[]): TripPlannerQuestion {
@@ -573,7 +573,7 @@ function buildReceipt(
   dashboardUrl: string
 ): TripCreationReceipt {
   if (!draft.confirmationSnapshot) {
-    throw new Error("Started Trip is missing its persisted confirmation snapshot");
+    throw new Error("Started trip is missing its persisted confirmation snapshot");
   }
   return buildReceiptFromTrip(
     trip,
@@ -611,7 +611,7 @@ function buildReceiptFromTrip(
     maxStops: trip.brief.maxStops,
     currency: trip.brief.currency,
     dashboardUrl,
-    accessHint: "Send /trips to open your Trips."
+    accessHint: "Send /trips to open your trips."
   };
 }
 

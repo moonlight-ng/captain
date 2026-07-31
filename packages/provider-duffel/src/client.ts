@@ -106,7 +106,7 @@ export class DuffelFlightSearchProvider implements FlightSearchProvider {
     if (!isSupportedFxCurrency(request.currency)) {
       throw new DuffelError(
         "invalid_request",
-        `Duffel inventory currently supports USD and GBP Trips only (got ${request.currency})`
+        `Duffel inventory currently supports USD and GBP trips only (got ${request.currency})`
       );
     }
     const response = await this.#request(

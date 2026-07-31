@@ -13,7 +13,7 @@ Accepted — 2026-07-30.
    `https://mcp.flysoar.ai/mcp`. No account or OAuth grant is required for
    search.
 4. Flysoar prices its public flight results in USD. Captain converts fallback
-   results into a GBP Trip's confirmed currency through the same cached
+   results into a GBP trip's confirmed currency through the same cached
    USD/GBP FX path used by the primary adapter.
 5. The worker preserves the provider returned by the successful adapter, so
    fallback fares are stored as `flysoar_mcp` and retain their Soar offer IDs.

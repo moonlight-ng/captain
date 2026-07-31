@@ -61,13 +61,13 @@ const pendingConfirmationPosts = new Set<string>();
 const PLANNING_PROGRESS_TEXT = "Working through the route and dates…";
 const CAPTAIN_TOOL_STATUS: Readonly<Record<string, string>> = {
   get_recent_context: "Checking the recent conversation…",
-  get_trip: "Checking your Trip…",
+  get_trip: "Checking your trip…",
   prepare_trip: PLANNING_PROGRESS_TEXT,
   select_trip_flight: "Comparing the flight options…",
-  start_prepared_trip: "Starting your Trip…",
-  manage_trip: "Updating your Trip…"
+  start_prepared_trip: "Starting your trip…",
+  manage_trip: "Updating your trip…"
 };
-const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. Your saved Trip is unchanged—please try again.";
+const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. Your saved trip is unchanged—please try again.";
 export const CAPTAIN_NEW_USER_GREETING =
   "Hi, I'm Captain! I can help you prepare for a flight by tracking suitable options and reporting price changes.";
 export const CAPTAIN_PREFERENCES_INTRO = "Let's start with your preferences";
@@ -137,7 +137,7 @@ export default telegramChannel({
         );
         await postCurrencyQuestion(ctx);
       } else {
-        const welcome = "I’m Captain. I can watch up to three Trips and let you know when prices or better options change.";
+        const welcome = "I’m Captain. I can watch up to three trips and let you know when prices or better options change.";
         await services.platformStore.appendMessage(user.id, "assistant", welcome, new Date());
         await postWithLink(
           ctx,
@@ -156,7 +156,7 @@ export default telegramChannel({
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       await postWithLink(
         ctx,
-        "Your preferences control how Captain ranks all tracked Trips and future Trips.",
+        "Your preferences control how Captain ranks all tracked trips and future trips.",
         "Edit preferences",
         services.auth.createAccessLink(user.id, "/preferences")
       );
@@ -166,7 +166,7 @@ export default telegramChannel({
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       const response = await services.tripPlanning.activeTripsLocation(user.id);
       if (!response) {
-        await ctx.telegram.post("You don’t have a Trip yet. Tell me where and when you want to fly.");
+        await ctx.telegram.post("You don’t have a trip yet. Tell me where and when you want to fly.");
         return null;
       }
       await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
@@ -179,7 +179,7 @@ export default telegramChannel({
     }
     if (content === "/delete_account") {
       await services.platformStore.deleteUser(user.id);
-      await ctx.telegram.post("Your Captain account, Trip, sessions, and retained fare evidence have been deleted.");
+      await ctx.telegram.post("Your Captain account, trip, sessions, and retained fare evidence have been deleted.");
       return null;
     }
     if (!content) {
@@ -217,7 +217,7 @@ export default telegramChannel({
         await services.platformStore.appendMessage(user.id, "assistant", explanation, new Date());
         await ctx.telegram.post(explanation);
       } else {
-        await ctx.telegram.post("I don’t have a recommendation for this Trip yet. I’ll explain it as soon as I find one.");
+        await ctx.telegram.post("I don’t have a recommendation for this trip yet. I’ll explain it as soon as I find one.");
       }
       return null;
     }
@@ -225,7 +225,7 @@ export default telegramChannel({
     if (isCaptainGreeting(content)) {
       const draft = await services.tripPlanning.findOpen(user.id);
       const response = draft
-        ? "Hi! Your Trip draft is still here, and we can continue whenever you’re ready."
+        ? "Hi! Your trip draft is still here, and we can continue whenever you’re ready."
         : "Hi! Tell me where you’re flying from, where you want to go, and roughly when.";
       await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
       await ctx.telegram.post(response);
@@ -263,7 +263,7 @@ export default telegramChannel({
       }
     } catch (error) {
       if (error instanceof TripLimitError) {
-        const message = "You’re already tracking three Trips. Open Agent settings and stop tracking one before creating another.";
+        const message = "You’re already tracking three trips. Open Agent settings and stop tracking one before creating another.";
         await services.platformStore.appendMessage(user.id, "assistant", message, new Date());
         await postWithLink(
           ctx,
@@ -367,7 +367,7 @@ export default telegramChannel({
       if (action.type === "start") {
         await ctx.telegram.answerCallbackQuery({
           callbackQueryId: query.id,
-          text: "Creating the Trip…"
+          text: "Creating the trip…"
         });
         const result = await services.tripPlanning.confirm(
           user.id,
@@ -385,7 +385,7 @@ export default telegramChannel({
           text: "Tell me what to change."
         });
         await clearCallbackButtons(ctx, query);
-        const message = "What should I change in this Trip?";
+        const message = "What should I change in this trip?";
         await services.platformStore.appendMessage(user.id, "assistant", message, new Date());
         await ctx.telegram.post(message);
         return;
@@ -405,11 +405,11 @@ export default telegramChannel({
       if (error instanceof TripLimitError) {
         await ctx.telegram.answerCallbackQuery({
           callbackQueryId: query.id,
-          text: "Three-Trip limit reached."
+          text: "Three-trip limit reached."
         });
         await postWithLink(
           ctx,
-          "You’re already tracking three Trips. Stop tracking one before creating another.",
+          "You’re already tracking three trips. Stop tracking one before creating another.",
           "Agent settings",
           services.auth.createAccessLink(user.id, "/preferences")
         );
@@ -421,7 +421,7 @@ export default telegramChannel({
       }));
       await ctx.telegram.answerCallbackQuery({
         callbackQueryId: query.id,
-        text: "That Trip draft changed. Please review the latest message."
+        text: "That trip draft changed. Please review the latest message."
       });
     }
   },
@@ -868,7 +868,7 @@ async function completeOnboarding(
   );
   await postWithLink(
     ctx,
-    "Preferences set. Tell me where and roughly when you want to fly. I can track up to three Trips at a time.",
+    "Preferences set. Tell me where and roughly when you want to fly. I can track up to three trips at a time.",
     "Edit preferences",
     services.auth.createAccessLink(userId, "/preferences")
   );
@@ -932,7 +932,7 @@ export function explainNotification(notification: CaptainNotification): string |
       );
       const current = digestSnapshot?.current;
       if (!current) return [];
-      return [`• ${String(trip.tripTitle ?? "Trip")}: ${current.currency} ${current.priceAmount}, checked ${new Date(current.observedAt).toISOString()}.`];
+      return [`• ${String(trip.tripTitle ?? "trip")}: ${current.currency} ${current.priceAmount}, checked ${new Date(current.observedAt).toISOString()}.`];
     });
     return lines.length > 0
       ? ["That update used the saved results available when I sent it:", ...lines].join("\n")
@@ -950,7 +950,7 @@ export function explainRecommendation(snapshot: RecommendationSnapshot): string 
   const source = evidence ? `\nEvidence: ${evidence.url}` : "";
   if (!previous) {
     return [
-      `This was the first ${titleCase(snapshot.rankingMode)} option I found for the Trip.`,
+      `This was the first ${titleCase(snapshot.rankingMode)} option I found for the trip.`,
       `It was ${current.currency} ${current.priceAmount}, ${durationLabel(currentDuration)}, ${stopLabel(snapshotNumber(current.snapshot, "stops"))}.`,
       "Prices and availability can change, so use the source below to check the latest details."
     ].join("\n") + source;

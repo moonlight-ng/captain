@@ -101,7 +101,7 @@ async function reconcileActiveTripSearchSpecs(): Promise<void> {
     reconciled += 1;
   }
   if (reconciled > 0) {
-    console.info(`Reconciled Duffel search specifications for ${reconciled} active Trips`);
+    console.info(`Reconciled Duffel search specifications for ${reconciled} active trips`);
   }
 }
 
@@ -130,5 +130,5 @@ async function backfillTripSearchSpecs(): Promise<void> {
       }
     });
   }
-  if (trips.length > 0) console.info(`Backfilled search specifications for ${trips.length} Trips`);
+  if (trips.length > 0) console.info(`Backfilled search specifications for ${trips.length} trips`);
 }
