@@ -2,6 +2,10 @@ import postgres from "postgres";
 import { PostgresCaptainPlatformStore } from "@agents/flight-store";
 import { logEvent } from "@agents/observability";
 import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
+import {
+  FallbackFlightSearchProvider,
+  FlysoarMcpFlightSearchProvider
+} from "@agents/provider-flysoar";
 
 import { loadWorkerEnv } from "./env.js";
 import { FlightWorker } from "./worker.js";
@@ -24,19 +28,23 @@ const forced = await sql`
 console.log(JSON.stringify({ forcedDue: forced, provider: "official_duffel" }, null, 2));
 await sql.end({ timeout: 5 });
 
-const provider = new DuffelFlightSearchProvider({
-  accessToken: env.duffelAccessToken,
-  baseUrl: env.duffelBaseUrl
+const provider = new FallbackFlightSearchProvider({
+  primary: new DuffelFlightSearchProvider({
+    accessToken: env.duffelAccessToken,
+    baseUrl: env.duffelBaseUrl
+  }),
+  fallback: new FlysoarMcpFlightSearchProvider({
+    mcpUrl: env.flysoarMcpUrl
+  })
 });
 
-const store = PostgresCaptainPlatformStore.connect(env.databaseUrl, 6);
+const store = PostgresCaptainPlatformStore.connect(env.databaseUrl, 1);
 const worker = new FlightWorker({
   store,
   provider,
   telegramBotToken: env.telegramBotToken,
   captainPublicUrl: env.captainPublicUrl,
   trackingEnabled: true,
-  dailyResponseLimit: env.dailyResponseLimit,
   workerId: `${env.workerId}-manual`,
   leaseMs: env.leaseMs,
   freshnessMs: 0,

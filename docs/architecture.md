@@ -25,14 +25,18 @@ current profile and the traveller’s selected Trip.
 ## Search flow
 
 Each Trip has one canonical `SearchSpec`. Matching Watches may share fresh
-results. `official_duffel` is the only live provider. The worker creates an
-offer request with a 60-second supplier window and retrieves all associated
-offers from Duffel's cursor-paginated Offers endpoint. Offers are deduplicated
-by itinerary without an arbitrary result-count cap and ordered in airline
-rounds so one carrier's fare variants do not crowd out the market.
+results. `official_duffel` is primary. If its request fails or returns no
+offers, the worker calls Flysoar's public `soar_search_flights` MCP tool and
+records successful fallback inventory as `flysoar_mcp`. The direct adapter
+creates an offer request with a 60-second supplier window and retrieves all
+associated offers from Duffel's cursor-paginated Offers endpoint. Offers are
+deduplicated by itinerary, ordered in airline rounds, and capped at 60 retained
+results so one carrier's fare variants do not crowd out the market.
 
-The provider contract reserves other `official_*` identifiers for future
-documented airline or partnership APIs. It does not permit unofficial scraping.
+Flysoar currently reports Duffel as the underlying source, so the fallback is
+transport redundancy rather than independent supplier coverage. The provider
+contract reserves other `official_*` identifiers for future documented airline
+or partnership APIs. It does not permit unofficial scraping.
 
 ## Ranking and notifications
 
@@ -48,8 +52,8 @@ historical comparison.
 
 ## Public beta controls
 
-Production starts with `CAPTAIN_PUBLIC_BETA_ENABLED=false`. Existing private
-users continue to work, but new users are admitted only after the live launch
-evaluation passes and the flag is deliberately enabled. Capacity is capped at
-25 travellers. The worker has a global tracking kill switch, adaptive
+Production originally started with `CAPTAIN_PUBLIC_BETA_ENABLED=false`.
+The capped public beta now runs with the gate enabled; switching it back to
+`false` closes onboarding without interrupting existing travellers. Capacity
+is capped at 25 travellers. The worker has a global tracking kill switch, adaptive
 12/6/3-hour checks, and six-hour manual refresh limits.

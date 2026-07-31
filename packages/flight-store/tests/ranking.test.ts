@@ -126,7 +126,7 @@ function offer(
     searchRunId: "run",
     searchSpecId: "spec",
     itineraryKey,
-    provider: "openai_web",
+    provider: "flysoar_mcp",
     providerOfferId: itineraryKey,
     providerSearchId: "search",
     price,

@@ -833,6 +833,66 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     return clone(nextTrip);
   }
 
+  async hasDueWorkerWork(now: Date): Promise<boolean> {
+    const nowMs = now.getTime();
+    for (const watch of this.#watches.values()) {
+      const trip = this.#trips.get(watch.tripId);
+      if (!trip || ["cancelled", "completed", "archived"].includes(trip.status)) continue;
+      if (
+        watch.status === "active"
+        && watch.nextCheckAt
+        && Date.parse(watch.nextCheckAt) <= nowMs
+      ) return true;
+      if (
+        watch.status === "scheduled"
+        && watch.trackingStartsAt
+        && Date.parse(watch.trackingStartsAt) <= nowMs
+      ) return true;
+      if (
+        watch.status === "active"
+        && watch.autoPauseAt
+        && Date.parse(watch.autoPauseAt) <= nowMs
+      ) return true;
+      const profile = this.#profiles.get(trip.userId);
+      if (
+        watch.status === "active"
+        && profile?.notificationMode !== "off"
+        && profile?.trackingCheckinsEnabled
+        && !watch.checkInSentAt
+        && Date.parse(watch.lastUserActivityAt) <= nowMs - INACTIVITY_CHECKIN_MS
+      ) return true;
+    }
+    for (const run of this.#runs.values()) {
+      if (run.attempt >= 3 || Date.parse(run.scheduledAt) > nowMs) continue;
+      if (["queued", "deferred"].includes(run.status)) return true;
+      if (
+        run.status === "running"
+        && run.leaseExpiresAt
+        && Date.parse(run.leaseExpiresAt) <= nowMs
+      ) return true;
+    }
+    if ([...this.#notifications.values()].some((notification) =>
+      notification.status === "pending" && Date.parse(notification.availableAt) <= nowMs
+    )) return true;
+    for (const [userId, profile] of this.#profiles) {
+      if (!["smart", "daily"].includes(profile.notificationMode)) continue;
+      const user = [...this.#usersByTelegram.values()]
+        .find((candidate) => candidate.id === userId);
+      if (
+        !user
+        || !digestDue(now, user.timezone, profile.digestHourLocal, this.#lastDigestAt.get(userId))
+      ) continue;
+      const hasDigestTrip = [...this.#trips.values()].some((trip) => {
+        if (trip.userId !== userId || !isActiveTripStatus(trip.status)) return false;
+        const watch = [...this.#watches.values()]
+          .find((candidate) => candidate.tripId === trip.id);
+        return watch?.status === "active" && this.#recommendations.has(trip.id);
+      });
+      if (hasDigestTrip) return true;
+    }
+    return false;
+  }
+
   async maintainTracking(now: Date): Promise<TrackingMaintenance> {
     let activated = 0;
     let checkInsQueued = 0;

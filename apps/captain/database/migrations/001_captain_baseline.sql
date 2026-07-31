@@ -118,7 +118,7 @@ create index captain_watches_due_idx on captain.watches (next_check_at)
 create table captain.search_specs (
   id text primary key,
   spec_key text not null unique,
-  provider text not null check (provider = 'openai_web' or provider ~ '^official_[a-z0-9_]+$'),
+  provider text not null check (provider = 'flysoar_mcp' or provider ~ '^official_[a-z0-9_]+$'),
   request jsonb not null,
   created_at timestamptz not null,
   updated_at timestamptz not null
@@ -173,7 +173,7 @@ create table captain.offers (
   search_run_id uuid not null references captain.search_runs(id) on delete cascade,
   search_spec_id text not null references captain.search_specs(id) on delete cascade,
   itinerary_key text not null references captain.itineraries(itinerary_key),
-  provider text not null check (provider = 'openai_web' or provider ~ '^official_[a-z0-9_]+$'),
+  provider text not null check (provider = 'flysoar_mcp' or provider ~ '^official_[a-z0-9_]+$'),
   provider_offer_id text not null,
   provider_search_id text not null,
   price numeric(12, 2) not null check (price >= 0),

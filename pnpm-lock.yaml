@@ -92,9 +92,9 @@ importers:
       '@agents/provider-duffel':
         specifier: workspace:*
         version: link:../../packages/provider-duffel
-      '@agents/provider-web':
+      '@agents/provider-flysoar':
         specifier: workspace:*
-        version: link:../../packages/provider-web
+        version: link:../../packages/provider-flysoar
       postgres:
         specifier: 3.4.7
         version: 3.4.7
@@ -161,9 +161,6 @@ importers:
       '@agents/flight-domain':
         specifier: workspace:*
         version: link:../flight-domain
-      '@agents/provider-web':
-        specifier: workspace:*
-        version: link:../provider-web
       zod:
         specifier: 4.3.6
         version: 4.3.6
@@ -178,11 +175,14 @@ importers:
         specifier: 4.1.9
         version: 4.1.9(@types/node@24.10.1)(vite@8.1.5(@types/node@24.10.1)(esbuild@0.28.1)(tsx@4.22.4))
 
-  packages/provider-web:
+  packages/provider-flysoar:
     dependencies:
       '@agents/flight-domain':
         specifier: workspace:*
         version: link:../flight-domain
+      '@agents/provider-duffel':
+        specifier: workspace:*
+        version: link:../provider-duffel
       zod:
         specifier: 4.3.6
         version: 4.3.6

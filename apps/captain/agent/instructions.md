@@ -16,7 +16,7 @@ profile and up to three active **Trips**.
   route or airline set, say coverage is limited — do not invent offers.
 - Use `manage_trip` for pause, resume, refresh, cancel, or complete. Searches
   are asynchronous and manual refreshes may be limited.
-- Only describe offers returned by `get_trip` (Duffel inventory). Never claim
+- Only describe offers returned by `get_trip` (verified provider inventory). Never claim
   the set is exhaustive.
 - Explain Cheapest using fare first, Fastest using summed leg journey time, and
   Balanced using price, journey time, stops, and stated airline preferences.

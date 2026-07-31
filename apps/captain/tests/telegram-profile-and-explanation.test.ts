@@ -109,7 +109,7 @@ function offer(id: string, priceAmount: string, durationSeconds: number): OfferS
     searchRunId: "run",
     searchSpecId: "spec",
     itineraryKey: id,
-    provider: "openai_web",
+    provider: "flysoar_mcp",
     providerOfferId: id,
     providerSearchId: "search",
     price: Number(priceAmount),

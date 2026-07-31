@@ -17,7 +17,7 @@
     "@agents/flight-store": "workspace:*",
     "@agents/observability": "workspace:*",
     "@agents/provider-duffel": "workspace:*",
-    "@agents/provider-web": "workspace:*",
+    "@agents/provider-flysoar": "workspace:*",
     "postgres": "3.4.7",
     "tsx": "4.22.4"
   },

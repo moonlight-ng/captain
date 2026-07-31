@@ -34,7 +34,7 @@ function offer(
   return {
     id,
     itineraryKey: id,
-    provider: "openai_web",
+    provider: "flysoar_mcp",
     price,
     priceAmount: price.toFixed(2),
     currency: "USD",

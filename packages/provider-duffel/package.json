@@ -11,7 +11,6 @@
   },
   "dependencies": {
     "@agents/flight-domain": "workspace:*",
-    "@agents/provider-web": "workspace:*",
     "zod": "4.3.6"
   },
   "devDependencies": {

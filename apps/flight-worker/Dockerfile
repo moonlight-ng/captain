@@ -11,7 +11,7 @@ COPY packages/flight-domain/package.json ./packages/flight-domain/package.json
 COPY packages/flight-store/package.json ./packages/flight-store/package.json
 COPY packages/observability/package.json ./packages/observability/package.json
 COPY packages/provider-duffel/package.json ./packages/provider-duffel/package.json
-COPY packages/provider-web/package.json ./packages/provider-web/package.json
+COPY packages/provider-flysoar/package.json ./packages/provider-flysoar/package.json
 COPY packages/telegram-core/package.json ./packages/telegram-core/package.json
 RUN pnpm install --frozen-lockfile --prod
 
@@ -20,7 +20,7 @@ COPY packages/flight-domain ./packages/flight-domain
 COPY packages/flight-store ./packages/flight-store
 COPY packages/observability ./packages/observability
 COPY packages/provider-duffel ./packages/provider-duffel
-COPY packages/provider-web ./packages/provider-web
+COPY packages/provider-flysoar ./packages/provider-flysoar
 
 WORKDIR /app/apps/flight-worker
 CMD ["node", "--import", "tsx", "src/index.ts"]

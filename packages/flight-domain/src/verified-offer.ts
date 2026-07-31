@@ -33,6 +33,8 @@ export type FareEvidence = z.infer<typeof fareEvidenceSchema>;
 
 export const verifiedOfferCandidateSchema = z.object({
   itineraryKey: z.string().trim().min(8).max(500),
+  providerOfferId: z.string().trim().min(1).max(200).optional(),
+  expiresAt: z.iso.datetime({ offset: true }).nullable().optional(),
   priceAmount: decimalAmountSchema,
   currency: currencyCodeSchema,
   fareBasis: z.literal("one_adult_total"),

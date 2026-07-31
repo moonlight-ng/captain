@@ -1,5 +1,5 @@
 {
-  "name": "@agents/provider-web",
+  "name": "@agents/provider-flysoar",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@agents/flight-domain": "workspace:*",
+    "@agents/provider-duffel": "workspace:*",
     "zod": "4.3.6"
   },
   "devDependencies": {

@@ -1,7 +1,7 @@
 # Captain database
 
-`migrations/001_captain_baseline.sql` is the only executable Captain schema
-history for a fresh project. The former prototype chain remains in
+`migrations/001_captain_baseline.sql` is the fresh-project baseline; later
+numbered files are forward-only production changes. The former prototype chain remains in
 `archive/prototype-migrations/` as a read-only archive and is never scanned by
 the migrator.
 

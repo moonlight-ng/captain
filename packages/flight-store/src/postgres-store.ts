@@ -67,10 +67,14 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     this.#sql = sql;
   }
 
-  static connect(databaseUrl: string, max = 8): PostgresCaptainPlatformStore {
+  static connect(
+    databaseUrl: string,
+    max = 4,
+    idleTimeoutSeconds = 600
+  ): PostgresCaptainPlatformStore {
     return new PostgresCaptainPlatformStore(postgres(databaseUrl, {
       max,
-      idle_timeout: 20,
+      idle_timeout: idleTimeoutSeconds,
       connect_timeout: 15,
       transform: { undefined: null }
     }));
@@ -1021,12 +1025,96 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     });
   }
 
+  async hasDueWorkerWork(now: Date): Promise<boolean> {
+    const checkInBefore = new Date(now.getTime() - INACTIVITY_CHECKIN_MS);
+    const rows = await this.#sql<Array<{ due: boolean }>>`
+      select (
+        exists (
+          select 1
+          from captain.watches watch
+          join captain.trips trip on trip.id = watch.trip_id
+          left join captain.traveller_profiles profile on profile.user_id = trip.user_id
+          where trip.status not in ('cancelled', 'completed', 'archived')
+            and (
+              (
+                watch.status = 'active'
+                and watch.next_check_at is not null
+                and watch.next_check_at <= ${now}
+              )
+              or (
+                watch.status = 'scheduled'
+                and watch.tracking_starts_at is not null
+                and watch.tracking_starts_at <= ${now}
+              )
+              or (
+                watch.status = 'active'
+                and watch.auto_pause_at is not null
+                and watch.auto_pause_at <= ${now}
+              )
+              or (
+                watch.status = 'active'
+                and profile.notification_mode <> 'off'
+                and profile.tracking_checkins_enabled
+                and watch.check_in_sent_at is null
+                and watch.last_user_activity_at <= ${checkInBefore}
+              )
+            )
+        )
+        or exists (
+          select 1
+          from captain.search_runs run
+          where run.scheduled_at <= ${now}
+            and run.attempt < 3
+            and (
+              run.status in ('queued', 'deferred')
+              or (
+                run.status = 'running'
+                and run.lease_expires_at is not null
+                and run.lease_expires_at <= ${now}
+              )
+            )
+        )
+        or exists (
+          select 1
+          from captain.notifications notification
+          where notification.status = 'pending'
+            and notification.available_at <= ${now}
+        )
+        or exists (
+          select 1
+          from captain.traveller_profiles profile
+          join captain.users users on users.id = profile.user_id
+          where profile.notification_mode in ('smart', 'daily')
+            and extract(hour from timezone(users.timezone, ${now}::timestamptz))
+              >= profile.digest_hour_local
+            and (
+              profile.last_digest_at is null
+              or timezone(users.timezone, profile.last_digest_at)::date
+                < timezone(users.timezone, ${now}::timestamptz)::date
+            )
+            and exists (
+              select 1
+              from captain.trips trip
+              join captain.watches watch on watch.trip_id = trip.id
+              join captain.trip_recommendations recommendation
+                on recommendation.trip_id = trip.id
+              where trip.user_id = profile.user_id
+                and trip.status not in ('paused', 'cancelled', 'completed', 'archived')
+                and watch.status = 'active'
+            )
+        )
+      ) as due
+    `;
+    return rows[0]?.due ?? false;
+  }
+
   async maintainTracking(now: Date): Promise<TrackingMaintenance> {
     const rows = await this.#sql<Array<{
       watch_id: string;
       trip_id: string;
       user_id: string;
       title: string;
+      departure_date: string | null;
       watch_status: Watch["status"];
       tracking_starts_at: Date | null;
       last_user_activity_at: Date;
@@ -1036,6 +1124,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       tracking_checkins_enabled: boolean;
     }>>`
       select watch.id as watch_id, trip.id as trip_id, trip.user_id, trip.title,
+        trip.brief #>> '{departureWindow,start}' as departure_date,
         watch.status as watch_status, watch.tracking_starts_at,
         watch.last_user_activity_at, watch.check_in_sent_at, watch.auto_pause_at,
         profile.notification_mode, profile.tracking_checkins_enabled
@@ -1044,6 +1133,26 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       join captain.traveller_profiles profile on profile.user_id = trip.user_id
       where watch.status in ('active', 'scheduled')
         and trip.status not in ('cancelled', 'completed', 'archived')
+        and (
+          (
+            watch.status = 'scheduled'
+            and watch.tracking_starts_at is not null
+            and watch.tracking_starts_at <= ${now}
+          )
+          or (
+            watch.status = 'active'
+            and watch.auto_pause_at is not null
+            and watch.auto_pause_at <= ${now}
+          )
+          or (
+            watch.status = 'active'
+            and profile.notification_mode <> 'off'
+            and profile.tracking_checkins_enabled
+            and watch.check_in_sent_at is null
+            and watch.last_user_activity_at
+              <= ${new Date(now.getTime() - INACTIVITY_CHECKIN_MS)}
+          )
+        )
     `;
     let activated = 0;
     let checkInsQueued = 0;
@@ -1154,7 +1263,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           dedupKey: `${row.trip_id}:tracking_checkin:${now.toISOString().slice(0, 10)}`,
           payload: {
             tripTitle: row.title,
-            departureDate: (await this.getTripById(row.trip_id))?.brief.departureWindow.start
+            departureDate: row.departure_date
           },
           now
         });
@@ -1185,6 +1294,23 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       from captain.traveller_profiles profile
       join captain.users users on users.id = profile.user_id
       where profile.notification_mode in ('smart', 'daily')
+        and extract(hour from timezone(users.timezone, ${now}::timestamptz))
+          >= profile.digest_hour_local
+        and (
+          profile.last_digest_at is null
+          or timezone(users.timezone, profile.last_digest_at)::date
+            < timezone(users.timezone, ${now}::timestamptz)::date
+        )
+        and exists (
+          select 1
+          from captain.trips trip
+          join captain.watches watch on watch.trip_id = trip.id
+          join captain.trip_recommendations recommendation
+            on recommendation.trip_id = trip.id
+          where trip.user_id = profile.user_id
+            and trip.status not in ('paused', 'cancelled', 'completed', 'archived')
+            and watch.status = 'active'
+        )
     `;
     let queued = 0;
     for (const profile of profiles) {

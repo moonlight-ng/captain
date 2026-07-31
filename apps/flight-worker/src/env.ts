@@ -2,34 +2,50 @@ export type WorkerEnv = {
   databaseUrl: string;
   duffelAccessToken: string;
   duffelBaseUrl: string;
+  flysoarMcpUrl: string;
   telegramBotToken: string;
   captainPublicUrl: string;
   trackingEnabled: boolean;
-  dailyResponseLimit: number;
   workerId: string;
   port: number;
   tickMs: number;
+  maxIdleTickMs: number;
   leaseMs: number;
   freshnessMs: number;
   claimLimit: number;
 };
 
 export function loadWorkerEnv(source: NodeJS.ProcessEnv = process.env): WorkerEnv {
+  const tickMs = positive(source, "FLIGHT_WORKER_TICK_MS", 60_000);
   return {
     databaseUrl: required(source, "DATABASE_URL"),
     duffelAccessToken: required(source, "DUFFEL_ACCESS_TOKEN"),
     duffelBaseUrl: (source.DUFFEL_BASE_URL?.trim() || "https://api.duffel.com").replace(/\/$/u, ""),
+    flysoarMcpUrl: (source.FLYSOAR_MCP_URL?.trim() || "https://mcp.flysoar.ai/mcp").replace(/\/$/u, ""),
     telegramBotToken: required(source, "TELEGRAM_BOT_TOKEN"),
     captainPublicUrl: required(source, "CAPTAIN_PUBLIC_URL").replace(/\/$/u, ""),
     trackingEnabled: !booleanValue(source.TRACKING_KILL_SWITCH, false),
-    dailyResponseLimit: positive(source, "DAILY_RESPONSES_CEILING", 500),
     workerId: source.FLIGHT_WORKER_ID?.trim() || `worker-${process.pid}`,
     port: positive(source, "PORT", 8080),
-    tickMs: positive(source, "FLIGHT_WORKER_TICK_MS", 60_000),
+    tickMs,
+    maxIdleTickMs: Math.max(
+      tickMs,
+      positive(source, "FLIGHT_WORKER_MAX_IDLE_TICK_MS", 300_000)
+    ),
     leaseMs: positive(source, "FLIGHT_WORKER_LEASE_MS", 240_000),
     freshnessMs: positive(source, "FLIGHT_SEARCH_FRESHNESS_MS", 900_000),
     claimLimit: positive(source, "FLIGHT_WORKER_CLAIM_LIMIT", 1)
   };
+}
+
+export function idleTickDelayMs(
+  tickMs: number,
+  maxIdleTickMs: number,
+  consecutiveIdleTicks: number
+): number {
+  if (consecutiveIdleTicks <= 0) return tickMs;
+  const multiplier = 2 ** Math.min(consecutiveIdleTicks, 10);
+  return Math.min(maxIdleTickMs, tickMs * multiplier);
 }
 
 function booleanValue(value: string | undefined, fallback: boolean): boolean {

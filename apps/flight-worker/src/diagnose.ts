@@ -64,7 +64,6 @@ for (const item of cases) {
       ok: true,
       verifiedOfferCount: result.offers.length,
       rejectionCounts: result.rejectionCounts,
-      webSearchCalls: result.webSearchCalls,
       latencyMs: Date.now() - startedAt,
       sample: result.offers.slice(0, 2).map((offer) => ({
         priceAmount: offer.priceAmount,

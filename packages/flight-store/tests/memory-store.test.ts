@@ -140,7 +140,7 @@ describe("Captain platform store", () => {
     await store.scheduleDueSearchRuns(new Date("2026-08-01T12:00:00Z"), 900_000, 100);
     const run = (await store.claimSearchRuns("worker-1", new Date("2026-08-01T12:00:00Z"), 180_000, 1))[0]!;
     await store.completeSearchRun("worker-1", run.id, "orq_1", [{
-      itineraryKey: "BA982|LHR|BER", provider: "openai_web", providerOfferId: "off_1",
+      itineraryKey: "BA982|LHR|BER", provider: "flysoar_mcp", providerOfferId: "off_1",
       providerSearchId: "orq_1", price: 100, currency: "GBP",
       ...verifiedMetadata("100.00", "BA"),
       expiresAt: "2026-08-01T12:30:00Z", observedAt: "2026-08-01T12:00:01Z",
@@ -191,7 +191,7 @@ describe("Captain platform store", () => {
     await store.scheduleDueSearchRuns(new Date("2026-08-01T12:00:00Z"), 900_000, 100);
     const run = (await store.claimSearchRuns("worker-1", new Date("2026-08-01T12:00:00Z"), 180_000, 1))[0]!;
     await store.completeSearchRun("worker-1", run.id, "orq_1", [{
-      itineraryKey: "BA982|LHR|BER", provider: "openai_web", providerOfferId: "off_1",
+      itineraryKey: "BA982|LHR|BER", provider: "flysoar_mcp", providerOfferId: "off_1",
       providerSearchId: "orq_1", price: 100, currency: "GBP",
       ...verifiedMetadata("100.00", "BA"),
       expiresAt: "2026-08-01T12:30:00Z", observedAt: "2026-08-01T12:00:01Z",
@@ -254,7 +254,7 @@ describe("Captain platform store", () => {
       "orq_1",
       Array.from({ length: 40 }, (_, index) => ({
         itineraryKey: `BA${100 + index}|LHR|BER`,
-        provider: "openai_web" as const,
+        provider: "flysoar_mcp" as const,
         providerOfferId: `old_${index}`,
         providerSearchId: "orq_1",
         price: 200 + index,
@@ -278,7 +278,7 @@ describe("Captain platform store", () => {
     const secondRun = (await store.claimSearchRuns("worker-1", new Date("2026-08-02T00:00:00Z"), 180_000, 1))[0]!;
     await store.completeSearchRun("worker-1", secondRun.id, "orq_2", Array.from({ length: 3 }, (_, index) => ({
       itineraryKey: `BA${100 + index}|LHR|BER`,
-      provider: "openai_web" as const,
+      provider: "flysoar_mcp" as const,
       providerOfferId: `new_${index}`,
       providerSearchId: "orq_2",
       price: 100 + index,
@@ -316,7 +316,7 @@ describe("Captain platform store", () => {
     const firstRun = (await store.claimSearchRuns("worker-1", new Date("2026-08-01T12:00:00Z"), 180_000, 1))[0]!;
     await store.completeSearchRun("worker-1", firstRun.id, "orq_1", [{
       itineraryKey: "BA982|LHR|BER",
-      provider: "openai_web",
+      provider: "flysoar_mcp",
       providerOfferId: "offer_1",
       providerSearchId: "orq_1",
       price: 199,
@@ -364,7 +364,7 @@ describe("Captain platform store", () => {
       const run = (await store.claimSearchRuns("worker-1", now, 180_000, 1))[0]!;
       await store.completeSearchRun("worker-1", run.id, `orq_${index}`, [{
         itineraryKey: "BA982|LHR|BER",
-        provider: "openai_web",
+        provider: "flysoar_mcp",
         providerOfferId: `offer_${index}`,
         providerSearchId: `orq_${index}`,
         price,
@@ -776,7 +776,7 @@ async function runSearch(
   expect(run.searchSpecId).toBe(searchSpecId);
   await store.completeSearchRun("worker-test", run.id, `request-${now.toISOString()}`, [{
     itineraryKey,
-    provider: "openai_web",
+    provider: "flysoar_mcp",
     providerOfferId: itineraryKey,
     providerSearchId: `request-${now.toISOString()}`,
     price,

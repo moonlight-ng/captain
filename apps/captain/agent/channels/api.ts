@@ -108,7 +108,6 @@ function authenticatedMutation(handler: UserHandler): Handler {
 async function readiness(): Promise<Response> {
   try {
     const services = await getCaptainServices();
-    await services.platformStore.countUsers();
     return Response.json({
       status: "ready",
       storage: services.env.databaseUrl ? "postgres" : "memory"

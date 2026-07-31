@@ -11,9 +11,9 @@ passport data.
 - A traveller can have up to three active or paused Trips. A fourth Trip
   requires stopping or completing one of the existing Trips.
 - Captain currently supports USD and GBP Trips. The confirmed display
-  currency stays fixed; Duffel GBP/USD results are normalized into it.
+  currency stays fixed; Duffel and Flysoar USD/GBP results are normalized into it.
 - The dashboard has **Flights**, **Airlines**, and **Browse** views. It only
-  displays Duffel offers and never describes the set as exhaustive.
+  displays verified provider offers and never describes the set as exhaustive.
 - During product design, Trip and Agent settings use direct reusable links
   containing an opaque access key. Public-beta session authentication is
   deferred until the interaction design settles.
@@ -38,11 +38,12 @@ field. Terra remains the general Captain agent model. This follows OpenAI's
 and [Structured Outputs guidance](https://developers.openai.com/api/docs/guides/structured-outputs).
 
 The worker uses the provider-neutral `FlightSearchProvider` contract with
-`official_duffel` as its only live adapter. It gives suppliers up to 60 seconds
-to respond, then retrieves the resulting offers through Duffel's paginated
-Offers endpoint until no cursor remains. Offers are deduplicated by itinerary,
-stored without an arbitrary count cap, and ordered across primary marketing
-airlines before additional variants from the same airline.
+`official_duffel` as primary and `flysoar_mcp` as its automatic backup after a
+primary error or empty result. The direct adapter gives suppliers up to 60
+seconds to respond, then retrieves the resulting offers through Duffel's
+paginated Offers endpoint until no cursor remains. Offers are deduplicated by
+itinerary, ordered across primary marketing airlines, and capped at 60 retained
+results per search.
 
 Captain and Pilot are independent. Captain has no Pilot client, route,
 principal, secret, tool, or redirect. Future provider adapters use the
@@ -72,7 +73,7 @@ The flight worker has its own ignored `.env`. It requires:
 - `TELEGRAM_BOT_TOKEN`
 - `CAPTAIN_PUBLIC_URL`
 
-Optional worker controls include `DUFFEL_BASE_URL`,
+Optional worker controls include `DUFFEL_BASE_URL`, `FLYSOAR_MCP_URL`,
 `TRACKING_KILL_SWITCH`, and the worker scheduling controls.
 
 Captain uses `AI_MODEL=openai/gpt-5.6-terra` for its general agent and
@@ -80,9 +81,9 @@ Captain uses `AI_MODEL=openai/gpt-5.6-terra` for its general agent and
 interpretation. Relative Telegram dates use the traveller timezone selected in
 Agent settings.
 
-Production keeps `CAPTAIN_PUBLIC_BETA_ENABLED=false` until the live launch
-gate below passes. Existing private users continue to work while new
-travellers are held back. Set it to `true` only when opening the capped beta.
+Production now runs with `CAPTAIN_PUBLIC_BETA_ENABLED=true`, admitting new
+travellers up to the capped beta limit. Set it back to `false` to close
+onboarding without interrupting existing travellers.
 
 ## Public beta limits
 

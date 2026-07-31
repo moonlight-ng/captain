@@ -2,11 +2,13 @@ import { createHash } from "node:crypto";
 
 import {
   deriveOfferMetrics,
+  FlightSearchProviderError,
   verifiedOfferCandidateSchema,
+  type FlightSearchProvider,
+  type FlightSearchResult,
   type SearchSpecRequest,
   type VerifiedOfferCandidate
 } from "@agents/flight-domain";
-import type { FlightSearchProvider, WebSearchResult } from "@agents/provider-web";
 import { z } from "zod";
 
 import { convertAmount, isSupportedFxCurrency, type FxQuote, type SupportedFxCurrency } from "./fx.js";
@@ -58,13 +60,18 @@ export type DuffelErrorCode =
   | "offer_expired"
   | "fx_unavailable";
 
-export class DuffelError extends Error {
+export class DuffelError extends FlightSearchProviderError {
   constructor(
     readonly code: DuffelErrorCode,
     message?: string,
     readonly retryAfterMs: number | null = null
   ) {
-    super(message ?? `Duffel request failed: ${code}`);
+    super(
+      "official_duffel",
+      code,
+      message ?? `Duffel request failed: ${code}`,
+      retryAfterMs
+    );
     this.name = "DuffelError";
   }
 }
@@ -95,7 +102,7 @@ export class DuffelFlightSearchProvider implements FlightSearchProvider {
     }
   }
 
-  async search(request: SearchSpecRequest): Promise<WebSearchResult> {
+  async search(request: SearchSpecRequest): Promise<FlightSearchResult> {
     if (!isSupportedFxCurrency(request.currency)) {
       throw new DuffelError(
         "invalid_request",
@@ -126,14 +133,14 @@ export class DuffelFlightSearchProvider implements FlightSearchProvider {
     offers.sort((left, right) => Number(left.priceAmount) - Number(right.priceAmount));
 
     return {
+      provider: this.provider,
       requestId: parsed.data.data.id,
       discoveryResponseId: parsed.data.data.id,
       verificationResponseId: parsed.data.data.id,
       model: "duffel",
       promptVersion: "duffel-paginated-v2",
       offers,
-      rejectionCounts: {},
-      webSearchCalls: 0
+      rejectionCounts: {}
     };
   }
 
@@ -296,6 +303,8 @@ async function mapOffer(
 
   const candidate = verifiedOfferCandidateSchema.parse({
     itineraryKey,
+    providerOfferId: parsed.data.id,
+    expiresAt: parsed.data.expires_at ?? null,
     priceAmount: formatAmount(priceAmount, currency),
     currency,
     fareBasis: "one_adult_total",

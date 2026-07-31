@@ -3,13 +3,14 @@ import { describe, expect, it } from "vitest";
 import type { CompletedProviderOffer } from "../src/contracts.js";
 import {
   adaptiveWatchIntervalMs,
+  MAX_RETAINED_OFFERS_PER_SEARCH,
   retainSearchOffers,
   trackingStartsAt
 } from "../src/watch-policy.js";
 
 describe("efficient watch policy", () => {
-  it("keeps every deduplicated offer, orders airlines representatively, and strips raw payloads", () => {
-    const offers = Array.from({ length: 40 }, (_, index) => providerOffer(index));
+  it("caps deduplicated offers, orders airlines representatively, and strips raw payloads", () => {
+    const offers = Array.from({ length: 100 }, (_, index) => providerOffer(index));
     offers.push({
       ...providerOffer(100),
       itineraryKey: offers[0]!.itineraryKey,
@@ -19,7 +20,7 @@ describe("efficient watch policy", () => {
 
     const retained = retainSearchOffers(offers);
 
-    expect(retained).toHaveLength(40);
+    expect(retained).toHaveLength(MAX_RETAINED_OFFERS_PER_SEARCH);
     expect(retained.find((offer) => offer.itineraryKey === offers[0]!.itineraryKey)?.price).toBe(50);
     expect(new Set(retained.map((offer) => offer.itineraryKey)).size).toBe(retained.length);
     expect(retained.every((offer) => !("raw" in offer.snapshot))).toBe(true);
@@ -46,7 +47,7 @@ function providerOffer(index: number): CompletedProviderOffer {
   const airlineCode = ["BA", "KL", "LH", "AF", "SK"][index % 5]!;
   return {
     itineraryKey: `${airlineCode}${100 + index}|LHR|BER|${index}`,
-    provider: "openai_web",
+    provider: "flysoar_mcp",
     providerOfferId: `off_${index}`,
     providerSearchId: "orq_1",
     price: 100 + index,

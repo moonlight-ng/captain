@@ -116,7 +116,7 @@ describe("DuffelFlightSearchProvider", () => {
       primaryAirlineCode: "BA"
     });
     expect(result.offers[0]!.evidence[0]!.title).toContain("GBP 800");
-    expect(result.webSearchCalls).toBe(0);
+    expect(result.provider).toBe("official_duffel");
     expect(provider.provider).toBe("official_duffel");
   });
 

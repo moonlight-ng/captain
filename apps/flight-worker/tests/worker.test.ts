@@ -1,12 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { buildSearchSpecs, type CreateTripInput } from "@agents/flight-domain";
+import {
+  buildSearchSpecs,
+  type CreateTripInput,
+  type FlightSearchProvider
+} from "@agents/flight-domain";
 import { MemoryCaptainPlatformStore } from "@agents/flight-store";
-import type { FlightSearchProvider } from "@agents/provider-web";
 
 import { FlightWorker, notificationText } from "../src/worker.js";
 
 describe("flight worker orchestration", () => {
+  it("uses only the due-work gate while the worker is idle", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    const prune = vi.spyOn(store, "pruneWatchData");
+    const maintain = vi.spyOn(store, "maintainTracking");
+    const schedule = vi.spyOn(store, "scheduleDueSearchRuns");
+    const claim = vi.spyOn(store, "claimSearchRuns");
+    const digest = vi.spyOn(store, "enqueueDueDigests");
+    const notifications = vi.spyOn(store, "listPendingNotifications");
+    const worker = new FlightWorker({
+      store,
+      provider: {
+        provider: "official_duffel",
+        search: vi.fn()
+      } as unknown as FlightSearchProvider,
+      telegramBotToken: "test",
+      captainPublicUrl: "https://captain.example.com",
+      trackingEnabled: true,
+      workerId: "worker-1",
+      leaseMs: 240_000,
+      freshnessMs: 900_000,
+      claimLimit: 1
+    });
+
+    await expect(worker.tick(new Date("2026-08-01T12:00:00Z")))
+      .resolves.toEqual({ scheduled: 0, processed: 0, notified: 0 });
+    await expect(worker.tick(new Date("2026-08-01T12:01:00Z")))
+      .resolves.toEqual({ scheduled: 0, processed: 0, notified: 0 });
+
+    expect(worker.lastTickHadDueWork).toBe(false);
+    expect(prune).toHaveBeenCalledTimes(1);
+    expect(maintain).not.toHaveBeenCalled();
+    expect(schedule).not.toHaveBeenCalled();
+    expect(claim).not.toHaveBeenCalled();
+    expect(digest).not.toHaveBeenCalled();
+    expect(notifications).not.toHaveBeenCalled();
+  });
+
   it("runs one shared search and fans results out", async () => {
     const store = new MemoryCaptainPlatformStore();
     const user = await store.ensureTelegramUser({
@@ -25,13 +65,13 @@ describe("flight worker orchestration", () => {
     };
     await store.createTrip(user.id, input, buildSearchSpecs(input.brief, false), new Date("2026-08-01T12:00:00Z"));
     const search = vi.fn(async () => ({
+      provider: "flysoar_mcp" as const,
       requestId: "resp_discovery:resp_verify",
       discoveryResponseId: "resp_discovery",
       verificationResponseId: "resp_verify",
       model: "gpt-5.6-sol",
       promptVersion: "test-v1",
       rejectionCounts: {},
-      webSearchCalls: 2,
       offers: [{
         itineraryKey: "verified-itinerary-1",
         priceAmount: "99.00",
@@ -58,11 +98,10 @@ describe("flight worker orchestration", () => {
       }]
     }));
     const worker = new FlightWorker({
-      store, provider: { provider: "openai_web", search } as FlightSearchProvider,
+      store, provider: { provider: "official_duffel", search } as FlightSearchProvider,
       telegramBotToken: "test",
       captainPublicUrl: "https://captain.example.com",
       trackingEnabled: true,
-      dailyResponseLimit: 500,
       workerId: "worker-1", leaseMs: 240_000, freshnessMs: 900_000, claimLimit: 1
     });
     vi.stubGlobal("fetch", vi.fn(async () => new Response(
@@ -78,6 +117,7 @@ describe("flight worker orchestration", () => {
       payload: {
         snapshot: {
           current: {
+            provider: "flysoar_mcp",
             evidence: [{ url: "https://ba.com/flight" }]
           }
         }
@@ -220,66 +260,6 @@ describe("flight worker orchestration", () => {
     );
   });
 
-  it("defers a run without calling the provider when the daily ceiling is reached", async () => {
-    const store = new MemoryCaptainPlatformStore();
-    const user = await store.ensureTelegramUser({
-      telegramUserId: 2,
-      telegramChatId: 2,
-      username: null,
-      firstName: "Toni",
-      lastName: null
-    }, new Date("2026-08-01T12:00:00Z"));
-    const input: CreateTripInput = {
-      title: "Berlin",
-      cadenceHours: 6,
-      brief: {
-        originAirports: ["LHR"],
-        destinationAirports: ["BER"],
-        tripType: "one_way",
-        departureWindow: { start: "2026-09-10", end: "2026-09-10" },
-        stayNights: null,
-        legs: [],
-        travellers: { adults: 1, childrenAges: [], infants: 0 },
-        cabin: "economy",
-        maxStops: 1,
-        currency: "GBP",
-        maximumPrice: null,
-        preferredAirlines: [],
-        excludedAirlines: [],
-        context: ""
-      }
-    };
-    const created = await store.createTrip(
-      user.id,
-      input,
-      buildSearchSpecs(input.brief, false),
-      new Date("2026-08-01T12:00:00Z")
-    );
-    const search = vi.fn();
-    const worker = new FlightWorker({
-      store,
-      provider: { provider: "openai_web", search } as FlightSearchProvider,
-      telegramBotToken: "test",
-      captainPublicUrl: "https://captain.example.com",
-      trackingEnabled: true,
-      dailyResponseLimit: 1,
-      workerId: "worker-1",
-      leaseMs: 240_000,
-      freshnessMs: 900_000,
-      claimLimit: 1
-    });
-
-    await expect(worker.tick(new Date("2026-08-01T12:00:00Z"))).resolves.toEqual({
-      scheduled: 1,
-      processed: 1,
-      notified: 0
-    });
-    expect(search).not.toHaveBeenCalled();
-    expect(await store.getWatch(user.id, created.trip.id)).toMatchObject({
-      delayReason: "Daily OpenAI Responses safety ceiling reached; tracking is delayed."
-    });
-  });
-
   it("keeps an empty search quiet and exposes the coverage state in the watch", async () => {
     const store = new MemoryCaptainPlatformStore();
     const user = await store.ensureTelegramUser({
@@ -316,13 +296,13 @@ describe("flight worker orchestration", () => {
       new Date("2026-08-01T12:00:00Z")
     );
     const search = vi.fn(async () => ({
+      provider: "official_duffel" as const,
       requestId: "offreq_empty",
       discoveryResponseId: "offreq_empty",
       verificationResponseId: "offreq_empty",
       model: "duffel",
       promptVersion: "official_duffel",
       rejectionCounts: {},
-      webSearchCalls: 0,
       offers: []
     }));
     const worker = new FlightWorker({
@@ -331,7 +311,6 @@ describe("flight worker orchestration", () => {
       telegramBotToken: "test",
       captainPublicUrl: "https://captain.example.com",
       trackingEnabled: true,
-      dailyResponseLimit: 500,
       workerId: "worker-1",
       leaseMs: 240_000,
       freshnessMs: 0,
@@ -370,7 +349,7 @@ function offerSnapshot(
     searchRunId: "run",
     searchSpecId: "spec",
     itineraryKey,
-    provider: "openai_web" as const,
+    provider: "flysoar_mcp" as const,
     providerOfferId: itineraryKey,
     providerSearchId: "search",
     price,

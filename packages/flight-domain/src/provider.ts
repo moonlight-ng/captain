@@ -1,5 +1,46 @@
+import type { SearchSpecRequest } from "./search-spec.js";
+import type { VerifiedOfferCandidate } from "./verified-offer.js";
+
 /** Captain inventory providers. `official_*` is reserved for documented APIs. */
-export type FlightSearchProviderId = "openai_web" | `official_${string}`;
+export type FlightSearchProviderId = "flysoar_mcp" | `official_${string}`;
+
+export type FlightSearchProviderErrorCode =
+  | "unauthorized"
+  | "invalid_request"
+  | "rate_limited"
+  | "timeout"
+  | "unavailable"
+  | "invalid_response"
+  | "offer_expired"
+  | "fx_unavailable";
+
+export class FlightSearchProviderError extends Error {
+  constructor(
+    readonly provider: FlightSearchProviderId,
+    readonly code: FlightSearchProviderErrorCode,
+    message: string,
+    readonly retryAfterMs: number | null = null
+  ) {
+    super(message);
+    this.name = "FlightSearchProviderError";
+  }
+}
+
+export type FlightSearchResult = {
+  provider: FlightSearchProviderId;
+  requestId: string;
+  discoveryResponseId: string;
+  verificationResponseId: string;
+  model: string;
+  promptVersion: string;
+  offers: VerifiedOfferCandidate[];
+  rejectionCounts: Partial<Record<string, number>>;
+};
+
+export interface FlightSearchProvider {
+  readonly provider: FlightSearchProviderId;
+  search(request: SearchSpecRequest): Promise<FlightSearchResult>;
+}
 
 export const DUFFEL_BILLING_CURRENCY_DEFAULT = "GBP";
 export const PRIMARY_FLIGHT_INVENTORY_PROVIDER: FlightSearchProviderId = "official_duffel";
@@ -30,7 +71,7 @@ export function primaryFlightInventoryProvider(_input?: {
 }
 
 export const INVENTORY_GAP_MESSAGE =
-  "No fares yet for this Trip — Captain’s Duffel inventory doesn’t cover these airlines/routes right now. Tracking stays on and will update if options appear.";
+  "No fares yet for this Trip — Captain’s current inventory sources don’t cover these airlines/routes right now. Tracking stays on and will update if options appear.";
 
 export const SUPPORTED_CURRENCY_MESSAGE =
-  "Captain currently tracks Duffel fares in USD or GBP only.";
+  "Captain currently tracks fares in USD or GBP only.";

@@ -1,17 +1,18 @@
-import { createCaptainAccessLink, deriveOfferMetrics } from "@agents/flight-domain";
-import type {
-  CaptainNotification,
-  CaptainPlatformStore,
-  ClaimedSearchRun,
-  CompletedProviderOffer,
-  RecommendationSnapshot
+import {
+  createCaptainAccessLink,
+  deriveOfferMetrics,
+  FlightSearchProviderError,
+  type FlightSearchProvider
+} from "@agents/flight-domain";
+import {
+  WATCH_DATA_PRUNE_INTERVAL_MS,
+  type CaptainNotification,
+  type CaptainPlatformStore,
+  type ClaimedSearchRun,
+  type CompletedProviderOffer,
+  type RecommendationSnapshot
 } from "@agents/flight-store";
 import { logEvent } from "@agents/observability";
-import { DuffelError } from "@agents/provider-duffel";
-import type { FlightSearchProvider } from "@agents/provider-web";
-import { WebSearchProviderError } from "@agents/provider-web";
-
-const OPENAI_RESPONSES_PER_RUN = 2;
 
 export class FlightWorker {
   readonly #store: CaptainPlatformStore;
@@ -19,12 +20,13 @@ export class FlightWorker {
   readonly #telegramBotToken: string;
   readonly #captainPublicUrl: string;
   readonly #trackingEnabled: boolean;
-  readonly #dailyResponseLimit: number;
   readonly #workerId: string;
   readonly #leaseMs: number;
   readonly #freshnessMs: number;
   readonly #claimLimit: number;
   #running = false;
+  #lastPrunedAt = 0;
+  #lastTickHadDueWork = false;
 
   constructor(options: {
     store: CaptainPlatformStore;
@@ -32,7 +34,6 @@ export class FlightWorker {
     telegramBotToken: string;
     captainPublicUrl: string;
     trackingEnabled: boolean;
-    dailyResponseLimit: number;
     workerId: string;
     leaseMs: number;
     freshnessMs: number;
@@ -43,18 +44,29 @@ export class FlightWorker {
     this.#telegramBotToken = options.telegramBotToken;
     this.#captainPublicUrl = options.captainPublicUrl;
     this.#trackingEnabled = options.trackingEnabled;
-    this.#dailyResponseLimit = options.dailyResponseLimit;
     this.#workerId = options.workerId;
     this.#leaseMs = options.leaseMs;
     this.#freshnessMs = options.freshnessMs;
     this.#claimLimit = options.claimLimit;
   }
 
+  get lastTickHadDueWork(): boolean {
+    return this.#lastTickHadDueWork;
+  }
+
   async tick(now = new Date()): Promise<{ scheduled: number; processed: number; notified: number }> {
     if (this.#running) return { scheduled: 0, processed: 0, notified: 0 };
     this.#running = true;
+    this.#lastTickHadDueWork = false;
     try {
-      await this.#store.pruneWatchData(now);
+      if (now.getTime() - this.#lastPrunedAt >= WATCH_DATA_PRUNE_INTERVAL_MS) {
+        await this.#store.pruneWatchData(now);
+        this.#lastPrunedAt = now.getTime();
+      }
+      if (!await this.#store.hasDueWorkerWork(now)) {
+        return { scheduled: 0, processed: 0, notified: 0 };
+      }
+      this.#lastTickHadDueWork = true;
       const maintenance = await this.#store.maintainTracking(now);
       const scheduled = this.#trackingEnabled
         ? await this.#store.scheduleDueSearchRuns(now, this.#freshnessMs, 100)
@@ -100,41 +112,16 @@ export class FlightWorker {
     const startedAt = Date.now();
     let searchCompleted = false;
     try {
-      if (this.#provider.provider === "openai_web") {
-        const reserved = await this.#store.reserveDailyResponseBudget(
-          now,
-          OPENAI_RESPONSES_PER_RUN,
-          this.#dailyResponseLimit
-        );
-        if (!reserved) {
-          const until = nextUtcDay(now);
-          await this.#store.deferSearchRun(
-            this.#workerId,
-            run.id,
-            until,
-            "Daily OpenAI Responses safety ceiling reached; tracking is delayed.",
-            now
-          );
-          logEvent("warn", "flight_worker.search_deferred", {
-            run_id: run.id,
-            reason: "daily_response_limit",
-            scheduled_at: until.toISOString()
-          });
-          return;
-        }
-      }
-
       const result = await this.#provider.search(run.request);
-      if (result.webSearchCalls > 0) {
-        await this.#store.recordWebSearchCalls(now, result.webSearchCalls);
-      }
       const completedAt = new Date();
       const offers: CompletedProviderOffer[] = result.offers.map((offer) => {
         const metrics = deriveOfferMetrics(offer.slices);
-        const providerOfferId = duffelOfferId(offer.evidence[0]?.url) ?? offer.itineraryKey;
+        const providerOfferId = offer.providerOfferId
+          ?? duffelOfferId(offer.evidence[0]?.url)
+          ?? offer.itineraryKey;
         return {
           itineraryKey: offer.itineraryKey,
-          provider: this.#provider.provider,
+          provider: result.provider,
           providerOfferId,
           providerSearchId: result.requestId,
           price: Number(offer.priceAmount),
@@ -149,7 +136,7 @@ export class FlightWorker {
           promptVersion: result.promptVersion,
           model: result.model,
           verifiedAt: completedAt.toISOString(),
-          expiresAt: null,
+          expiresAt: offer.expiresAt ?? null,
           observedAt: completedAt.toISOString(),
           snapshot: {
             route: metrics.route,
@@ -158,9 +145,9 @@ export class FlightWorker {
             stops: metrics.stops,
             durationSeconds: metrics.durationSeconds,
             conditions: {
-              fareBasis: this.#provider.provider === "official_duffel"
+              fareBasis: result.provider === "official_duffel"
                 ? "One-adult Duffel total converted into Trip currency when needed"
-                : "One-adult total shown by the cited source"
+                : "One-adult Flysoar total converted into Trip currency when needed"
             },
             segments: metrics.segments,
             slices: offer.slices
@@ -174,7 +161,7 @@ export class FlightWorker {
       logEvent("info", "flight_worker.search_completed", {
         run_id: run.id,
         search_spec_id: run.searchSpecId,
-        provider: this.#provider.provider,
+        provider: result.provider,
         verified_offers: offers.length,
         rejection_counts: result.rejectionCounts,
         recommendations_changed: changed,
@@ -191,7 +178,7 @@ export class FlightWorker {
         });
         return;
       }
-      const retryAfterMs = error instanceof WebSearchProviderError || error instanceof DuffelError
+      const retryAfterMs = error instanceof FlightSearchProviderError
         ? error.retryAfterMs
         : null;
       await this.#store.failSearchRun(
@@ -204,8 +191,10 @@ export class FlightWorker {
       logEvent("error", "flight_worker.search_failed", {
         run_id: run.id,
         search_spec_id: run.searchSpecId,
-        provider: this.#provider.provider,
-        error_code: error instanceof WebSearchProviderError || error instanceof DuffelError
+        provider: error instanceof FlightSearchProviderError
+          ? error.provider
+          : this.#provider.provider,
+        error_code: error instanceof FlightSearchProviderError
           ? error.code
           : error instanceof Error ? error.name : "UnknownError",
         duration_ms: Date.now() - startedAt
@@ -498,8 +487,4 @@ function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3_600);
   const minutes = Math.round((seconds % 3_600) / 60);
   return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-}
-
-function nextUtcDay(now: Date): Date {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 5));
 }

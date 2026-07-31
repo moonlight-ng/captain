@@ -49,7 +49,7 @@
       {
         "id": "ba-offer",
         "itineraryKey": "ba-direct",
-        "provider": "openai_web",
+        "provider": "flysoar_mcp",
         "price": 1040,
         "priceAmount": "1040.00",
         "currency": "USD",
@@ -86,7 +86,7 @@
       {
         "id": "vs-offer",
         "itineraryKey": "vs-mixed",
-        "provider": "openai_web",
+        "provider": "flysoar_mcp",
         "price": 910,
         "priceAmount": "910.00",
         "currency": "USD",
@@ -113,7 +113,7 @@
       {
         "id": "et-offer",
         "itineraryKey": "et-cheap",
-        "provider": "openai_web",
+        "provider": "flysoar_mcp",
         "price": 820,
         "priceAmount": "820.00",
         "currency": "USD",

@@ -204,6 +204,7 @@ export interface CaptainPlatformStore {
     action: "keep" | "pause",
     now: Date
   ): Promise<Trip>;
+  hasDueWorkerWork(now: Date): Promise<boolean>;
   createTripPlanDraft(userId: string, request: string, sourceMessageId: string | null, now: Date): Promise<TripPlanDraft>;
   getTripPlanDraft(userId: string, draftId: string, now: Date): Promise<TripPlanDraft | null>;
   findOpenTripPlanDraft(userId: string, now: Date): Promise<TripPlanDraft | null>;

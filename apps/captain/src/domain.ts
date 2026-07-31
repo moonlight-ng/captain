@@ -91,7 +91,7 @@ export type Segment = {
 export type VerifiedOffer = {
   id: string;
   itineraryKey: string;
-  provider: "openai_web" | `official_${string}`;
+  provider: "flysoar_mcp" | `official_${string}`;
   price: number;
   priceAmount: string;
   currency: string;
