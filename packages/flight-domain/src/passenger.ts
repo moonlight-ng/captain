@@ -108,6 +108,8 @@ export type PaymentCardSetupIntent = {
   userId: string;
   status: "pending" | "completed" | "expired";
   paymentMethodId: string | null;
+  /** Cached Duffel component key for this pending intent. Never mint a second key. */
+  componentClientKey: string | null;
   expiresAt: string;
   completedAt: string | null;
   createdAt: string;

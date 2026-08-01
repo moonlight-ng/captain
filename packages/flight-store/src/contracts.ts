@@ -62,7 +62,13 @@ export class PaymentMethodLimitError extends Error {
 }
 
 export class PaymentSetupConflictError extends Error {
-  constructor(readonly code: "setup_intent_mismatch" | "card_pending_deletion" | "setup_intent_invalid") {
+  constructor(
+    readonly code:
+      | "setup_intent_mismatch"
+      | "card_pending_deletion"
+      | "setup_intent_invalid"
+      | "setup_intent_completed"
+  ) {
     super(code);
     this.name = "PaymentSetupConflictError";
   }
@@ -227,6 +233,17 @@ export interface CaptainPlatformStore {
     setupIntentId: string,
     now: Date
   ): Promise<PaymentCardSetupIntent>;
+  /**
+   * Idempotent client-key issuance for a pending setup intent.
+   * Rejects a different ID while one is pending, never mints for completed intents,
+   * and reuses a previously stored component key for the same pending intent.
+   */
+  issuePaymentCardSetupClientKey(
+    userId: string,
+    setupIntentId: string,
+    mint: () => Promise<string>,
+    now: Date
+  ): Promise<{ setupIntentId: string; clientKey: string }>;
   finalizePaymentMethod(
     userId: string,
     input: SavePaymentMethodInput,

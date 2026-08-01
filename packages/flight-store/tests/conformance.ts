@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import { buildSearchSpecs, type CreateTripInput } from "@agents/flight-domain";
 import {
   PaymentMethodLimitError,
+  PaymentSetupConflictError,
+  PaymentSetupInProgressError,
   type CaptainPlatformStore,
   type TripRecommendation
 } from "../src/index.js";
@@ -859,7 +861,7 @@ export function describeCaptainPlatformStore(
       void methodA;
     });
 
-    it("treats setup intent reservation as idempotent and rebinds remounts", async () => {
+    it("treats setup intent reservation as idempotent and rejects remount collisions", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
       const now = new Date("2026-08-01T12:00:00Z");
@@ -867,8 +869,36 @@ export function describeCaptainPlatformStore(
       const first = await store.reservePaymentCardSetupIntent(ada.id, intentId, now);
       const second = await store.reservePaymentCardSetupIntent(ada.id, intentId, now);
       expect(second).toEqual(first);
-      const rebound = await store.reservePaymentCardSetupIntent(ada.id, randomUUID(), now);
-      expect(rebound).toEqual(first);
+      await expect(store.reservePaymentCardSetupIntent(ada.id, randomUUID(), now))
+        .rejects.toBeInstanceOf(PaymentSetupInProgressError);
+    });
+
+    it("issues one reusable client key per pending setup intent", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const now = new Date("2026-08-01T12:00:00Z");
+      const intentId = randomUUID();
+      let mints = 0;
+      const mint = async () => {
+        mints += 1;
+        return `key_${mints}`;
+      };
+      const first = await store.issuePaymentCardSetupClientKey(ada.id, intentId, mint, now);
+      const second = await store.issuePaymentCardSetupClientKey(ada.id, intentId, mint, now);
+      expect(first).toEqual({ setupIntentId: intentId, clientKey: "key_1" });
+      expect(second).toEqual(first);
+      expect(mints).toBe(1);
+
+      await store.finalizePaymentMethod(ada.id, {
+        setupIntentId: intentId,
+        cardId: "tcd_keyOnce",
+        brand: "visa",
+        last4: "4242",
+        cardholderName: "Ada Lovelace"
+      }, now);
+      await expect(store.issuePaymentCardSetupClientKey(ada.id, intentId, mint, now))
+        .rejects.toMatchObject({ code: "setup_intent_completed" } satisfies Partial<PaymentSetupConflictError>);
+      expect(mints).toBe(1);
     });
 
     it("enforces a hard cap of twenty payment method records", async () => {

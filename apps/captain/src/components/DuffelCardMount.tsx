@@ -11,12 +11,14 @@ type PendingCard = {
   last4: string;
 };
 
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
+}
+
 function readStoredSetupIntentId(): string | null {
   try {
     const value = sessionStorage.getItem(SETUP_INTENT_STORAGE_KEY)?.trim() ?? "";
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)
-      ? value
-      : null;
+    return isUuid(value) ? value : null;
   } catch {
     return null;
   }
@@ -26,7 +28,7 @@ function writeStoredSetupIntentId(setupIntentId: string): void {
   try {
     sessionStorage.setItem(SETUP_INTENT_STORAGE_KEY, setupIntentId);
   } catch {
-    // Private mode / quota — server rebind still recovers the pending intent.
+    // Private mode / quota — remounts without storage hit setup_in_progress until expiry.
   }
 }
 
@@ -38,6 +40,14 @@ function clearStoredSetupIntentId(): void {
   }
 }
 
+function allocateSetupIntentId(): string {
+  const existing = readStoredSetupIntentId();
+  if (existing) return existing;
+  const created = crypto.randomUUID();
+  writeStoredSetupIntentId(created);
+  return created;
+}
+
 export default function DuffelCardMount({
   onSaved,
   onError
@@ -46,7 +56,7 @@ export default function DuffelCardMount({
   onError: (message: string) => void;
 }) {
   const { ref, saveCard } = useDuffelCardFormActions();
-  const setupIntentIdRef = useRef(readStoredSetupIntentId() ?? crypto.randomUUID());
+  const setupIntentIdRef = useRef(allocateSetupIntentId());
   const initGeneration = useRef(0);
   const [clientKey, setClientKey] = useState<string | null>(null);
   const [cardholderName, setCardholderName] = useState("");
@@ -56,11 +66,12 @@ export default function DuffelCardMount({
   const [pendingCard, setPendingCard] = useState<PendingCard | null>(null);
   const formId = useId();
 
-  async function loadClientKey() {
+  async function loadClientKey(rotateCompletedIntent = true) {
     const generation = ++initGeneration.current;
     setKeyError("");
     setClientKey(null);
     try {
+      writeStoredSetupIntentId(setupIntentIdRef.current);
       const result = await createPaymentClientKey(setupIntentIdRef.current);
       if (generation !== initGeneration.current) return;
       setupIntentIdRef.current = result.setupIntentId;
@@ -68,6 +79,13 @@ export default function DuffelCardMount({
       setClientKey(result.clientKey);
     } catch (cause) {
       if (generation !== initGeneration.current) return;
+      const code = cause instanceof ApiError ? cause.message : "";
+      if (rotateCompletedIntent && code === "setup_intent_completed") {
+        clearStoredSetupIntentId();
+        setupIntentIdRef.current = allocateSetupIntentId();
+        await loadClientKey(false);
+        return;
+      }
       const message = cause instanceof ApiError ? cause.message : "Could not start card form.";
       setKeyError(message);
       onError(message);

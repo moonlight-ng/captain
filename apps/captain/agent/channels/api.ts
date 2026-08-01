@@ -477,28 +477,26 @@ async function createPaymentClientKey(
   if (!client) {
     return Response.json({ error: "payments_unavailable" }, { status: 503 });
   }
-  const intent = await services.platformStore.reservePaymentCardSetupIntent(
-    userId,
-    body.setupIntentId,
-    new Date()
-  );
   const last = clientKeyThrottle.get(userId);
   const now = Date.now();
-  // Throttle against the resolved intent so remounts that rebind an existing
-  // pending reservation are not blocked by a freshly generated client UUID.
   if (
     last
-    && last.setupIntentId !== intent.id
+    && last.setupIntentId !== body.setupIntentId
     && now - last.at < CLIENT_KEY_THROTTLE_MS
   ) {
     return Response.json({ error: "rate_limited" }, { status: 429 });
   }
-  clientKeyThrottle.set(userId, { at: now, setupIntentId: intent.id });
   try {
-    const clientKey = await client.createComponentClientKey();
+    const issued = await services.platformStore.issuePaymentCardSetupClientKey(
+      userId,
+      body.setupIntentId,
+      () => client.createComponentClientKey(),
+      new Date()
+    );
+    clientKeyThrottle.set(userId, { at: now, setupIntentId: issued.setupIntentId });
     return Response.json({
-      clientKey,
-      setupIntentId: intent.id
+      clientKey: issued.clientKey,
+      setupIntentId: issued.setupIntentId
     }, { headers: noStore() });
   } catch (error) {
     if (error instanceof DuffelCardsError) {

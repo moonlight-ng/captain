@@ -51,7 +51,8 @@ import {
   BetaCapacityError,
   BetaLaunchGateError,
   PaymentMethodLimitError,
-  PaymentSetupConflictError
+  PaymentSetupConflictError,
+  PaymentSetupInProgressError
 } from "./contracts.js";
 import {
   meetsAlertThreshold,
@@ -582,20 +583,18 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           return mapPaymentCardSetupIntent(existing);
         }
         if (existing.status === "completed") {
-          return mapPaymentCardSetupIntent(existing);
+          throw new PaymentSetupConflictError("setup_intent_completed");
         }
         throw new PaymentSetupConflictError("setup_intent_invalid");
       }
-      const pendingRows = await tx<PaymentCardSetupIntentRow[]>`
-        select * from captain.payment_card_setup_intents
+      const pendingRows = await tx<Array<{ id: string }>>`
+        select id from captain.payment_card_setup_intents
         where user_id = ${userId}
           and status = 'pending'
           and expires_at > ${now}
         limit 1
-        for update
       `;
-      // Remounts and refreshes may send a new UUID; rebind to the live pending intent.
-      if (pendingRows[0]) return mapPaymentCardSetupIntent(pendingRows[0]);
+      if (pendingRows[0]) throw new PaymentSetupInProgressError();
       const counts = await tx<Array<{ count: number }>>`
         select count(*)::int as count from captain.payment_methods where user_id = ${userId}
       `;
@@ -605,13 +604,60 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       const expiresAt = new Date(now.getTime() + SETUP_INTENT_TTL_MS);
       const rows = await tx<PaymentCardSetupIntentRow[]>`
         insert into captain.payment_card_setup_intents (
-          id, user_id, status, payment_method_id, expires_at, completed_at, created_at, updated_at
+          id, user_id, status, payment_method_id, component_client_key,
+          expires_at, completed_at, created_at, updated_at
         ) values (
-          ${setupIntentId}, ${userId}, 'pending', null, ${expiresAt}, null, ${now}, ${now}
+          ${setupIntentId}, ${userId}, 'pending', null, null,
+          ${expiresAt}, null, ${now}, ${now}
         )
         returning *
       `;
       return mapPaymentCardSetupIntent(rows[0]!);
+    });
+  }
+
+  async issuePaymentCardSetupClientKey(
+    userId: string,
+    setupIntentId: string,
+    mint: () => Promise<string>,
+    now: Date
+  ): Promise<{ setupIntentId: string; clientKey: string }> {
+    const reserved = await this.reservePaymentCardSetupIntent(userId, setupIntentId, now);
+    if (reserved.componentClientKey) {
+      return { setupIntentId: reserved.id, clientKey: reserved.componentClientKey };
+    }
+    const minted = await mint();
+    return this.#sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${`${userId}:payment_methods`}))`;
+      const rows = await tx<PaymentCardSetupIntentRow[]>`
+        select * from captain.payment_card_setup_intents
+        where id = ${reserved.id} and user_id = ${userId}
+        for update
+      `;
+      const current = rows[0];
+      if (!current || current.status !== "pending") {
+        throw new PaymentSetupConflictError("setup_intent_invalid");
+      }
+      if (current.component_client_key) {
+        return { setupIntentId: current.id, clientKey: current.component_client_key };
+      }
+      const updated = await tx<PaymentCardSetupIntentRow[]>`
+        update captain.payment_card_setup_intents
+        set component_client_key = ${minted}, updated_at = ${now}
+        where id = ${current.id}
+          and component_client_key is null
+        returning *
+      `;
+      if (updated[0]?.component_client_key) {
+        return { setupIntentId: updated[0].id, clientKey: updated[0].component_client_key };
+      }
+      const again = await tx<PaymentCardSetupIntentRow[]>`
+        select * from captain.payment_card_setup_intents where id = ${current.id}
+      `;
+      if (!again[0]?.component_client_key) {
+        throw new PaymentSetupConflictError("setup_intent_invalid");
+      }
+      return { setupIntentId: again[0].id, clientKey: again[0].component_client_key };
     });
   }
 
@@ -643,6 +689,11 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         const existing = existingRows[0];
         if (!existing) throw new PaymentSetupConflictError("setup_intent_invalid");
         if (existing.provider_card_id !== input.cardId) {
+          await enqueueCardDeletion(tx, {
+            id: null,
+            provider: "duffel",
+            provider_card_id: input.cardId
+          }, now);
           throw new PaymentSetupConflictError("setup_intent_mismatch");
         }
         return mapPaymentMethod(existing);
@@ -3000,6 +3051,7 @@ type PaymentCardSetupIntentRow = {
   user_id: string;
   status: PaymentCardSetupIntent["status"];
   payment_method_id: string | null;
+  component_client_key: string | null;
   expires_at: Date;
   completed_at: Date | null;
   created_at: Date;
@@ -3182,6 +3234,7 @@ function mapPaymentCardSetupIntent(row: PaymentCardSetupIntentRow): PaymentCardS
     userId: row.user_id,
     status: row.status,
     paymentMethodId: row.payment_method_id,
+    componentClientKey: row.component_client_key,
     expiresAt: iso(row.expires_at),
     completedAt: row.completed_at ? iso(row.completed_at) : null,
     createdAt: iso(row.created_at),
@@ -3209,7 +3262,11 @@ function mapPaymentCardDeletion(row: PaymentCardDeletionRow): PaymentCardDeletio
 
 async function enqueueCardDeletion(
   sql: Sql,
-  method: Pick<PaymentMethodRow, "id" | "provider" | "provider_card_id">,
+  method: {
+    id: string | null;
+    provider: "duffel";
+    provider_card_id: string;
+  },
   now: Date
 ): Promise<void> {
   await sql`

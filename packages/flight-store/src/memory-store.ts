@@ -46,7 +46,8 @@ import {
   BetaCapacityError,
   BetaLaunchGateError,
   PaymentMethodLimitError,
-  PaymentSetupConflictError
+  PaymentSetupConflictError,
+  PaymentSetupInProgressError
 } from "./contracts.js";
 import {
   meetsAlertThreshold,
@@ -557,7 +558,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         return clone(existing);
       }
       if (existing.status === "completed") {
-        return clone(existing);
+        throw new PaymentSetupConflictError("setup_intent_completed");
       }
       throw new PaymentSetupConflictError("setup_intent_invalid");
     }
@@ -566,8 +567,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         && intent.status === "pending"
         && Date.parse(intent.expiresAt) > now.getTime()
     );
-    // Remounts and refreshes may send a new UUID; rebind to the live pending intent.
-    if (pending) return clone(pending);
+    if (pending) throw new PaymentSetupInProgressError();
     const totalRows = [...this.#paymentMethods.values()].filter((method) => method.userId === userId).length;
     if (totalRows >= MAX_PAYMENT_METHODS_PER_USER) throw new PaymentMethodLimitError();
     const timestamp = now.toISOString();
@@ -576,6 +576,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       userId,
       status: "pending",
       paymentMethodId: null,
+      componentClientKey: null,
       expiresAt: new Date(now.getTime() + SETUP_INTENT_TTL_MS).toISOString(),
       completedAt: null,
       createdAt: timestamp,
@@ -583,6 +584,33 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     };
     this.#setupIntents.set(setupIntentId, intent);
     return clone(intent);
+  }
+
+  async issuePaymentCardSetupClientKey(
+    userId: string,
+    setupIntentId: string,
+    mint: () => Promise<string>,
+    now: Date
+  ): Promise<{ setupIntentId: string; clientKey: string }> {
+    const reserved = await this.reservePaymentCardSetupIntent(userId, setupIntentId, now);
+    if (reserved.componentClientKey) {
+      return { setupIntentId: reserved.id, clientKey: reserved.componentClientKey };
+    }
+    const minted = await mint();
+    const current = this.#setupIntents.get(reserved.id);
+    if (!current || current.userId !== userId || current.status !== "pending") {
+      throw new PaymentSetupConflictError("setup_intent_invalid");
+    }
+    if (current.componentClientKey) {
+      return { setupIntentId: current.id, clientKey: current.componentClientKey };
+    }
+    const updated: PaymentCardSetupIntent = {
+      ...current,
+      componentClientKey: minted,
+      updatedAt: now.toISOString()
+    };
+    this.#setupIntents.set(current.id, updated);
+    return { setupIntentId: updated.id, clientKey: minted };
   }
 
   async finalizePaymentMethod(
@@ -603,6 +631,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         throw new PaymentSetupConflictError("setup_intent_invalid");
       }
       if (existing.providerCardId !== input.cardId) {
+        this.#enqueueProviderCardDeletion(input.cardId, now);
         throw new PaymentSetupConflictError("setup_intent_mismatch");
       }
       return clone(existing);
@@ -821,15 +850,23 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   }
 
   #enqueueCardDeletion(method: PaymentMethod, now: Date): void {
+    this.#enqueueProviderCardDeletion(method.providerCardId, now, method.id);
+  }
+
+  #enqueueProviderCardDeletion(
+    providerCardId: string,
+    now: Date,
+    paymentMethodId: string | null = null
+  ): void {
     const existing = [...this.#cardDeletions.values()].find(
-      (deletion) => deletion.provider === method.provider
-        && deletion.providerCardId === method.providerCardId
+      (deletion) => deletion.provider === "duffel"
+        && deletion.providerCardId === providerCardId
     );
     if (existing) {
-      if (!existing.paymentMethodId && method.id) {
+      if (!existing.paymentMethodId && paymentMethodId) {
         this.#cardDeletions.set(existing.id, {
           ...existing,
-          paymentMethodId: method.id,
+          paymentMethodId,
           updatedAt: now.toISOString()
         });
       }
@@ -838,8 +875,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const deletion: PaymentCardDeletion = {
       id: randomUUID(),
       provider: "duffel",
-      providerCardId: method.providerCardId,
-      paymentMethodId: method.id,
+      providerCardId,
+      paymentMethodId,
       status: "queued",
       attempts: 0,
       availableAt: now.toISOString(),

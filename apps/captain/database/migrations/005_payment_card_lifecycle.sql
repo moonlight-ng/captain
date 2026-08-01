@@ -140,6 +140,7 @@ create table captain.payment_card_setup_intents (
   user_id uuid not null references captain.users(id) on delete cascade,
   status text not null check (status in ('pending', 'completed', 'expired')),
   payment_method_id uuid references captain.payment_methods(id) on delete set null,
+  component_client_key text,
   expires_at timestamptz not null,
   completed_at timestamptz,
   created_at timestamptz not null,

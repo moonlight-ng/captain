@@ -25,6 +25,7 @@ describe("Payment card lifecycle migration", () => {
     expect(migration).toContain("captain_payment_methods_max_twenty");
     expect(migration).toContain("if method_count >= 20 then");
     expect(migration).toContain("create table captain.payment_card_setup_intents");
+    expect(migration).toContain("component_client_key text");
     expect(migration).toContain("captain_payment_card_setup_intents_one_pending_idx");
     expect(migration).toContain("where status = 'pending'");
   });
