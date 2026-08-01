@@ -32,6 +32,14 @@ begin
   for table_name in
     select tablename from pg_tables where schemaname = 'captain'
   loop
+    if exists (
+      select 1 from pg_policies
+      where schemaname = 'captain'
+        and tablename = table_name
+        and policyname = 'captain_runtime_full_access'
+    ) then
+      continue;
+    end if;
     execute format(
       'create policy captain_runtime_full_access on captain.%I for all to captain_runtime using (true) with check (true)',
       table_name

@@ -921,6 +921,21 @@ a.offer-row:active { transform: scale(.99); }
   background: rgba(255, 255, 255, .025);
 }
 .read-only-field strong { color: var(--ink); }
+.entity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.entity-row > div { display: flex; gap: 12px; flex-wrap: wrap; }
+.card-form {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card, 14px);
+  background: rgba(255, 255, 255, .02);
+}
 .switch-setting {
   flex-direction: row !important;
   align-items: center;

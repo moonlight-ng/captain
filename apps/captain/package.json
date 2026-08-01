@@ -29,6 +29,7 @@
     "@agents/flight-store": "workspace:*",
     "@agents/observability": "workspace:*",
     "@agents/telegram-core": "workspace:*",
+    "@duffel/components": "^3.17.0",
     "@fontsource/libre-franklin": "^5.2.8",
     "@workflow/world-postgres": "5.0.0-beta.24",
     "ai": "7.0.4",

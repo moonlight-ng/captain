@@ -12,15 +12,22 @@ shared credentials, redirects, or access to Captain profiles and trips.
 
 ## Profile, trip, and authentication flow
 
-Each Telegram traveller has one `TravellerProfile` and up to three active or
-paused trips. A fourth trip requires stopping or completing an existing trip.
+Each Telegram traveller has one `TravellerProfile` (preferences) and up to three
+active or paused trips. Passenger identity lives in `captain.passengers` and is
+assigned to trips via `captain.trip_passengers`. Tokenised cards (Duffel card
+IDs only — never PAN or CVC) live in `captain.payment_methods` behind
+`CAPTAIN_PAYMENTS_ENABLED` (default off).
+
 Confirmed trip currency is immutable; changing the profile default affects
 only future trips.
 
-Dashboard links contain a single-use login token in the URL fragment. Tokens
-expire after 15 minutes and exchange for a hashed, revocable, HttpOnly,
-SameSite session lasting 30 days. The authenticated API exposes only the
-current profile and the traveller’s selected trip.
+Trip and preferences dashboard links still use deterministic `#access` bearer
+tokens for backwards compatibility with live beta Telegram history. New
+surfaces (`/travellers`, `/payment`) use a single-use login token in the URL
+**query string** (`/auth/link?t=…`). Tokens expire after 15 minutes and exchange
+for a hashed, revocable, HttpOnly, SameSite=Lax session cookie lasting 30 days.
+The authenticated API exposes the current profile, selected trip, passengers,
+and (when enabled) payment methods.
 
 ## Search flow
 

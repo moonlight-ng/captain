@@ -9,6 +9,10 @@ export type CaptainEnv = {
   aiGatewayApiKey: string | null;
   betaUserLimit: number;
   publicBetaEnabled: boolean;
+  paymentsEnabled: boolean;
+  duffelAccessToken: string | null;
+  duffelBaseUrl: string;
+  duffelCardsBaseUrl: string;
 };
 
 export function loadEnv(): CaptainEnv {
@@ -26,7 +30,13 @@ export function loadEnv(): CaptainEnv {
     publicBetaEnabled: booleanValue(
       process.env.CAPTAIN_PUBLIC_BETA_ENABLED,
       mode !== "production"
-    )
+    ),
+    paymentsEnabled: booleanValue(process.env.CAPTAIN_PAYMENTS_ENABLED, false),
+    duffelAccessToken: optional("DUFFEL_ACCESS_TOKEN"),
+    duffelBaseUrl: (process.env.DUFFEL_BASE_URL?.trim() || "https://api.duffel.com").replace(/\/$/u, ""),
+    duffelCardsBaseUrl: (
+      process.env.DUFFEL_CARDS_BASE_URL?.trim() || "https://api.duffel.cards"
+    ).replace(/\/$/u, "")
   };
   if (mode === "production") {
     for (const [name, value] of [

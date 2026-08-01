@@ -67,6 +67,16 @@ const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. 
 export const CAPTAIN_NEW_USER_GREETING =
   "Hi, I'm Captain! I can help you prepare for a flight by tracking suitable options and reporting price changes.";
 export const CAPTAIN_PREFERENCES_INTRO = "Let's start with your preferences";
+export const CAPTAIN_TRAVELLER_SETUP_PROMPT =
+  "Save your traveller details so Captain is ready when booking opens.";
+export const CAPTAIN_PROFILES_INTRO =
+  "Manage traveller names on Captain’s secure page.";
+export const CAPTAIN_PAYMENT_UNAVAILABLE =
+  "Card setup isn’t available yet. Captain will let you know when it opens.";
+export const CAPTAIN_PAYMENT_INTRO =
+  "Add or replace your saved card on Captain’s secure payment page.";
+export const CAPTAIN_SIGNOUT_CONFIRMATION =
+  "Signed out of Captain on the web. Open a fresh link from Telegram to sign in again.";
 
 export default telegramChannel({
   route: "/eve/v1/telegram",
@@ -169,11 +179,37 @@ export default telegramChannel({
       await postTelegramDashboardMessage(ctx, response);
       return null;
     }
+    if (content === "/profiles" || content === "/travellers") {
+      await services.platformStore.appendMessage(user.id, "user", content, new Date());
+      await postWithLink(
+        ctx,
+        CAPTAIN_PROFILES_INTRO,
+        "Open travellers",
+        await services.auth.createLoginLink(user.id, "/travellers")
+      );
+      return null;
+    }
+    if (content === "/payment") {
+      await services.platformStore.appendMessage(user.id, "user", content, new Date());
+      if (!services.env.paymentsEnabled) {
+        await ctx.telegram.post(CAPTAIN_PAYMENT_UNAVAILABLE);
+        return null;
+      }
+      await postWithLink(
+        ctx,
+        CAPTAIN_PAYMENT_INTRO,
+        "Open payment",
+        await services.auth.createLoginLink(user.id, "/payment")
+      );
+      return null;
+    }
     if (content === "/signout") {
-      await ctx.telegram.post("Captain’s design links are reusable for now. There is no web sign-out during design.");
+      await services.auth.signOut(user.id);
+      await ctx.telegram.post(CAPTAIN_SIGNOUT_CONFIRMATION);
       return null;
     }
     if (content === "/delete_account") {
+      await services.auth.signOut(user.id);
       await services.platformStore.deleteUser(user.id);
       await ctx.telegram.post("Your Captain account, trip, sessions, and retained fare evidence have been deleted.");
       return null;
@@ -549,8 +585,12 @@ export default telegramChannel({
       let message = data.message;
       if (userId) {
         const services = await getCaptainServices();
-        message = await services.tripPlanning.groundAssistantMessage(userId, message);
+        const grounded = await services.tripPlanning.groundAssistantMessage(userId, message);
+        message = grounded.message;
         await services.platformStore.appendMessage(userId, "assistant", message, new Date());
+        if (grounded.createdTrip) {
+          await maybePostTravellerSetup(channel.telegram, userId);
+        }
       }
       await channel.telegram.post(message);
     },
@@ -858,12 +898,13 @@ async function completeOnboarding(
 }
 
 async function postWithLink(
-  ctx: TelegramContext,
+  telegramOrCtx: TelegramContext | Pick<TelegramContext["telegram"], "post">,
   text: string,
   label: string,
   url: string
 ): Promise<void> {
-  await ctx.telegram.post({
+  const telegram = "telegram" in telegramOrCtx ? telegramOrCtx.telegram : telegramOrCtx;
+  await telegram.post({
     text,
     link_preview_options: { is_disabled: true },
     reply_markup: { inline_keyboard: [[{ text: label, url }]] }
@@ -1082,9 +1123,26 @@ async function postTripPlanResult(
   await services.platformStore.appendMessage(userId, "assistant", message, new Date());
   if (result.status === "started") {
     await postTelegramDashboardMessage(ctx, message);
+    await maybePostTravellerSetup(ctx.telegram, userId);
     return;
   }
   await ctx.telegram.post(message);
+}
+
+async function maybePostTravellerSetup(
+  telegram: Pick<TelegramContext["telegram"], "post">,
+  userId: string
+): Promise<void> {
+  const services = await getCaptainServices();
+  const prompted = await services.platformStore.markTravellerSetupPrompted(userId, new Date());
+  if (!prompted) return;
+  await services.platformStore.appendMessage(userId, "assistant", CAPTAIN_TRAVELLER_SETUP_PROMPT, new Date());
+  await postWithLink(
+    telegram,
+    CAPTAIN_TRAVELLER_SETUP_PROMPT,
+    "Add traveller details",
+    await services.auth.createLoginLink(userId, "/travellers")
+  );
 }
 
 async function recoverUndeliveredTripConfirmation(

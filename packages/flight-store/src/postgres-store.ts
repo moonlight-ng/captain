@@ -9,9 +9,14 @@ import {
   EMPTY_TRIP_DRAFT_STATE,
   tripPlanConfirmationSnapshotSchema,
   tripDraftStateSchema,
+  type CaptainSessionPath,
+  type CreatePassengerInput,
   type CreateTripInput,
   type FlightSearchProviderId,
   type OfferSnapshot,
+  type Passenger,
+  type PaymentMethod,
+  type SavePaymentMethodInput,
   type SearchSpec,
   type Trip,
   type TripAction,
@@ -20,6 +25,7 @@ import {
   type TripPlanDraftRevision,
   type TripStatus,
   type TravellerProfile,
+  type UpdatePassengerInput,
   type UpdateTravellerProfile,
   type UpdateTripBrief,
   type Watch
@@ -302,7 +308,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
   async createLoginToken(
     userId: string,
     tokenHash: string,
-    redirectPath: "/trip" | "/preferences",
+    redirectPath: CaptainSessionPath,
     expiresAt: Date,
     now: Date
   ): Promise<void> {
@@ -314,7 +320,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
   }
 
   async consumeLoginToken(tokenHash: string, now: Date) {
-    const rows = await this.#sql<Array<{ user_id: string; redirect_path: "/trip" | "/preferences" }>>`
+    const rows = await this.#sql<Array<{ user_id: string; redirect_path: CaptainSessionPath }>>`
       update captain.login_tokens set consumed_at = ${now}
       where token_hash = ${tokenHash} and consumed_at is null and expires_at > ${now}
       returning user_id, redirect_path
@@ -350,6 +356,212 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     await this.#sql`
       update captain.web_sessions set revoked_at = ${now}
       where user_id = ${userId} and revoked_at is null
+    `;
+  }
+
+  async markTravellerSetupPrompted(userId: string, now: Date): Promise<boolean> {
+    await this.ensureProfile(userId, now);
+    const rows = await this.#sql<Array<{ user_id: string }>>`
+      update captain.traveller_profiles
+      set traveller_setup_prompted_at = ${now}, updated_at = ${now}
+      where user_id = ${userId} and traveller_setup_prompted_at is null
+      returning user_id
+    `;
+    return rows.length === 1;
+  }
+
+  async listPassengers(userId: string): Promise<Passenger[]> {
+    const rows = await this.#sql<PassengerRow[]>`
+      select * from captain.passengers
+      where user_id = ${userId}
+      order by is_default desc, created_at asc
+    `;
+    return rows.map(mapPassenger);
+  }
+
+  async getPassenger(userId: string, passengerId: string): Promise<Passenger | null> {
+    const rows = await this.#sql<PassengerRow[]>`
+      select * from captain.passengers
+      where user_id = ${userId} and id = ${passengerId}
+    `;
+    return rows[0] ? mapPassenger(rows[0]) : null;
+  }
+
+  async createPassenger(userId: string, input: CreatePassengerInput, now: Date): Promise<Passenger> {
+    return this.#sql.begin(async (tx) => {
+      const existing = await tx<Array<{ count: number }>>`
+        select count(*)::int as count from captain.passengers where user_id = ${userId}
+      `;
+      const makeDefault = input.isDefault === true || (existing[0]?.count ?? 0) === 0;
+      if (makeDefault) {
+        await tx`
+          update captain.passengers set is_default = false, updated_at = ${now}
+          where user_id = ${userId} and is_default
+        `;
+      }
+      const id = randomUUID();
+      const rows = await tx<PassengerRow[]>`
+        insert into captain.passengers (
+          id, user_id, given_name, family_name, title, gender, born_on,
+          email, phone_number, is_default, created_at, updated_at
+        ) values (
+          ${id}, ${userId}, ${input.givenName}, ${input.familyName},
+          ${input.title ?? null}, ${input.gender ?? null}, ${input.bornOn ?? null},
+          ${input.email ?? null}, ${input.phoneNumber ?? null}, ${makeDefault},
+          ${now}, ${now}
+        )
+        returning *
+      `;
+      return mapPassenger(rows[0]!);
+    });
+  }
+
+  async updatePassenger(
+    userId: string,
+    passengerId: string,
+    input: UpdatePassengerInput,
+    now: Date
+  ): Promise<Passenger> {
+    return this.#sql.begin(async (tx) => {
+      if (input.isDefault === true) {
+        await tx`
+          update captain.passengers set is_default = false, updated_at = ${now}
+          where user_id = ${userId} and is_default and id <> ${passengerId}
+        `;
+      }
+      const rows = await tx<PassengerRow[]>`
+        update captain.passengers set
+          given_name = coalesce(${input.givenName ?? null}, given_name),
+          family_name = coalesce(${input.familyName ?? null}, family_name),
+          title = case when ${input.title !== undefined} then ${input.title ?? null} else title end,
+          gender = case when ${input.gender !== undefined} then ${input.gender ?? null} else gender end,
+          born_on = case when ${input.bornOn !== undefined} then ${input.bornOn ?? null} else born_on end,
+          email = case when ${input.email !== undefined} then ${input.email ?? null} else email end,
+          phone_number = case
+            when ${input.phoneNumber !== undefined} then ${input.phoneNumber ?? null}
+            else phone_number
+          end,
+          is_default = coalesce(${input.isDefault ?? null}, is_default),
+          updated_at = ${now}
+        where user_id = ${userId} and id = ${passengerId}
+        returning *
+      `;
+      if (!rows[0]) throw new Error("Passenger not found");
+      return mapPassenger(rows[0]);
+    });
+  }
+
+  async deletePassenger(userId: string, passengerId: string): Promise<void> {
+    await this.#sql.begin(async (tx) => {
+      const rows = await tx<Array<{ is_default: boolean }>>`
+        delete from captain.passengers
+        where user_id = ${userId} and id = ${passengerId}
+        returning is_default
+      `;
+      if (rows[0]?.is_default) {
+        await tx`
+          update captain.passengers set is_default = true
+          where id = (
+            select id from captain.passengers
+            where user_id = ${userId}
+            order by created_at asc
+            limit 1
+          )
+        `;
+      }
+    });
+  }
+
+  async setDefaultPassenger(userId: string, passengerId: string, now: Date): Promise<Passenger> {
+    return this.updatePassenger(userId, passengerId, { isDefault: true }, now);
+  }
+
+  async listTripPassengers(userId: string, tripId: string): Promise<Passenger[]> {
+    const rows = await this.#sql<PassengerRow[]>`
+      select passenger.*
+      from captain.trip_passengers assignment
+      join captain.passengers passenger on passenger.id = assignment.passenger_id
+      join captain.trips trip on trip.id = assignment.trip_id
+      where trip.user_id = ${userId}
+        and assignment.trip_id = ${tripId}
+        and passenger.user_id = ${userId}
+      order by assignment.ordinal asc
+    `;
+    return rows.map(mapPassenger);
+  }
+
+  async setTripPassengers(userId: string, tripId: string, passengerIds: string[]): Promise<void> {
+    await this.#sql.begin(async (tx) => {
+      const trips = await tx<Array<{ id: string }>>`
+        select id from captain.trips where user_id = ${userId} and id = ${tripId}
+      `;
+      if (!trips[0]) throw new TripNotFoundError();
+      for (const passengerId of passengerIds) {
+        const passengers = await tx<Array<{ id: string }>>`
+          select id from captain.passengers
+          where user_id = ${userId} and id = ${passengerId}
+        `;
+        if (!passengers[0]) throw new Error("Passenger not found");
+      }
+      await tx`delete from captain.trip_passengers where trip_id = ${tripId}`;
+      for (const [ordinal, passengerId] of passengerIds.entries()) {
+        await tx`
+          insert into captain.trip_passengers (trip_id, passenger_id, ordinal)
+          values (${tripId}, ${passengerId}, ${ordinal})
+        `;
+      }
+    });
+  }
+
+  async listPaymentMethods(userId: string): Promise<PaymentMethod[]> {
+    const rows = await this.#sql<PaymentMethodRow[]>`
+      select * from captain.payment_methods
+      where user_id = ${userId} and status = 'active'
+      order by is_default desc, created_at asc
+    `;
+    return rows.map(mapPaymentMethod);
+  }
+
+  async savePaymentMethod(
+    userId: string,
+    input: SavePaymentMethodInput,
+    now: Date
+  ): Promise<PaymentMethod> {
+    return this.#sql.begin(async (tx) => {
+      await tx`
+        update captain.payment_methods set is_default = false, updated_at = ${now}
+        where user_id = ${userId} and is_default and status = 'active'
+      `;
+      const rows = await tx<PaymentMethodRow[]>`
+        insert into captain.payment_methods (
+          id, user_id, provider, provider_card_id, brand, last4,
+          expiry_month, expiry_year, cardholder_name, status, is_default,
+          created_at, updated_at
+        ) values (
+          ${randomUUID()}, ${userId}, 'duffel', ${input.cardId}, ${input.brand},
+          ${input.last4}, ${input.expiryMonth}, ${input.expiryYear},
+          ${input.cardholderName}, 'active', true, ${now}, ${now}
+        )
+        on conflict (user_id, provider_card_id) do update set
+          brand = excluded.brand,
+          last4 = excluded.last4,
+          expiry_month = excluded.expiry_month,
+          expiry_year = excluded.expiry_year,
+          cardholder_name = excluded.cardholder_name,
+          status = 'active',
+          is_default = true,
+          updated_at = excluded.updated_at
+        returning *
+      `;
+      return mapPaymentMethod(rows[0]!);
+    });
+  }
+
+  async removePaymentMethod(userId: string, paymentMethodId: string, now: Date): Promise<void> {
+    await this.#sql`
+      update captain.payment_methods
+      set status = 'removed', is_default = false, updated_at = ${now}
+      where user_id = ${userId} and id = ${paymentMethodId}
     `;
   }
 
@@ -2420,6 +2632,38 @@ type ProfileRow = {
   quiet_hours_end: number;
   onboarding_completed_at: Date | null;
   onboarding_step: TravellerProfile["onboardingStep"];
+  traveller_setup_prompted_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type PassengerRow = {
+  id: string;
+  user_id: string;
+  given_name: string;
+  family_name: string;
+  title: Passenger["title"];
+  gender: Passenger["gender"];
+  born_on: string | Date | null;
+  email: string | null;
+  phone_number: string | null;
+  is_default: boolean;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type PaymentMethodRow = {
+  id: string;
+  user_id: string;
+  provider: "duffel";
+  provider_card_id: string;
+  brand: string;
+  last4: string;
+  expiry_month: number;
+  expiry_year: number;
+  cardholder_name: string;
+  status: PaymentMethod["status"];
+  is_default: boolean;
   created_at: Date;
   updated_at: Date;
 };
@@ -2535,6 +2779,46 @@ function toProfile(row: ProfileRow): TravellerProfile {
     quietHoursEnd: row.quiet_hours_end,
     onboardingCompletedAt: row.onboarding_completed_at ? iso(row.onboarding_completed_at) : null,
     onboardingStep: row.onboarding_step,
+    travellerSetupPromptedAt: row.traveller_setup_prompted_at
+      ? iso(row.traveller_setup_prompted_at)
+      : null,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at)
+  };
+}
+
+function mapPassenger(row: PassengerRow): Passenger {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    givenName: row.given_name,
+    familyName: row.family_name,
+    title: row.title,
+    gender: row.gender,
+    bornOn: row.born_on
+      ? (row.born_on instanceof Date ? row.born_on.toISOString().slice(0, 10) : String(row.born_on).slice(0, 10))
+      : null,
+    email: row.email,
+    phoneNumber: row.phone_number,
+    isDefault: row.is_default,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at)
+  };
+}
+
+function mapPaymentMethod(row: PaymentMethodRow): PaymentMethod {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    provider: row.provider,
+    providerCardId: row.provider_card_id,
+    brand: row.brand,
+    last4: row.last4,
+    expiryMonth: row.expiry_month,
+    expiryYear: row.expiry_year,
+    cardholderName: row.cardholder_name,
+    status: row.status,
+    isDefault: row.is_default,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at)
   };

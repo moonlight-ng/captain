@@ -49,6 +49,8 @@ import {
 import { ChevronRightIcon, FilterIcon } from "./components/icons";
 import { FilterSheet } from "./components/FilterSheet";
 import { Preferences } from "./screens/Preferences";
+import { Travellers } from "./screens/Travellers";
+import { Payment } from "./screens/Payment";
 
 type Tab = "flights" | "airlines" | "browse";
 const tabLabels: Record<Tab, string> = {
@@ -56,6 +58,16 @@ const tabLabels: Record<Tab, string> = {
   airlines: "Airlines",
   browse: "Flights"
 };
+
+type Page = "trip" | "preferences" | "travellers" | "payment";
+
+function currentPage(): Page {
+  return ({
+    "/preferences": "preferences",
+    "/travellers": "travellers",
+    "/payment": "payment"
+  } as const)[window.location.pathname] ?? "trip";
+}
 
 type WatchlistFocus = {
   offerId: string;
@@ -66,6 +78,7 @@ export function App() {
   const [profile, setProfile] = useState<TravellerProfile | null>(null);
   const [tripData, setTripData] = useState<TripPayload | null>(null);
   const [displayName, setDisplayName] = useState("");
+  const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
   const [error, setError] = useState("");
@@ -75,7 +88,7 @@ export function App() {
   const [draftPreferences, setDraftPreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
   const [watchlistFocus, setWatchlistFocus] = useState<WatchlistFocus | null>(null);
   const [dismissedItineraryKeys, setDismissedItineraryKeys] = useState<string[]>([]);
-  const preferencesPage = window.location.pathname === "/preferences";
+  const page = currentPage();
 
   async function load() {
     setLoading(true);
@@ -83,15 +96,21 @@ export function App() {
     try {
       initializeAccessToken();
       const session = await getSession();
+      setDisplayName(session.displayName);
+      setPaymentsEnabled(session.paymentsEnabled);
+      setAuthenticated(true);
+      if (page === "travellers" || page === "payment") {
+        setProfile(await getProfile());
+        setTripData(null);
+        return;
+      }
       const requestedTripId = new URLSearchParams(window.location.search).get("trip") ?? undefined;
       const [nextProfile, nextTrip] = await Promise.all([
         getProfile(),
         getTrip(requestedTripId)
       ]);
-      setDisplayName(session.displayName);
       setProfile(nextProfile);
       setTripData(nextTrip);
-      setAuthenticated(true);
     } catch (cause) {
       setAuthenticated(false);
       if (!(cause instanceof ApiError && cause.status === 401)) {
@@ -115,7 +134,31 @@ export function App() {
       />
     );
   }
-  if (preferencesPage && profile) {
+  if (page === "travellers") {
+    return (
+      <Travellers
+        displayName={displayName}
+        paymentsEnabled={paymentsEnabled}
+        onBack={() => { window.location.href = accessHref("/trip", tripData?.trip?.id); }}
+      />
+    );
+  }
+  if (page === "payment") {
+    if (!paymentsEnabled) {
+      return (
+        <CenteredState
+          title="Payments coming soon"
+          detail="Card setup opens once Captain’s payment provider approves card storage."
+        />
+      );
+    }
+    return (
+      <Payment
+        onBack={() => { window.location.href = "/travellers"; }}
+      />
+    );
+  }
+  if (page === "preferences" && profile) {
     return (
       <Preferences
         profile={profile}
