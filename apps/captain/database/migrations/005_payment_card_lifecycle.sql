@@ -125,6 +125,26 @@ begin
         and holder.provider_card_id = method.provider_card_id
     )
   on conflict (provider, provider_card_id) do nothing;
+
+  -- A single provider token needs at most one remote deletion. Drop local
+  -- duplicate shadows that either share an active keeper (and must not trigger
+  -- deletion) or are not the representative row retained by the deletion queue.
+  delete from captain.payment_methods shadow
+  where shadow.status = 'removed'
+    and (
+      exists (
+        select 1 from captain.payment_methods holder
+        where holder.status = 'active'
+          and holder.provider = shadow.provider
+          and holder.provider_card_id = shadow.provider_card_id
+      )
+      or exists (
+        select 1 from captain.payment_card_deletions deletion
+        where deletion.provider = shadow.provider
+          and deletion.provider_card_id = shadow.provider_card_id
+          and deletion.payment_method_id <> shadow.id
+      )
+    );
 end
 $$;
 

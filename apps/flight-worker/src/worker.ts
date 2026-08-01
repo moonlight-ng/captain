@@ -159,7 +159,8 @@ export class FlightWorker {
       if (!claim) break;
       claimed += 1;
       try {
-        await this.#cardsClient.deleteCard(claim.providerCardId);
+        const timeoutMs = Math.max(1, budgetExpiresAt - Date.now());
+        await this.#cardsClient.deleteCard(claim.providerCardId, timeoutMs);
         const completed = await this.#store.completeCardDeletion(this.#workerId, claim.id);
         if (completed) deleted += 1;
       } catch (error) {

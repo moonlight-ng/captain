@@ -63,6 +63,14 @@ describe("Payment card lifecycle migration", () => {
     expect(migration).toMatch(/where method\.status = 'removed'[\s\S]*?not exists \(\s*select 1 from captain\.payment_methods holder/u);
   });
 
+  it("drops local duplicate shadows without deleting a token held active", () => {
+    expect(migration).toContain("Drop local");
+    expect(migration).toContain("duplicate shadows");
+    expect(migration).toMatch(
+      /delete from captain\.payment_methods shadow[\s\S]*?holder\.provider_card_id = shadow\.provider_card_id[\s\S]*?deletion\.payment_method_id <> shadow\.id/u
+    );
+  });
+
   it("enables RLS and captain_runtime_full_access for the new tables", () => {
     for (const table of ["payment_card_setup_intents", "payment_card_deletions"]) {
       expect(migration).toContain(`'${table}'`);

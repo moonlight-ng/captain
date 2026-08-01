@@ -86,13 +86,14 @@ export class DuffelCardsClient {
     return parsed.data.data.component_client_key;
   }
 
-  async deleteCard(cardId: string): Promise<void> {
+  async deleteCard(cardId: string, timeoutMs = this.#timeoutMs): Promise<void> {
     try {
       await this.#request(
         this.#cardsBaseUrl,
         "DELETE",
         `/payments/cards/${encodeURIComponent(cardId)}`,
-        undefined
+        undefined,
+        timeoutMs
       );
     } catch (error) {
       if (error instanceof DuffelCardsError && error.code === "not_found") return;
@@ -104,7 +105,8 @@ export class DuffelCardsClient {
     host: string,
     method: string,
     path: string,
-    body: unknown
+    body: unknown,
+    timeoutMs = this.#timeoutMs
   ): Promise<unknown> {
     let response: Response;
     try {
@@ -116,7 +118,7 @@ export class DuffelCardsClient {
           "duffel-version": "v2",
           ...(body !== undefined ? { "content-type": "application/json" } : {})
         },
-        signal: AbortSignal.timeout(this.#timeoutMs)
+        signal: AbortSignal.timeout(timeoutMs)
       };
       if (body !== undefined) init.body = JSON.stringify(body);
       response = await this.#fetch(`${host}${path}`, init);

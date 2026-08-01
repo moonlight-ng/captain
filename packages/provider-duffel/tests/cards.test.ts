@@ -63,6 +63,21 @@ describe("DuffelCardsClient", () => {
     expect(urls[0]).toBe("https://api.duffel.cards/payments/cards/tcd_abc");
   });
 
+  it("allows deletion workers to shorten the request timeout", async () => {
+    const client = new DuffelCardsClient({
+      accessToken: "duffel_test_token",
+      fetch: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) return;
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      })
+    });
+    await expect(client.deleteCard("tcd_slow", 5)).rejects.toMatchObject({
+      name: "DuffelCardsError",
+      code: "timeout"
+    } satisfies Partial<DuffelCardsError>);
+  });
+
   it("maps 401, 422, and 429 to typed error codes including Retry-After", async () => {
     for (const [status, code] of [
       [401, "unauthorized"],

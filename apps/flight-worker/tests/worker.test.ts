@@ -99,12 +99,16 @@ describe("flight worker orchestration", () => {
     }, now);
     await store.removePaymentMethod(user.id, method.id, now);
 
-    const worker = buildIdleWorker(store, {
-      deleteCard: vi.fn(async () => {
-        throw new DuffelCardsError("rate_limited", "Slow down", 1);
-      })
+    const deleteCard = vi.fn(async (_cardId: string, _timeoutMs: number) => {
+      throw new DuffelCardsError("rate_limited", "Slow down", 1);
     });
+    const worker = buildIdleWorker(store, { deleteCard });
     await worker.tick(now);
+
+    expect(deleteCard).toHaveBeenCalledWith("tcd_worker", expect.any(Number));
+    const timeoutMs = deleteCard.mock.calls[0]?.[1];
+    expect(timeoutMs).toBeGreaterThan(0);
+    expect(timeoutMs).toBeLessThanOrEqual(20_000);
 
     // The worker stamps availableAt from the wall clock, not the injected date.
     const [requeued] = await store.claimCardDeletions(
