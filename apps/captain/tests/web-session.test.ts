@@ -31,7 +31,7 @@ describe("Captain web auth", () => {
     const token = new URLSearchParams(new URL(link).hash.slice(1)).get("access")!;
     await expect(auth.resolve(new Request("https://captain.example/api/auth/session", {
       headers: { authorization: `Bearer ${token}` }
-    }))).resolves.toBe(id);
+    }))).resolves.toEqual({ userId: id, credential: "legacy-bearer" });
     expect(auth.createAccessLink(id, "/preferences")).toBe(link);
   });
 
@@ -46,7 +46,10 @@ describe("Captain web auth", () => {
     const cookieRequest = new Request("https://captain.example/api/auth/session", {
       headers: { cookie: `captain_session=${first!.sessionRaw}` }
     });
-    await expect(auth.resolve(cookieRequest)).resolves.toBe(id);
+    await expect(auth.resolve(cookieRequest)).resolves.toEqual({
+      userId: id,
+      credential: "session"
+    });
   });
 
   it("rejects expired login tokens", async () => {
@@ -84,7 +87,10 @@ describe("Captain web auth", () => {
         authorization: `Bearer ${bearer}`
       }
     });
-    await expect(auth.resolve(request)).resolves.toBe(id);
+    await expect(auth.resolve(request)).resolves.toEqual({
+      userId: id,
+      credential: "session"
+    });
   });
 
   it("invalidates sessions on sign-out while legacy bearer still resolves", async () => {
@@ -101,7 +107,7 @@ describe("Captain web auth", () => {
     ).get("access")!;
     await expect(auth.resolve(new Request("https://captain.example/api/auth/session", {
       headers: { authorization: `Bearer ${bearer}` }
-    }))).resolves.toBe(id);
+    }))).resolves.toEqual({ userId: id, credential: "legacy-bearer" });
   });
 
   it("builds a Secure session cookie for https public URLs", async () => {

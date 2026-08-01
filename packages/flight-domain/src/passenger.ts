@@ -63,16 +63,25 @@ export const updatePassengerSchema = z.object({
 });
 export type UpdatePassengerInput = z.infer<typeof updatePassengerSchema>;
 
+export const paymentCardBrandSchema = z.enum([
+  "visa",
+  "mastercard",
+  "uatp",
+  "american_express",
+  "diners_club",
+  "jcb",
+  "discover"
+]);
+export type PaymentCardBrand = z.infer<typeof paymentCardBrandSchema>;
+
 export const paymentMethodSchema = z.object({
   id: z.uuid(),
   userId: z.uuid(),
   provider: z.literal("duffel"),
-  providerCardId: z.string().min(1),
-  brand: z.string().min(1),
+  providerCardId: z.string().min(1).max(128),
+  brand: paymentCardBrandSchema,
   last4: z.string().regex(/^\d{4}$/u),
-  expiryMonth: z.number().int().min(1).max(12),
-  expiryYear: z.number().int().min(2000),
-  cardholderName: z.string().min(1),
+  cardholderName: z.string().min(1).max(100),
   status: z.enum(["active", "removed"]),
   isDefault: z.boolean(),
   createdAt: z.iso.datetime(),
@@ -81,14 +90,45 @@ export const paymentMethodSchema = z.object({
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
 
 export const savePaymentMethodSchema = z.object({
-  cardId: z.string().regex(/^tcd_[A-Za-z0-9]+$/u),
-  brand: z.string().min(1),
+  setupIntentId: z.uuid(),
+  cardId: z.string().regex(/^tcd_[A-Za-z0-9]+$/u).max(128),
+  brand: paymentCardBrandSchema,
   last4: z.string().regex(/^\d{4}$/u),
-  expiryMonth: z.number().int().min(1).max(12),
-  expiryYear: z.number().int().min(2000),
-  cardholderName: z.string().min(1)
+  cardholderName: z.string().trim().min(1).max(100)
 }).strict();
 export type SavePaymentMethodInput = z.infer<typeof savePaymentMethodSchema>;
+
+export const reservePaymentClientKeySchema = z.object({
+  setupIntentId: z.uuid()
+}).strict();
+export type ReservePaymentClientKeyInput = z.infer<typeof reservePaymentClientKeySchema>;
+
+export type PaymentCardSetupIntent = {
+  id: string;
+  userId: string;
+  status: "pending" | "completed" | "expired";
+  paymentMethodId: string | null;
+  expiresAt: string;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PaymentCardDeletion = {
+  id: string;
+  provider: "duffel";
+  providerCardId: string;
+  paymentMethodId: string | null;
+  status: "queued" | "running";
+  attempts: number;
+  availableAt: string;
+  claimedBy: string | null;
+  leaseExpiresAt: string | null;
+  lastErrorCode: string | null;
+  lastErrorDetail: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
 
 /** Single source of truth for passenger completeness before booking. */
 export function passengerReadyForBooking(passenger: Pick<

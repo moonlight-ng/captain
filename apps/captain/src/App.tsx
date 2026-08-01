@@ -79,6 +79,7 @@ export function App() {
   const [tripData, setTripData] = useState<TripPayload | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
+  const [credential, setCredential] = useState<"session" | "legacy-bearer" | null>(null);
   const [loading, setLoading] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
   const [error, setError] = useState("");
@@ -98,8 +99,14 @@ export function App() {
       const session = await getSession();
       setDisplayName(session.displayName);
       setPaymentsEnabled(session.paymentsEnabled);
+      setCredential(session.credential);
       setAuthenticated(true);
       if (page === "travellers" || page === "payment") {
+        if (session.credential !== "session") {
+          setProfile(null);
+          setTripData(null);
+          return;
+        }
         setProfile(await getProfile());
         setTripData(null);
         return;
@@ -135,6 +142,14 @@ export function App() {
     );
   }
   if (page === "travellers") {
+    if (credential !== "session") {
+      return (
+        <CenteredState
+          title="Open travellers from Telegram"
+          detail="Use /profiles in Captain on Telegram for a secure session link."
+        />
+      );
+    }
     return (
       <Travellers
         displayName={displayName}
@@ -144,6 +159,14 @@ export function App() {
     );
   }
   if (page === "payment") {
+    if (credential !== "session") {
+      return (
+        <CenteredState
+          title="Open payment from Telegram"
+          detail="Use /payment in Captain on Telegram for a secure session link."
+        />
+      );
+    }
     if (!paymentsEnabled) {
       return (
         <CenteredState
@@ -165,6 +188,7 @@ export function App() {
         tripData={tripData}
         displayName={displayName}
         trackingError={error}
+        sessionCredential={credential === "session"}
         onSaved={setProfile}
         onTripChanged={load}
         onTripError={setError}

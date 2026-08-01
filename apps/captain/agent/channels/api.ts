@@ -8,19 +8,29 @@ import {
   TripVersionConflictError,
   createPassengerSchema,
   passengerReadyForBooking,
+  reservePaymentClientKeySchema,
   savePaymentMethodSchema,
   tripActionSchema,
   updatePassengerSchema,
   updateTripBriefSchema,
   updateTravellerProfileSchema
 } from "@agents/flight-domain";
+import {
+  PaymentMethodLimitError,
+  PaymentSetupConflictError,
+  PaymentSetupInProgressError
+} from "@agents/flight-store";
 import { ZodError, z } from "zod";
 
 import { getCaptainServices } from "../../services/app/services.js";
+import {
+  legacyBearerAllowed,
+  type ResolvedAuth
+} from "../../services/auth/legacy-bearer.js";
 import { DuffelCardsClient, DuffelCardsError } from "../../services/payments/duffel-cards.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
-const clientKeyThrottle = new Map<string, number>();
+const clientKeyThrottle = new Map<string, { at: number; setupIntentId: string }>();
 const CLIENT_KEY_THROTTLE_MS = 10_000;
 export default defineChannel({
   kindHint: "captain-api",
@@ -41,17 +51,17 @@ export default defineChannel({
     PATCH("/api/me/trip", authenticatedMutation(updateTrip)),
     POST("/api/me/trip/actions", authenticatedMutation(tripAction)),
     POST("/api/me/trip/selections", authenticatedMutation(setTripSelection)),
-    PUT("/api/me/trip/travellers", authenticatedMutation(setTripTravellers)),
-    GET("/api/me/passengers", authenticated(listPassengers)),
-    POST("/api/me/passengers", authenticatedMutation(createPassenger)),
-    PATCH("/api/me/passengers/:id", authenticatedMutation(updatePassenger)),
-    DELETE("/api/me/passengers/:id", authenticatedMutation(deletePassenger)),
-    POST("/api/me/passengers/:id/default", authenticatedMutation(setDefaultPassenger)),
-    POST("/api/me/payments/client-key", authenticatedMutation(createPaymentClientKey)),
-    GET("/api/me/payments/cards", authenticated(listPaymentCards)),
-    POST("/api/me/payments/cards", authenticatedMutation(savePaymentCard)),
-    DELETE("/api/me/payments/cards/:id", authenticatedMutation(deletePaymentCard)),
-    DELETE("/api/me/account", authenticatedMutation(deleteAccount))
+    PUT("/api/me/trip/travellers", authenticatedMutation(requireSession(setTripTravellers))),
+    GET("/api/me/passengers", authenticated(requireSession(listPassengers))),
+    POST("/api/me/passengers", authenticatedMutation(requireSession(createPassenger))),
+    PATCH("/api/me/passengers/:id", authenticatedMutation(requireSession(updatePassenger))),
+    DELETE("/api/me/passengers/:id", authenticatedMutation(requireSession(deletePassenger))),
+    POST("/api/me/passengers/:id/default", authenticatedMutation(requireSession(setDefaultPassenger))),
+    POST("/api/me/payments/client-key", authenticatedMutation(requireSession(createPaymentClientKey))),
+    GET("/api/me/payments/cards", authenticated(requireSession(listPaymentCards))),
+    POST("/api/me/payments/cards", authenticatedMutation(requireSession(savePaymentCard))),
+    DELETE("/api/me/payments/cards/:id", authenticatedMutation(requireSession(deletePaymentCard))),
+    DELETE("/api/me/account", authenticatedMutation(requireSession(deleteAccount)))
   ]
 });
 
@@ -60,7 +70,8 @@ type Handler = (request: Request, context: RouteContext) => Promise<Response>;
 type UserHandler = (
   request: Request,
   context: RouteContext,
-  userId: string
+  userId: string,
+  auth: ResolvedAuth
 ) => Promise<Response>;
 
 function safely(handler: Handler): Handler {
@@ -83,6 +94,15 @@ function safely(handler: Handler): Handler {
       if (error instanceof TripLimitError) {
         return Response.json({ error: "trip_limit", limit: 3 }, { status: 409 });
       }
+      if (error instanceof PaymentSetupInProgressError) {
+        return Response.json({ error: "setup_in_progress" }, { status: 409 });
+      }
+      if (error instanceof PaymentMethodLimitError) {
+        return Response.json({ error: "payment_method_limit", limit: error.limit }, { status: 409 });
+      }
+      if (error instanceof PaymentSetupConflictError) {
+        return Response.json({ error: error.code }, { status: 409 });
+      }
       if (error instanceof Error && error.message === "body_too_large") {
         return Response.json({ error: "body_too_large" }, { status: 413 });
       }
@@ -98,18 +118,22 @@ function safely(handler: Handler): Handler {
 function authenticated(handler: UserHandler): Handler {
   return safely(async (request, context) => {
     const services = await getCaptainServices();
-    const userId = await services.auth.resolve(request);
-    if (!userId) return Response.json({ error: "unauthorized" }, { status: 401 });
-    const user = await services.platformStore.getUser(userId);
+    const auth = await services.auth.resolve(request);
+    if (!auth) return Response.json({ error: "unauthorized" }, { status: 401 });
+    const pathname = new URL(request.url).pathname;
+    if (auth.credential === "legacy-bearer" && !legacyBearerAllowed(request.method, pathname)) {
+      return Response.json({ error: "session_required" }, { status: 403 });
+    }
+    const user = await services.platformStore.getUser(auth.userId);
     if (!user || user.status !== "active") {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
-    return handler(request, context, userId);
+    return handler(request, context, auth.userId, auth);
   });
 }
 
 function authenticatedMutation(handler: UserHandler): Handler {
-  return authenticated(async (request, context, userId) => {
+  return authenticated(async (request, context, userId, auth) => {
     const services = await getCaptainServices();
     // Cookie sessions make a missing Origin exploitable (cross-site POSTs without
     // Origin used to pass). SameSite=Lax + mandatory Origin match + JSON-only bodies
@@ -118,8 +142,17 @@ function authenticatedMutation(handler: UserHandler): Handler {
     if (!origin || origin !== new URL(services.env.publicUrl).origin) {
       return Response.json({ error: "invalid_origin" }, { status: 403 });
     }
-    return handler(request, context, userId);
+    return handler(request, context, userId, auth);
   });
+}
+
+function requireSession(handler: UserHandler): UserHandler {
+  return async (request, context, userId, auth) => {
+    if (auth.credential !== "session") {
+      return Response.json({ error: "session_required" }, { status: 403 });
+    }
+    return handler(request, context, userId, auth);
+  };
 }
 
 async function exchangeLoginLink(request: Request): Promise<Response> {
@@ -156,7 +189,8 @@ async function readiness(): Promise<Response> {
 async function sessionStatus(
   _request: Request,
   _context: RouteContext,
-  userId: string
+  userId: string,
+  auth: ResolvedAuth
 ): Promise<Response> {
   const services = await getCaptainServices();
   const user = await services.platformStore.getUser(userId);
@@ -164,7 +198,8 @@ async function sessionStatus(
     {
       authenticated: true,
       displayName: user?.displayName ?? "",
-      paymentsEnabled: services.env.paymentsEnabled
+      paymentsEnabled: services.env.paymentsEnabled,
+      credential: auth.credential
     },
     { headers: noStore() }
   );
@@ -220,7 +255,8 @@ async function updateProfile(
 async function getTrip(
   request: Request,
   _context: RouteContext,
-  userId: string
+  userId: string,
+  auth: ResolvedAuth
 ): Promise<Response> {
   const services = await getCaptainServices();
   const trips = (await services.platformStore.listTrips(userId))
@@ -252,7 +288,9 @@ async function getTrip(
     services.platformStore.getRecommendation(userId, trip.id),
     services.platformStore.listTripFlightSelections(userId, trip.id),
     services.platformStore.listTripActivity(userId, trip.id),
-    services.platformStore.listTripPassengers(userId, trip.id)
+    auth.credential === "session"
+      ? services.platformStore.listTripPassengers(userId, trip.id)
+      : Promise.resolve([])
   ]);
   return Response.json(
     {
@@ -426,7 +464,7 @@ async function setDefaultPassenger(
 }
 
 async function createPaymentClientKey(
-  _request: Request,
+  request: Request,
   _context: RouteContext,
   userId: string
 ): Promise<Response> {
@@ -434,19 +472,28 @@ async function createPaymentClientKey(
   if (!services.env.paymentsEnabled) {
     return Response.json({ error: "payments_disabled" }, { status: 503 });
   }
-  const last = clientKeyThrottle.get(userId) ?? 0;
+  const body = reservePaymentClientKeySchema.parse(await requestJson(request));
+  const last = clientKeyThrottle.get(userId);
   const now = Date.now();
-  if (now - last < CLIENT_KEY_THROTTLE_MS) {
+  if (
+    last
+    && last.setupIntentId !== body.setupIntentId
+    && now - last.at < CLIENT_KEY_THROTTLE_MS
+  ) {
     return Response.json({ error: "rate_limited" }, { status: 429 });
   }
-  clientKeyThrottle.set(userId, now);
   const client = duffelCardsClient(services.env);
   if (!client) {
     return Response.json({ error: "payments_unavailable" }, { status: 503 });
   }
+  await services.platformStore.reservePaymentCardSetupIntent(userId, body.setupIntentId, new Date());
+  clientKeyThrottle.set(userId, { at: now, setupIntentId: body.setupIntentId });
   try {
     const clientKey = await client.createComponentClientKey();
-    return Response.json({ clientKey }, { headers: noStore() });
+    return Response.json({
+      clientKey,
+      setupIntentId: body.setupIntentId
+    }, { headers: noStore() });
   } catch (error) {
     if (error instanceof DuffelCardsError) {
       return Response.json({ error: error.code }, { status: statusForCardsError(error.code) });
@@ -470,8 +517,6 @@ async function listPaymentCards(
       id: method.id,
       brand: method.brand,
       last4: method.last4,
-      expiryMonth: method.expiryMonth,
-      expiryYear: method.expiryYear,
       cardholderName: method.cardholderName,
       isDefault: method.isDefault
     }))
@@ -488,14 +533,12 @@ async function savePaymentCard(
     return Response.json({ error: "payments_disabled" }, { status: 503 });
   }
   const input = savePaymentMethodSchema.parse(await requestJson(request));
-  const method = await services.platformStore.savePaymentMethod(userId, input, new Date());
+  const method = await services.platformStore.finalizePaymentMethod(userId, input, new Date());
   return Response.json({
     card: {
       id: method.id,
       brand: method.brand,
       last4: method.last4,
-      expiryMonth: method.expiryMonth,
-      expiryYear: method.expiryYear,
       cardholderName: method.cardholderName,
       isDefault: method.isDefault
     }
@@ -514,16 +557,8 @@ async function deletePaymentCard(
   const methods = await services.platformStore.listPaymentMethods(userId);
   const method = methods.find((candidate) => candidate.id === context.params.id);
   if (!method) return Response.json({ error: "not_found" }, { status: 404 });
-  const client = duffelCardsClient(services.env);
-  if (client) {
-    try {
-      await client.deleteCard(method.providerCardId);
-    } catch (error) {
-      if (!(error instanceof DuffelCardsError)) throw error;
-    }
-  }
   await services.platformStore.removePaymentMethod(userId, method.id, new Date());
-  return Response.json({ deleted: true }, { headers: noStore() });
+  return Response.json({ deletion: "queued" }, { status: 202, headers: noStore() });
 }
 
 function duffelCardsClient(env: {

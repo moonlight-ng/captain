@@ -13,10 +13,15 @@ import {
   type RecommendationSnapshot
 } from "@agents/flight-store";
 import { logEvent } from "@agents/observability";
+import { DuffelCardsClient, DuffelCardsError } from "@agents/provider-duffel";
+
+const CARD_DELETION_LEASE_MS = 60_000;
+const CARD_DELETION_CLAIM_LIMIT = 10;
 
 export class FlightWorker {
   readonly #store: CaptainPlatformStore;
   readonly #provider: FlightSearchProvider;
+  readonly #cardsClient: DuffelCardsClient | null;
   readonly #telegramBotToken: string;
   readonly #captainPublicUrl: string;
   readonly #trackingEnabled: boolean;
@@ -31,6 +36,7 @@ export class FlightWorker {
   constructor(options: {
     store: CaptainPlatformStore;
     provider: FlightSearchProvider;
+    cardsClient?: DuffelCardsClient | null;
     telegramBotToken: string;
     captainPublicUrl: string;
     trackingEnabled: boolean;
@@ -41,6 +47,7 @@ export class FlightWorker {
   }) {
     this.#store = options.store;
     this.#provider = options.provider;
+    this.#cardsClient = options.cardsClient ?? null;
     this.#telegramBotToken = options.telegramBotToken;
     this.#captainPublicUrl = options.captainPublicUrl;
     this.#trackingEnabled = options.trackingEnabled;
@@ -54,8 +61,13 @@ export class FlightWorker {
     return this.#lastTickHadDueWork;
   }
 
-  async tick(now = new Date()): Promise<{ scheduled: number; processed: number; notified: number }> {
-    if (this.#running) return { scheduled: 0, processed: 0, notified: 0 };
+  async tick(now = new Date()): Promise<{
+    scheduled: number;
+    processed: number;
+    notified: number;
+    cardsDeleted: number;
+  }> {
+    if (this.#running) return { scheduled: 0, processed: 0, notified: 0, cardsDeleted: 0 };
     this.#running = true;
     this.#lastTickHadDueWork = false;
     try {
@@ -63,8 +75,15 @@ export class FlightWorker {
         await this.#store.pruneWatchData(now);
         this.#lastPrunedAt = now.getTime();
       }
+
+      const cardsDeleted = await this.#processCardDeletions(now);
+      if (cardsDeleted > 0) this.#lastTickHadDueWork = true;
+
       if (!await this.#store.hasDueWorkerWork(now)) {
-        return { scheduled: 0, processed: 0, notified: 0 };
+        if (cardsDeleted > 0) {
+          await this.#logDeletionMetrics(now, cardsDeleted);
+        }
+        return { scheduled: 0, processed: 0, notified: 0, cardsDeleted };
       }
       this.#lastTickHadDueWork = true;
       const maintenance = await this.#store.maintainTracking(now);
@@ -90,10 +109,16 @@ export class FlightWorker {
       for (const notification of notifications) {
         if (await this.#deliver(notification, deliveryNow)) notified += 1;
       }
+      const deletionCounts = await this.#store.countPendingCardDeletions();
       logEvent("info", "flight_worker.tick_completed", {
         scheduled,
         processed,
         notified,
+        cards_deleted: cardsDeleted,
+        card_deletions_queued: deletionCounts.queued,
+        card_deletions_running: deletionCounts.running,
+        card_deletions_high_attempts: deletionCounts.highAttempts,
+        card_deletions_oldest_queued_age_ms: deletionCounts.oldestQueuedAgeMs,
         tracking_enabled: this.#trackingEnabled,
         worker_id: this.#workerId,
         provider: this.#provider.provider,
@@ -102,10 +127,61 @@ export class FlightWorker {
         tracking_auto_paused: maintenance.autoPaused,
         digests_queued: digestsQueued
       });
-      return { scheduled, processed, notified };
+      return { scheduled, processed, notified, cardsDeleted };
     } finally {
       this.#running = false;
     }
+  }
+
+  async #processCardDeletions(now: Date): Promise<number> {
+    if (!this.#cardsClient) return 0;
+    let deleted = 0;
+    for (let i = 0; i < CARD_DELETION_CLAIM_LIMIT; i += 1) {
+      const tickNow = new Date(Math.max(now.getTime(), Date.now()));
+      const [claim] = await this.#store.claimCardDeletions(
+        this.#workerId,
+        tickNow,
+        CARD_DELETION_LEASE_MS,
+        1
+      );
+      if (!claim) break;
+      try {
+        await this.#cardsClient.deleteCard(claim.providerCardId);
+        const completed = await this.#store.completeCardDeletion(this.#workerId, claim.id, new Date());
+        if (completed) deleted += 1;
+      } catch (error) {
+        const code = error instanceof DuffelCardsError ? error.code : "unavailable";
+        const retryAfterMs = error instanceof DuffelCardsError ? error.retryAfterMs : null;
+        await this.#store.failCardDeletion(
+          this.#workerId,
+          claim.id,
+          code,
+          retryAfterMs,
+          new Date()
+        );
+        if (claim.attempts >= 5) {
+          logEvent("error", "flight_worker.card_deletion_failed", {
+            attempts: claim.attempts,
+            error_code: code,
+            worker_id: this.#workerId
+          });
+        }
+      }
+    }
+    return deleted;
+  }
+
+  async #logDeletionMetrics(now: Date, cardsDeleted: number): Promise<void> {
+    const deletionCounts = await this.#store.countPendingCardDeletions();
+    logEvent("info", "flight_worker.card_deletions_tick", {
+      cards_deleted: cardsDeleted,
+      card_deletions_queued: deletionCounts.queued,
+      card_deletions_running: deletionCounts.running,
+      card_deletions_high_attempts: deletionCounts.highAttempts,
+      card_deletions_oldest_queued_age_ms: deletionCounts.oldestQueuedAgeMs,
+      worker_id: this.#workerId,
+      at: now.toISOString()
+    });
   }
 
   async #processRun(run: ClaimedSearchRun, now: Date): Promise<void> {

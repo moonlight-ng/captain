@@ -4,6 +4,8 @@ import type {
   CreateTripInput,
   OfferSnapshot,
   Passenger,
+  PaymentCardDeletion,
+  PaymentCardSetupIntent,
   PaymentMethod,
   SavePaymentMethodInput,
   SearchSpec,
@@ -42,6 +44,27 @@ export class BetaLaunchGateError extends Error {
   constructor() {
     super("Captain's public beta has not opened yet");
     this.name = "BetaLaunchGateError";
+  }
+}
+
+export class PaymentSetupInProgressError extends Error {
+  constructor() {
+    super("A payment card setup is already in progress");
+    this.name = "PaymentSetupInProgressError";
+  }
+}
+
+export class PaymentMethodLimitError extends Error {
+  constructor(readonly limit = 20) {
+    super(`A traveller may have at most ${limit} payment method records`);
+    this.name = "PaymentMethodLimitError";
+  }
+}
+
+export class PaymentSetupConflictError extends Error {
+  constructor(readonly code: "setup_intent_mismatch" | "card_pending_deletion" | "setup_intent_invalid") {
+    super(code);
+    this.name = "PaymentSetupConflictError";
   }
 }
 
@@ -199,12 +222,38 @@ export interface CaptainPlatformStore {
   listTripPassengers(userId: string, tripId: string): Promise<Passenger[]>;
   setTripPassengers(userId: string, tripId: string, passengerIds: string[]): Promise<void>;
   listPaymentMethods(userId: string): Promise<PaymentMethod[]>;
-  savePaymentMethod(
+  reservePaymentCardSetupIntent(
+    userId: string,
+    setupIntentId: string,
+    now: Date
+  ): Promise<PaymentCardSetupIntent>;
+  finalizePaymentMethod(
     userId: string,
     input: SavePaymentMethodInput,
     now: Date
   ): Promise<PaymentMethod>;
   removePaymentMethod(userId: string, paymentMethodId: string, now: Date): Promise<void>;
+  claimCardDeletions(
+    workerId: string,
+    now: Date,
+    leaseMs: number,
+    limit: number
+  ): Promise<PaymentCardDeletion[]>;
+  completeCardDeletion(workerId: string, deletionId: string, now: Date): Promise<boolean>;
+  failCardDeletion(
+    workerId: string,
+    deletionId: string,
+    errorCode: string,
+    retryAfterMs: number | null,
+    now: Date
+  ): Promise<boolean>;
+  countPendingCardDeletions(): Promise<{
+    queued: number;
+    running: number;
+    highAttempts: number;
+    oldestQueuedAgeMs: number | null;
+  }>;
+  cleanupPaymentCardSetupIntents(now: Date): Promise<number>;
   reserveDailyResponseBudget(now: Date, amount: number, limit: number): Promise<boolean>;
   recordWebSearchCalls(now: Date, count: number): Promise<void>;
   claimTelegramUpdate(updateKey: string, userId: string, now: Date): Promise<boolean>;

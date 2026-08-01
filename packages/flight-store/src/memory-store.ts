@@ -11,6 +11,8 @@ import {
   type CreateTripInput,
   type OfferSnapshot,
   type Passenger,
+  type PaymentCardDeletion,
+  type PaymentCardSetupIntent,
   type PaymentMethod,
   type SavePaymentMethodInput,
   type TripCreationResult,
@@ -40,7 +42,13 @@ import type {
   TripActivity,
   TripRecommendation
 } from "./contracts.js";
-import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
+import {
+  BetaCapacityError,
+  BetaLaunchGateError,
+  PaymentMethodLimitError,
+  PaymentSetupConflictError,
+  PaymentSetupInProgressError
+} from "./contracts.js";
 import {
   meetsAlertThreshold,
   rankOffers,
@@ -58,6 +66,28 @@ import {
   TRACKING_SEARCH_SPEC_LIMIT,
   trackingStartsAt
 } from "./watch-policy.js";
+
+const SETUP_INTENT_TTL_MS = 30 * 60_000;
+const SETUP_INTENT_COMPLETED_RETENTION_MS = 24 * 60 * 60_000;
+const MAX_PAYMENT_METHODS_PER_USER = 20;
+const CARD_DELETION_BACKOFF_MS = [
+  60_000,
+  5 * 60_000,
+  15 * 60_000,
+  60 * 60_000,
+  6 * 60 * 60_000,
+  24 * 60 * 60_000
+] as const;
+
+function cardDeletionBackoffMs(attempts: number): number {
+  const index = Math.min(Math.max(attempts - 1, 0), CARD_DELETION_BACKOFF_MS.length - 1);
+  return CARD_DELETION_BACKOFF_MS[index]!;
+}
+
+function truncateErrorDetail(detail: string | null | undefined): string | null {
+  if (!detail) return null;
+  return detail.slice(0, 500);
+}
 
 type MemoryConversation = ConversationContext & { userId: string };
 type MemoryRun = ClaimedSearchRun & {
@@ -119,6 +149,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   readonly #passengers = new Map<string, Passenger>();
   readonly #tripPassengers = new Map<string, Array<{ passengerId: string; ordinal: number }>>();
   readonly #paymentMethods = new Map<string, PaymentMethod>();
+  readonly #setupIntents = new Map<string, PaymentCardSetupIntent>();
+  readonly #cardDeletions = new Map<string, PaymentCardDeletion>();
 
   async ensureTelegramUser(input: TelegramUserInput, now: Date): Promise<CaptainUser> {
     const existing = this.#usersByTelegram.get(input.telegramUserId);
@@ -172,6 +204,10 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   }
 
   async deleteUser(userId: string): Promise<void> {
+    const now = new Date();
+    for (const method of this.#paymentMethods.values()) {
+      if (method.userId === userId) this.#enqueueCardDeletion(method, now);
+    }
     for (const [telegramId, user] of this.#usersByTelegram) {
       if (user.id === userId) this.#usersByTelegram.delete(telegramId);
     }
@@ -181,6 +217,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     for (const [hash, session] of this.#webSessions) if (session.userId === userId) this.#webSessions.delete(hash);
     for (const [id, passenger] of this.#passengers) if (passenger.userId === userId) this.#passengers.delete(id);
     for (const [id, method] of this.#paymentMethods) if (method.userId === userId) this.#paymentMethods.delete(id);
+    for (const [id, intent] of this.#setupIntents) if (intent.userId === userId) this.#setupIntents.delete(id);
     const tripIds = new Set(
       [...this.#trips.values()].filter((trip) => trip.userId === userId).map((trip) => trip.id)
     );
@@ -507,64 +544,313 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       .map(clone);
   }
 
-  async savePaymentMethod(
+  async reservePaymentCardSetupIntent(
+    userId: string,
+    setupIntentId: string,
+    now: Date
+  ): Promise<PaymentCardSetupIntent> {
+    if (!await this.getUser(userId)) throw new Error("User not found");
+    await this.cleanupPaymentCardSetupIntents(now);
+    const existing = this.#setupIntents.get(setupIntentId);
+    if (existing) {
+      if (existing.userId !== userId) throw new PaymentSetupConflictError("setup_intent_invalid");
+      if (existing.status === "pending" && Date.parse(existing.expiresAt) > now.getTime()) {
+        return clone(existing);
+      }
+      if (existing.status === "completed") {
+        return clone(existing);
+      }
+      throw new PaymentSetupConflictError("setup_intent_invalid");
+    }
+    const pending = [...this.#setupIntents.values()].find(
+      (intent) => intent.userId === userId
+        && intent.status === "pending"
+        && Date.parse(intent.expiresAt) > now.getTime()
+    );
+    if (pending) throw new PaymentSetupInProgressError();
+    const totalRows = [...this.#paymentMethods.values()].filter((method) => method.userId === userId).length;
+    if (totalRows >= MAX_PAYMENT_METHODS_PER_USER) throw new PaymentMethodLimitError();
+    const timestamp = now.toISOString();
+    const intent: PaymentCardSetupIntent = {
+      id: setupIntentId,
+      userId,
+      status: "pending",
+      paymentMethodId: null,
+      expiresAt: new Date(now.getTime() + SETUP_INTENT_TTL_MS).toISOString(),
+      completedAt: null,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    this.#setupIntents.set(setupIntentId, intent);
+    return clone(intent);
+  }
+
+  async finalizePaymentMethod(
     userId: string,
     input: SavePaymentMethodInput,
     now: Date
   ): Promise<PaymentMethod> {
     if (!await this.getUser(userId)) throw new Error("User not found");
-    const timestamp = now.toISOString();
-    for (const method of this.#paymentMethods.values()) {
-      if (method.userId === userId && method.isDefault && method.status === "active") {
-        this.#paymentMethods.set(method.id, { ...method, isDefault: false, updatedAt: timestamp });
-      }
+    await this.cleanupPaymentCardSetupIntents(now);
+    const intent = this.#setupIntents.get(input.setupIntentId);
+    if (!intent || intent.userId !== userId) {
+      throw new PaymentSetupConflictError("setup_intent_invalid");
     }
-    const existing = [...this.#paymentMethods.values()].find(
+    if (intent.status === "completed") {
+      if (!intent.paymentMethodId) throw new PaymentSetupConflictError("setup_intent_invalid");
+      const existing = this.#paymentMethods.get(intent.paymentMethodId);
+      if (!existing || existing.userId !== userId) {
+        throw new PaymentSetupConflictError("setup_intent_invalid");
+      }
+      if (existing.providerCardId !== input.cardId) {
+        throw new PaymentSetupConflictError("setup_intent_mismatch");
+      }
+      return clone(existing);
+    }
+    if (intent.status !== "pending" || Date.parse(intent.expiresAt) <= now.getTime()) {
+      throw new PaymentSetupConflictError("setup_intent_invalid");
+    }
+    const pendingDeletion = [...this.#cardDeletions.values()].find(
+      (deletion) => deletion.provider === "duffel" && deletion.providerCardId === input.cardId
+    );
+    if (pendingDeletion) throw new PaymentSetupConflictError("card_pending_deletion");
+
+    const removedExisting = [...this.#paymentMethods.values()].find(
+      (method) => method.userId === userId
+        && method.providerCardId === input.cardId
+        && method.status === "removed"
+    );
+    if (removedExisting) throw new PaymentSetupConflictError("card_pending_deletion");
+
+    const timestamp = now.toISOString();
+    const retiring = [...this.#paymentMethods.values()].filter(
+      (method) => method.userId === userId && method.status === "active"
+    );
+    for (const method of retiring) {
+      if (method.providerCardId === input.cardId) continue;
+      this.#paymentMethods.set(method.id, {
+        ...method,
+        status: "removed",
+        isDefault: false,
+        updatedAt: timestamp
+      });
+      this.#enqueueCardDeletion({ ...method, status: "removed", isDefault: false }, now);
+    }
+
+    const existingActive = [...this.#paymentMethods.values()].find(
       (method) => method.userId === userId && method.providerCardId === input.cardId
     );
-    if (existing) {
-      const updated: PaymentMethod = {
-        ...existing,
+    let method: PaymentMethod;
+    if (existingActive) {
+      method = {
+        ...existingActive,
         brand: input.brand,
         last4: input.last4,
-        expiryMonth: input.expiryMonth,
-        expiryYear: input.expiryYear,
         cardholderName: input.cardholderName,
         status: "active",
         isDefault: true,
         updatedAt: timestamp
       };
-      this.#paymentMethods.set(existing.id, updated);
-      return clone(updated);
+      this.#paymentMethods.set(existingActive.id, method);
+    } else {
+      const totalRows = [...this.#paymentMethods.values()].filter((entry) => entry.userId === userId).length;
+      if (totalRows >= MAX_PAYMENT_METHODS_PER_USER) throw new PaymentMethodLimitError();
+      method = {
+        id: randomUUID(),
+        userId,
+        provider: "duffel",
+        providerCardId: input.cardId,
+        brand: input.brand,
+        last4: input.last4,
+        cardholderName: input.cardholderName,
+        status: "active",
+        isDefault: true,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+      this.#paymentMethods.set(method.id, method);
     }
-    const method: PaymentMethod = {
-      id: randomUUID(),
-      userId,
-      provider: "duffel",
-      providerCardId: input.cardId,
-      brand: input.brand,
-      last4: input.last4,
-      expiryMonth: input.expiryMonth,
-      expiryYear: input.expiryYear,
-      cardholderName: input.cardholderName,
-      status: "active",
-      isDefault: true,
-      createdAt: timestamp,
+
+    this.#setupIntents.set(intent.id, {
+      ...intent,
+      status: "completed",
+      paymentMethodId: method.id,
+      completedAt: timestamp,
       updatedAt: timestamp
-    };
-    this.#paymentMethods.set(method.id, method);
+    });
     return clone(method);
   }
 
   async removePaymentMethod(userId: string, paymentMethodId: string, now: Date): Promise<void> {
     const method = this.#paymentMethods.get(paymentMethodId);
-    if (!method || method.userId !== userId) return;
-    this.#paymentMethods.set(paymentMethodId, {
+    if (!method || method.userId !== userId || method.status !== "active") return;
+    const updated: PaymentMethod = {
       ...method,
       status: "removed",
       isDefault: false,
       updatedAt: now.toISOString()
+    };
+    this.#paymentMethods.set(paymentMethodId, updated);
+    this.#enqueueCardDeletion(updated, now);
+  }
+
+  async claimCardDeletions(
+    workerId: string,
+    now: Date,
+    leaseMs: number,
+    limit: number
+  ): Promise<PaymentCardDeletion[]> {
+    const claimed: PaymentCardDeletion[] = [];
+    const nowMs = now.getTime();
+    const candidates = [...this.#cardDeletions.values()]
+      .filter((deletion) => {
+        if (Date.parse(deletion.availableAt) > nowMs) return false;
+        if (deletion.status === "queued") return true;
+        if (deletion.status === "running") {
+          return !deletion.leaseExpiresAt || Date.parse(deletion.leaseExpiresAt) <= nowMs;
+        }
+        return false;
+      })
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    for (const deletion of candidates) {
+      if (claimed.length >= limit) break;
+      const next: PaymentCardDeletion = {
+        ...deletion,
+        status: "running",
+        attempts: deletion.attempts + 1,
+        claimedBy: workerId,
+        leaseExpiresAt: new Date(nowMs + leaseMs).toISOString(),
+        updatedAt: now.toISOString()
+      };
+      this.#cardDeletions.set(deletion.id, next);
+      claimed.push(clone(next));
+    }
+    return claimed;
+  }
+
+  async completeCardDeletion(workerId: string, deletionId: string, now: Date): Promise<boolean> {
+    const deletion = this.#cardDeletions.get(deletionId);
+    if (!deletion || deletion.status !== "running" || deletion.claimedBy !== workerId) return false;
+    if (deletion.paymentMethodId) {
+      const method = this.#paymentMethods.get(deletion.paymentMethodId);
+      if (method && method.status === "removed" && method.providerCardId === deletion.providerCardId) {
+        this.#paymentMethods.delete(deletion.paymentMethodId);
+      }
+    }
+    this.#cardDeletions.delete(deletionId);
+    void now;
+    return true;
+  }
+
+  async failCardDeletion(
+    workerId: string,
+    deletionId: string,
+    errorCode: string,
+    retryAfterMs: number | null,
+    now: Date
+  ): Promise<boolean> {
+    const deletion = this.#cardDeletions.get(deletionId);
+    if (!deletion || deletion.status !== "running" || deletion.claimedBy !== workerId) return false;
+    const delay = retryAfterMs !== null && retryAfterMs > 0
+      ? Math.min(retryAfterMs, 24 * 60 * 60_000)
+      : cardDeletionBackoffMs(deletion.attempts);
+    this.#cardDeletions.set(deletionId, {
+      ...deletion,
+      status: "queued",
+      availableAt: new Date(now.getTime() + delay).toISOString(),
+      claimedBy: null,
+      leaseExpiresAt: null,
+      lastErrorCode: errorCode.slice(0, 100),
+      lastErrorDetail: truncateErrorDetail(errorCode),
+      updatedAt: now.toISOString()
     });
+    return true;
+  }
+
+  async countPendingCardDeletions(): Promise<{
+    queued: number;
+    running: number;
+    highAttempts: number;
+    oldestQueuedAgeMs: number | null;
+  }> {
+    const now = Date.now();
+    let queued = 0;
+    let running = 0;
+    let highAttempts = 0;
+    let oldestQueuedAgeMs: number | null = null;
+    for (const deletion of this.#cardDeletions.values()) {
+      if (deletion.attempts >= 5) highAttempts += 1;
+      if (deletion.status === "queued") {
+        queued += 1;
+        const age = now - Date.parse(deletion.createdAt);
+        if (oldestQueuedAgeMs === null || age > oldestQueuedAgeMs) oldestQueuedAgeMs = age;
+      } else if (deletion.status === "running") {
+        running += 1;
+      }
+    }
+    return { queued, running, highAttempts, oldestQueuedAgeMs };
+  }
+
+  async cleanupPaymentCardSetupIntents(now: Date): Promise<number> {
+    let removed = 0;
+    const nowMs = now.getTime();
+    for (const [id, intent] of this.#setupIntents) {
+      if (intent.status === "pending" && Date.parse(intent.expiresAt) <= nowMs) {
+        this.#setupIntents.set(id, {
+          ...intent,
+          status: "expired",
+          updatedAt: now.toISOString()
+        });
+      }
+      const current = this.#setupIntents.get(id)!;
+      if (current.status === "expired") {
+        this.#setupIntents.delete(id);
+        removed += 1;
+        continue;
+      }
+      if (
+        current.status === "completed"
+        && current.completedAt
+        && Date.parse(current.completedAt) <= nowMs - SETUP_INTENT_COMPLETED_RETENTION_MS
+      ) {
+        this.#setupIntents.delete(id);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  #enqueueCardDeletion(method: PaymentMethod, now: Date): void {
+    const existing = [...this.#cardDeletions.values()].find(
+      (deletion) => deletion.provider === method.provider
+        && deletion.providerCardId === method.providerCardId
+    );
+    if (existing) {
+      if (!existing.paymentMethodId && method.id) {
+        this.#cardDeletions.set(existing.id, {
+          ...existing,
+          paymentMethodId: method.id,
+          updatedAt: now.toISOString()
+        });
+      }
+      return;
+    }
+    const deletion: PaymentCardDeletion = {
+      id: randomUUID(),
+      provider: "duffel",
+      providerCardId: method.providerCardId,
+      paymentMethodId: method.id,
+      status: "queued",
+      attempts: 0,
+      availableAt: now.toISOString(),
+      claimedBy: null,
+      leaseExpiresAt: null,
+      lastErrorCode: null,
+      lastErrorDetail: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    };
+    this.#cardDeletions.set(deletion.id, deletion);
   }
 
   async reserveDailyResponseBudget(now: Date, amount: number, limit: number): Promise<boolean> {

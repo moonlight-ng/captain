@@ -34,9 +34,9 @@ describe("flight worker orchestration", () => {
     });
 
     await expect(worker.tick(new Date("2026-08-01T12:00:00Z")))
-      .resolves.toEqual({ scheduled: 0, processed: 0, notified: 0 });
+      .resolves.toEqual({ scheduled: 0, processed: 0, notified: 0, cardsDeleted: 0 });
     await expect(worker.tick(new Date("2026-08-01T12:01:00Z")))
-      .resolves.toEqual({ scheduled: 0, processed: 0, notified: 0 });
+      .resolves.toEqual({ scheduled: 0, processed: 0, notified: 0, cardsDeleted: 0 });
 
     expect(worker.lastTickHadDueWork).toBe(false);
     expect(prune).toHaveBeenCalledTimes(1);
@@ -109,7 +109,7 @@ describe("flight worker orchestration", () => {
       { status: 200, headers: { "content-type": "application/json" } }
     )));
     const result = await worker.tick(new Date("2026-08-01T12:00:00Z"));
-    expect(result).toEqual({ scheduled: 1, processed: 1, notified: 1 });
+    expect(result).toEqual({ scheduled: 1, processed: 1, notified: 1, cardsDeleted: 0 });
     expect(search).toHaveBeenCalledTimes(1);
     const sent = await store.getNotificationByTelegramMessage(user.id, 42);
     expect(sent).toMatchObject({
@@ -322,7 +322,7 @@ describe("flight worker orchestration", () => {
     )));
 
     const first = await worker.tick(new Date("2026-08-01T12:00:00Z"));
-    expect(first).toEqual({ scheduled: 1, processed: 1, notified: 0 });
+    expect(first).toEqual({ scheduled: 1, processed: 1, notified: 0, cardsDeleted: 0 });
     expect(await store.getNotificationByTelegramMessage(user.id, 77)).toBeNull();
     const createdTrip = (await store.listTrips(user.id))[0]!;
     expect(await store.getWatch(user.id, createdTrip.id)).toMatchObject({

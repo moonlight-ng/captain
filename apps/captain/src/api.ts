@@ -25,6 +25,7 @@ export function getSession(): Promise<{
   authenticated: true;
   displayName: string;
   paymentsEnabled: boolean;
+  credential: "session" | "legacy-bearer";
 }> {
   return api("/api/auth/session");
 }
@@ -157,19 +158,21 @@ export async function listPaymentMethods(): Promise<PaymentMethod[]> {
   return (await api<{ cards: PaymentMethod[] }>("/api/me/payments/cards")).cards;
 }
 
-export async function createPaymentClientKey(): Promise<string> {
-  return (await api<{ clientKey: string }>("/api/me/payments/client-key", {
+export async function createPaymentClientKey(setupIntentId: string): Promise<{
+  clientKey: string;
+  setupIntentId: string;
+}> {
+  return api("/api/me/payments/client-key", {
     method: "POST",
-    body: "{}"
-  })).clientKey;
+    body: JSON.stringify({ setupIntentId })
+  });
 }
 
 export async function savePaymentMethod(input: {
+  setupIntentId: string;
   cardId: string;
   brand: string;
   last4: string;
-  expiryMonth: number;
-  expiryYear: number;
   cardholderName: string;
 }): Promise<PaymentMethod> {
   return (await api<{ card: PaymentMethod }>("/api/me/payments/cards", {

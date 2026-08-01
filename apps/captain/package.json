@@ -28,6 +28,7 @@
     "@agents/flight-domain": "workspace:*",
     "@agents/flight-store": "workspace:*",
     "@agents/observability": "workspace:*",
+    "@agents/provider-duffel": "workspace:*",
     "@agents/telegram-core": "workspace:*",
     "@duffel/components": "^3.17.0",
     "@fontsource/libre-franklin": "^5.2.8",

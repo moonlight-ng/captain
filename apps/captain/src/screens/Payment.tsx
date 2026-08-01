@@ -64,7 +64,6 @@ export function Payment({ onBack }: { onBack: () => void }) {
             <strong>
               {formatBrand(primary.brand)} ···· {primary.last4}
             </strong>
-            <div>expires {String(primary.expiryMonth).padStart(2, "0")}/{String(primary.expiryYear).slice(-2)}</div>
             <div>{primary.cardholderName}</div>
           </div>
           <div className="entity-row" style={{ marginTop: 16 }}>

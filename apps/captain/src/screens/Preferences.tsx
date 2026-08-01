@@ -32,6 +32,7 @@ export function Preferences({
   tripData,
   displayName,
   trackingError,
+  sessionCredential = true,
   onSaved,
   onTripChanged,
   onTripError,
@@ -41,6 +42,7 @@ export function Preferences({
   tripData: TripPayload | null;
   displayName: string;
   trackingError: string;
+  sessionCredential?: boolean;
   onSaved: (profile: TravellerProfile) => void;
   onTripChanged: () => Promise<void>;
   onTripError: (value: string) => void;
@@ -81,8 +83,12 @@ export function Preferences({
   const [changingTraveller, setChangingTraveller] = useState(false);
 
   useEffect(() => {
+    if (!sessionCredential) {
+      setAvailablePassengers([]);
+      return;
+    }
     void listPassengers().then(setAvailablePassengers).catch(() => setAvailablePassengers([]));
-  }, []);
+  }, [sessionCredential]);
 
   useEffect(() => {
     setAssignedTravellers(tripData?.travellers ?? []);
@@ -358,7 +364,7 @@ export function Preferences({
           </div>
         </details>
       )}
-      {trip && (
+      {trip && sessionCredential && (
         <details className="settings-card settings-disclosure" open>
           <summary>
             <span><strong>Traveller</strong></span>
