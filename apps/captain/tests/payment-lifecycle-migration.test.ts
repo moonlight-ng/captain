@@ -9,12 +9,16 @@ describe("Payment card lifecycle migration", () => {
     "database/migrations/005_payment_card_lifecycle.sql"
   ), "utf8");
 
-  it("drops fabricated expiry columns and enforces one active card", () => {
+  it("drops fabricated expiry columns and enforces one active card after backfill", () => {
     expect(migration).toContain("drop column expiry_month");
     expect(migration).toContain("drop column expiry_year");
     expect(migration).toContain("drop index if exists captain.captain_payment_methods_one_default_idx");
     expect(migration).toContain("create unique index captain_payment_methods_one_active_idx");
     expect(migration).toContain("where status = 'active'");
+    const backfillAt = migration.indexOf("Backfill BEFORE the one-active unique index");
+    const indexAt = migration.indexOf("create unique index captain_payment_methods_one_active_idx");
+    expect(backfillAt).toBeGreaterThan(-1);
+    expect(indexAt).toBeGreaterThan(backfillAt);
   });
 
   it("caps payment method rows at twenty and creates setup intents", () => {
@@ -29,9 +33,11 @@ describe("Payment card lifecycle migration", () => {
     expect(migration).toContain("create table captain.payment_card_deletions");
     expect(migration).toContain("unique (provider, provider_card_id)");
     expect(migration).toContain("captain_payment_card_deletions_claim_idx");
-    expect(migration).not.toMatch(
-      /create table captain\.payment_card_deletions[\s\S]*user_id uuid[^\n]*references captain\.users/u
-    );
+    const deletionsTable = migration.match(
+      /create table captain\.payment_card_deletions \([\s\S]*?\);/u
+    )?.[0] ?? "";
+    expect(deletionsTable).toContain("provider_card_id text not null");
+    expect(deletionsTable).not.toMatch(/user_id/u);
   });
 
   it("enables RLS and captain_runtime_full_access for the new tables", () => {

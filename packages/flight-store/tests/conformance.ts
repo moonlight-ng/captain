@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import { buildSearchSpecs, type CreateTripInput } from "@agents/flight-domain";
 import {
   PaymentMethodLimitError,
-  PaymentSetupInProgressError,
   type CaptainPlatformStore,
   type TripRecommendation
 } from "../src/index.js";
@@ -860,7 +859,7 @@ export function describeCaptainPlatformStore(
       void methodA;
     });
 
-    it("treats setup intent reservation as idempotent for the same id", async () => {
+    it("treats setup intent reservation as idempotent and rebinds remounts", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
       const now = new Date("2026-08-01T12:00:00Z");
@@ -868,8 +867,8 @@ export function describeCaptainPlatformStore(
       const first = await store.reservePaymentCardSetupIntent(ada.id, intentId, now);
       const second = await store.reservePaymentCardSetupIntent(ada.id, intentId, now);
       expect(second).toEqual(first);
-      await expect(store.reservePaymentCardSetupIntent(ada.id, randomUUID(), now))
-        .rejects.toBeInstanceOf(PaymentSetupInProgressError);
+      const rebound = await store.reservePaymentCardSetupIntent(ada.id, randomUUID(), now);
+      expect(rebound).toEqual(first);
     });
 
     it("enforces a hard cap of twenty payment method records", async () => {

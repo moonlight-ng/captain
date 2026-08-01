@@ -95,7 +95,7 @@ export function Payment({ onBack }: { onBack: () => void }) {
         </section>
       )}
 
-      {(!primary || showForm) && (
+      {!loading && (!primary || showForm) && (
         <section className="settings-card">
           <Suspense fallback={<p>Loading secure card form…</p>}>
             <DuffelCardMount

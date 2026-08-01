@@ -3,11 +3,40 @@ import { DuffelCardForm, useDuffelCardFormActions } from "@duffel/components";
 
 import { ApiError, createPaymentClientKey, savePaymentMethod } from "../api";
 
+const SETUP_INTENT_STORAGE_KEY = "captain:payment-setup-intent";
+
 type PendingCard = {
   cardId: string;
   brand: string;
   last4: string;
 };
+
+function readStoredSetupIntentId(): string | null {
+  try {
+    const value = sessionStorage.getItem(SETUP_INTENT_STORAGE_KEY)?.trim() ?? "";
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredSetupIntentId(setupIntentId: string): void {
+  try {
+    sessionStorage.setItem(SETUP_INTENT_STORAGE_KEY, setupIntentId);
+  } catch {
+    // Private mode / quota — server rebind still recovers the pending intent.
+  }
+}
+
+function clearStoredSetupIntentId(): void {
+  try {
+    sessionStorage.removeItem(SETUP_INTENT_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 export default function DuffelCardMount({
   onSaved,
@@ -17,7 +46,7 @@ export default function DuffelCardMount({
   onError: (message: string) => void;
 }) {
   const { ref, saveCard } = useDuffelCardFormActions();
-  const setupIntentId = useRef(crypto.randomUUID()).current;
+  const setupIntentIdRef = useRef(readStoredSetupIntentId() ?? crypto.randomUUID());
   const initGeneration = useRef(0);
   const [clientKey, setClientKey] = useState<string | null>(null);
   const [cardholderName, setCardholderName] = useState("");
@@ -32,8 +61,10 @@ export default function DuffelCardMount({
     setKeyError("");
     setClientKey(null);
     try {
-      const result = await createPaymentClientKey(setupIntentId);
+      const result = await createPaymentClientKey(setupIntentIdRef.current);
       if (generation !== initGeneration.current) return;
+      setupIntentIdRef.current = result.setupIntentId;
+      writeStoredSetupIntentId(result.setupIntentId);
       setClientKey(result.clientKey);
     } catch (cause) {
       if (generation !== initGeneration.current) return;
@@ -55,12 +86,13 @@ export default function DuffelCardMount({
     setLocalError("");
     try {
       await savePaymentMethod({
-        setupIntentId,
+        setupIntentId: setupIntentIdRef.current,
         cardId: card.cardId,
         brand: card.brand,
         last4: card.last4,
         cardholderName: name
       });
+      clearStoredSetupIntentId();
       setPendingCard(null);
       await onSaved();
     } catch (cause) {

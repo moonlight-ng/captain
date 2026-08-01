@@ -6,64 +6,10 @@ alter table captain.payment_methods
   drop column expiry_month,
   drop column expiry_year;
 
--- One active payment method per user (replaces one-default-only index).
+-- Replace the one-default index; one-active is created only after backfill retires duplicates.
 drop index if exists captain.captain_payment_methods_one_default_idx;
 
-create unique index captain_payment_methods_one_active_idx
-  on captain.payment_methods (user_id) where status = 'active';
-
--- Cap local payment rows so removed-but-pending-deletion cards cannot grow without bound.
-create function captain.enforce_payment_method_limit()
-returns trigger
-language plpgsql
-as $$
-declare
-  method_count integer;
-begin
-  perform pg_advisory_xact_lock(hashtext(new.user_id::text || ':payment_methods'));
-  select count(*) into method_count
-  from captain.payment_methods method
-  where method.user_id = new.user_id
-    and method.id <> new.id;
-
-  if method_count >= 20 then
-    raise exception 'A traveller may have at most 20 payment method records'
-      using errcode = 'check_violation',
-        constraint = 'captain_payment_methods_max_twenty';
-  end if;
-  return new;
-end
-$$;
-
-create trigger captain_payment_methods_enforce_limit
-before insert on captain.payment_methods
-for each row execute function captain.enforce_payment_method_limit();
-
--- Setup intents: one pending reservation per user; 30-minute expiry; 24h completed retention.
-create table captain.payment_card_setup_intents (
-  id uuid primary key,
-  user_id uuid not null references captain.users(id) on delete cascade,
-  status text not null check (status in ('pending', 'completed', 'expired')),
-  payment_method_id uuid references captain.payment_methods(id) on delete set null,
-  expires_at timestamptz not null,
-  completed_at timestamptz,
-  created_at timestamptz not null,
-  updated_at timestamptz not null
-);
-
-create unique index captain_payment_card_setup_intents_one_pending_idx
-  on captain.payment_card_setup_intents (user_id) where status = 'pending';
-
-create index captain_payment_card_setup_intents_user_idx
-  on captain.payment_card_setup_intents (user_id);
-
-create index captain_payment_card_setup_intents_cleanup_idx
-  on captain.payment_card_setup_intents (status, expires_at, completed_at);
-
-comment on table captain.payment_card_setup_intents is
-  'Single-use card setup reservations. Bind Duffel browser callbacks to one pending intent per user.';
-
--- Deletion queue: survives user cascade (no user FK). Completed rows are deleted, not retained.
+-- Deletion queue first so the backfill can enqueue retired cards. Survives user cascade (no user FK).
 create table captain.payment_card_deletions (
   id uuid primary key,
   provider text not null check (provider = 'duffel'),
@@ -87,7 +33,8 @@ create index captain_payment_card_deletions_claim_idx
 comment on table captain.payment_card_deletions is
   'Leased remote card deletion queue. Provider tokens are retained until Duffel confirms deletion.';
 
--- Backfill: keep the current default active card; retire every other active card and enqueue deletion.
+-- Backfill BEFORE the one-active unique index: version 004 left prior cards active after replace.
+-- Keep the current default active card; retire every other active card and enqueue deletion.
 -- Also enqueue already-removed cards that still retain a provider token.
 do $$
 declare
@@ -155,6 +102,61 @@ begin
   on conflict (provider, provider_card_id) do nothing;
 end
 $$;
+
+-- Safe now that each user has at most one active card.
+create unique index captain_payment_methods_one_active_idx
+  on captain.payment_methods (user_id) where status = 'active';
+
+-- Cap local payment rows so removed-but-pending-deletion cards cannot grow without bound.
+create function captain.enforce_payment_method_limit()
+returns trigger
+language plpgsql
+as $$
+declare
+  method_count integer;
+begin
+  perform pg_advisory_xact_lock(hashtext(new.user_id::text || ':payment_methods'));
+  select count(*) into method_count
+  from captain.payment_methods method
+  where method.user_id = new.user_id
+    and method.id <> new.id;
+
+  if method_count >= 20 then
+    raise exception 'A traveller may have at most 20 payment method records'
+      using errcode = 'check_violation',
+        constraint = 'captain_payment_methods_max_twenty';
+  end if;
+  return new;
+end
+$$;
+
+create trigger captain_payment_methods_enforce_limit
+before insert on captain.payment_methods
+for each row execute function captain.enforce_payment_method_limit();
+
+-- Setup intents: one pending reservation per user; 30-minute expiry; 24h completed retention.
+create table captain.payment_card_setup_intents (
+  id uuid primary key,
+  user_id uuid not null references captain.users(id) on delete cascade,
+  status text not null check (status in ('pending', 'completed', 'expired')),
+  payment_method_id uuid references captain.payment_methods(id) on delete set null,
+  expires_at timestamptz not null,
+  completed_at timestamptz,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create unique index captain_payment_card_setup_intents_one_pending_idx
+  on captain.payment_card_setup_intents (user_id) where status = 'pending';
+
+create index captain_payment_card_setup_intents_user_idx
+  on captain.payment_card_setup_intents (user_id);
+
+create index captain_payment_card_setup_intents_cleanup_idx
+  on captain.payment_card_setup_intents (status, expires_at, completed_at);
+
+comment on table captain.payment_card_setup_intents is
+  'Single-use card setup reservations. Bind Duffel browser callbacks to one pending intent per user.';
 
 -- Trap A: new tables get RLS + policies + grants inline.
 do $$

@@ -51,8 +51,7 @@ import {
   BetaCapacityError,
   BetaLaunchGateError,
   PaymentMethodLimitError,
-  PaymentSetupConflictError,
-  PaymentSetupInProgressError
+  PaymentSetupConflictError
 } from "./contracts.js";
 import {
   meetsAlertThreshold,
@@ -587,14 +586,16 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         }
         throw new PaymentSetupConflictError("setup_intent_invalid");
       }
-      const pendingRows = await tx<Array<{ id: string }>>`
-        select id from captain.payment_card_setup_intents
+      const pendingRows = await tx<PaymentCardSetupIntentRow[]>`
+        select * from captain.payment_card_setup_intents
         where user_id = ${userId}
           and status = 'pending'
           and expires_at > ${now}
         limit 1
+        for update
       `;
-      if (pendingRows[0]) throw new PaymentSetupInProgressError();
+      // Remounts and refreshes may send a new UUID; rebind to the live pending intent.
+      if (pendingRows[0]) return mapPaymentCardSetupIntent(pendingRows[0]);
       const counts = await tx<Array<{ count: number }>>`
         select count(*)::int as count from captain.payment_methods where user_id = ${userId}
       `;

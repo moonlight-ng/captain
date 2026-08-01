@@ -46,8 +46,7 @@ import {
   BetaCapacityError,
   BetaLaunchGateError,
   PaymentMethodLimitError,
-  PaymentSetupConflictError,
-  PaymentSetupInProgressError
+  PaymentSetupConflictError
 } from "./contracts.js";
 import {
   meetsAlertThreshold,
@@ -567,7 +566,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         && intent.status === "pending"
         && Date.parse(intent.expiresAt) > now.getTime()
     );
-    if (pending) throw new PaymentSetupInProgressError();
+    // Remounts and refreshes may send a new UUID; rebind to the live pending intent.
+    if (pending) return clone(pending);
     const totalRows = [...this.#paymentMethods.values()].filter((method) => method.userId === userId).length;
     if (totalRows >= MAX_PAYMENT_METHODS_PER_USER) throw new PaymentMethodLimitError();
     const timestamp = now.toISOString();

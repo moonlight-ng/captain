@@ -76,12 +76,13 @@ export class FlightWorker {
         this.#lastPrunedAt = now.getTime();
       }
 
-      const cardsDeleted = await this.#processCardDeletions(now);
-      if (cardsDeleted > 0) this.#lastTickHadDueWork = true;
+      const deletionResult = await this.#processCardDeletions(now);
+      const cardsDeleted = deletionResult.deleted;
+      if (deletionResult.claimed > 0) this.#lastTickHadDueWork = true;
 
       if (!await this.#store.hasDueWorkerWork(now)) {
-        if (cardsDeleted > 0) {
-          await this.#logDeletionMetrics(now, cardsDeleted);
+        if (deletionResult.claimed > 0) {
+          await this.#logDeletionMetrics(now, cardsDeleted, deletionResult.claimed);
         }
         return { scheduled: 0, processed: 0, notified: 0, cardsDeleted };
       }
@@ -115,6 +116,7 @@ export class FlightWorker {
         processed,
         notified,
         cards_deleted: cardsDeleted,
+        card_deletions_claimed: deletionResult.claimed,
         card_deletions_queued: deletionCounts.queued,
         card_deletions_running: deletionCounts.running,
         card_deletions_high_attempts: deletionCounts.highAttempts,
@@ -133,9 +135,10 @@ export class FlightWorker {
     }
   }
 
-  async #processCardDeletions(now: Date): Promise<number> {
-    if (!this.#cardsClient) return 0;
+  async #processCardDeletions(now: Date): Promise<{ deleted: number; claimed: number }> {
+    if (!this.#cardsClient) return { deleted: 0, claimed: 0 };
     let deleted = 0;
+    let claimed = 0;
     for (let i = 0; i < CARD_DELETION_CLAIM_LIMIT; i += 1) {
       const tickNow = new Date(Math.max(now.getTime(), Date.now()));
       const [claim] = await this.#store.claimCardDeletions(
@@ -145,6 +148,7 @@ export class FlightWorker {
         1
       );
       if (!claim) break;
+      claimed += 1;
       try {
         await this.#cardsClient.deleteCard(claim.providerCardId);
         const completed = await this.#store.completeCardDeletion(this.#workerId, claim.id, new Date());
@@ -168,13 +172,14 @@ export class FlightWorker {
         }
       }
     }
-    return deleted;
+    return { deleted, claimed };
   }
 
-  async #logDeletionMetrics(now: Date, cardsDeleted: number): Promise<void> {
+  async #logDeletionMetrics(now: Date, cardsDeleted: number, cardsClaimed: number): Promise<void> {
     const deletionCounts = await this.#store.countPendingCardDeletions();
     logEvent("info", "flight_worker.card_deletions_tick", {
       cards_deleted: cardsDeleted,
+      card_deletions_claimed: cardsClaimed,
       card_deletions_queued: deletionCounts.queued,
       card_deletions_running: deletionCounts.running,
       card_deletions_high_attempts: deletionCounts.highAttempts,
