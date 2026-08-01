@@ -908,6 +908,33 @@ export function describeCaptainPlatformStore(
       expect(mints).toBe(1);
     });
 
+    it("rejects a concurrent client-key request with a different setup intent id", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const now = new Date("2026-08-01T12:00:00Z");
+      const intentA = randomUUID();
+      const intentB = randomUUID();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let mints = 0;
+      const mint = async () => {
+        mints += 1;
+        await gate;
+        return `key_${mints}`;
+      };
+      const first = store.issuePaymentCardSetupClientKey(ada.id, intentA, mint, now);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      // Start before releasing the mint gate so Postgres may block on the session
+      // lock; after the first intent is pending, the second ID must still fail.
+      const second = store.issuePaymentCardSetupClientKey(ada.id, intentB, mint, now);
+      release();
+      await expect(first).resolves.toEqual({ setupIntentId: intentA, clientKey: "key_1" });
+      await expect(second).rejects.toBeInstanceOf(PaymentSetupInProgressError);
+      expect(mints).toBe(1);
+    });
+
     it("enforces a hard cap of twenty payment method records", async () => {
       const store = await createStore();
       const ada = await user(store, 1);

@@ -151,7 +151,10 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   readonly #paymentMethods = new Map<string, PaymentMethod>();
   readonly #setupIntents = new Map<string, PaymentCardSetupIntent>();
   readonly #cardDeletions = new Map<string, PaymentCardDeletion>();
-  readonly #clientKeyIssues = new Map<string, Promise<{ setupIntentId: string; clientKey: string }>>();
+  readonly #clientKeyIssues = new Map<string, {
+    setupIntentId: string;
+    work: Promise<{ setupIntentId: string; clientKey: string }>;
+  }>();
 
   async ensureTelegramUser(input: TelegramUserInput, now: Date): Promise<CaptainUser> {
     const existing = this.#usersByTelegram.get(input.telegramUserId);
@@ -593,18 +596,24 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     mint: () => Promise<string>,
     now: Date
   ): Promise<{ setupIntentId: string; clientKey: string }> {
-    // One pending intent per user — coalesce concurrent mints for that user.
-    const issueKey = userId;
-    const inFlight = this.#clientKeyIssues.get(issueKey);
-    if (inFlight) return inFlight;
+    // Coalesce only identical setup IDs. A different ID while another mint is in
+    // flight for this user must fail with setup_in_progress, not inherit the first key.
+    const existing = this.#clientKeyIssues.get(userId);
+    if (existing) {
+      if (existing.setupIntentId !== setupIntentId) {
+        throw new PaymentSetupInProgressError();
+      }
+      return existing.work;
+    }
 
     const work = this.#issuePaymentCardSetupClientKeyLocked(userId, setupIntentId, mint, now);
-    this.#clientKeyIssues.set(issueKey, work);
+    this.#clientKeyIssues.set(userId, { setupIntentId, work });
     try {
       return await work;
     } finally {
-      if (this.#clientKeyIssues.get(issueKey) === work) {
-        this.#clientKeyIssues.delete(issueKey);
+      const current = this.#clientKeyIssues.get(userId);
+      if (current?.work === work) {
+        this.#clientKeyIssues.delete(userId);
       }
     }
   }

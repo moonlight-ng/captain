@@ -569,7 +569,16 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     const user = await this.getUser(userId);
     if (!user) throw new Error("User not found");
     await this.cleanupPaymentCardSetupIntents(now);
-    return this.#sql.begin(async (tx) => {
+    return this.#reservePaymentCardSetupIntentWith(this.#sql, userId, setupIntentId, now);
+  }
+
+  async #reservePaymentCardSetupIntentWith(
+    sql: Sql,
+    userId: string,
+    setupIntentId: string,
+    now: Date
+  ): Promise<PaymentCardSetupIntent> {
+    return sql.begin(async (tx) => {
       await tx`select pg_advisory_xact_lock(hashtext(${`${userId}:payment_methods`}))`;
       const existingRows = await tx<PaymentCardSetupIntentRow[]>`
         select * from captain.payment_card_setup_intents
@@ -622,15 +631,24 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     mint: () => Promise<string>,
     now: Date
   ): Promise<{ setupIntentId: string; clientKey: string }> {
-    // Hold a session advisory lock on a reserved connection across check/mint/persist
-    // so concurrent issuers cannot each call Duffel. One pending intent per user, so
-    // lock scope is the user.
+    // Pool work happens before borrowing a connection. Reservation, mint, and
+    // persistence all use that same reserved connection under a session lock so
+    // concurrent issuers cannot exhaust the pool waiting for each other.
+    const user = await this.getUser(userId);
+    if (!user) throw new Error("User not found");
+    await this.cleanupPaymentCardSetupIntents(now);
+
     const lockKey = `${userId}:payment_setup_key`;
     const conn = await this.#sql.reserve();
     try {
       await conn`select pg_advisory_lock(hashtext(${lockKey}))`;
       try {
-        const reserved = await this.reservePaymentCardSetupIntent(userId, setupIntentId, now);
+        const reserved = await this.#reservePaymentCardSetupIntentWith(
+          conn,
+          userId,
+          setupIntentId,
+          now
+        );
         if (reserved.componentClientKey) {
           return { setupIntentId: reserved.id, clientKey: reserved.componentClientKey };
         }
