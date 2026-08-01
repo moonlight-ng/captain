@@ -991,9 +991,13 @@ export function describeCaptainPlatformStore(
       const first = store.issuePaymentCardSetupClientKey(ada.id, intentA, mint, now);
       await entered;
       const second = store.issuePaymentCardSetupClientKey(ada.id, intentB, mint, now);
+      // Attach the rejection handler now, not after awaiting `first`. Against real
+      // Postgres that await spans I/O, long enough for Node to flag the already
+      // rejected `second` as an unhandled rejection and fail the run.
+      const secondRejects = expect(second).rejects.toBeInstanceOf(PaymentSetupInProgressError);
       release();
       await expect(first).resolves.toEqual({ setupIntentId: intentA, clientKey: "key_1" });
-      await expect(second).rejects.toBeInstanceOf(PaymentSetupInProgressError);
+      await secondRejects;
       expect(mints).toBe(1);
     });
 
