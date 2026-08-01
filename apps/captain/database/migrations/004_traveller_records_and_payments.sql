@@ -108,7 +108,10 @@ begin
 end
 $$;
 
-grant usage on schema captain to captain_runtime;
+grant usage on schema captain to captain_runtime, captain_migrator;
+grant all privileges on all tables in schema captain to captain_migrator;
+grant all privileges on all sequences in schema captain to captain_migrator;
+grant execute on all functions in schema captain to captain_migrator;
 
 do $$
 declare
