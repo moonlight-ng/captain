@@ -34,4 +34,23 @@ describe("Captain public environment", () => {
     vi.stubEnv("TRIP_INTERPRETER_MODEL", "openai/custom-extractor");
     expect(loadEnv().tripInterpreterModel).toBe("openai/custom-extractor");
   });
+
+  it("requires DATABASE_URL and DUFFEL_ACCESS_TOKEN when payments are enabled", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("CAPTAIN_PAYMENTS_ENABLED", "true");
+    vi.stubEnv("DATABASE_URL", "");
+    vi.stubEnv("DUFFEL_ACCESS_TOKEN", "duffel_test_token");
+    expect(() => loadEnv()).toThrow(/DATABASE_URL is required when CAPTAIN_PAYMENTS_ENABLED is true/u);
+
+    vi.stubEnv("DATABASE_URL", "postgresql://captain.invalid/db");
+    vi.stubEnv("DUFFEL_ACCESS_TOKEN", "");
+    expect(() => loadEnv()).toThrow(/DUFFEL_ACCESS_TOKEN is required when CAPTAIN_PAYMENTS_ENABLED is true/u);
+
+    vi.stubEnv("DUFFEL_ACCESS_TOKEN", "duffel_test_token");
+    expect(loadEnv()).toMatchObject({
+      paymentsEnabled: true,
+      databaseUrl: "postgresql://captain.invalid/db",
+      duffelAccessToken: "duffel_test_token"
+    });
+  });
 });

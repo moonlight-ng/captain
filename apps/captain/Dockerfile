@@ -10,6 +10,7 @@ COPY patches ./patches
 COPY packages/flight-domain/package.json ./packages/flight-domain/package.json
 COPY packages/flight-store/package.json ./packages/flight-store/package.json
 COPY packages/observability/package.json ./packages/observability/package.json
+COPY packages/provider-duffel/package.json ./packages/provider-duffel/package.json
 COPY packages/telegram-core/package.json ./packages/telegram-core/package.json
 RUN pnpm install --frozen-lockfile
 

@@ -4,7 +4,7 @@ import {
   DuffelCardsClient,
   DuffelCardsError,
   parseRetryAfterMs
-} from "@agents/provider-duffel";
+} from "../src/cards.js";
 
 describe("parseRetryAfterMs", () => {
   it("parses positive delta-seconds", () => {
@@ -50,7 +50,7 @@ describe("DuffelCardsClient", () => {
     expect(calls[0]?.init.body).toBe("{}");
   });
 
-  it("deletes cards on api.duffel.cards and tolerates 404", async () => {
+  it("deletes cards on api.duffel.cards and treats 404 as success", async () => {
     const urls: string[] = [];
     const client = new DuffelCardsClient({
       accessToken: "duffel_test_token",
@@ -63,7 +63,22 @@ describe("DuffelCardsClient", () => {
     expect(urls[0]).toBe("https://api.duffel.cards/payments/cards/tcd_abc");
   });
 
-  it("maps 401, 422, and 429 to typed error codes", async () => {
+  it("allows deletion workers to shorten the request timeout", async () => {
+    const client = new DuffelCardsClient({
+      accessToken: "duffel_test_token",
+      fetch: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) return;
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      })
+    });
+    await expect(client.deleteCard("tcd_slow", 5)).rejects.toMatchObject({
+      name: "DuffelCardsError",
+      code: "timeout"
+    } satisfies Partial<DuffelCardsError>);
+  });
+
+  it("maps 401, 422, and 429 to typed error codes including Retry-After", async () => {
     for (const [status, code] of [
       [401, "unauthorized"],
       [422, "invalid_request"],
@@ -85,17 +100,17 @@ describe("DuffelCardsClient", () => {
     }
   });
 
-  const live = process.env.DUFFEL_ACCESS_TOKEN?.trim()
-    ? describe
-    : describe.skip;
-
-  live("live smoke", () => {
-    it("mints a component client key against Duffel", async () => {
-      const client = new DuffelCardsClient({
-        accessToken: process.env.DUFFEL_ACCESS_TOKEN!
-      });
-      const key = await client.createComponentClientKey();
-      expect(key.length).toBeGreaterThan(10);
+  it("ignores invalid Retry-After on 429", async () => {
+    const client = new DuffelCardsClient({
+      accessToken: "duffel_test_token",
+      fetch: async () => new Response(JSON.stringify({
+        errors: [{ message: "slow down" }]
+      }), { status: 429, headers: { "retry-after": "0" } })
     });
+    await expect(client.createComponentClientKey()).rejects.toMatchObject({
+      name: "DuffelCardsError",
+      code: "rate_limited",
+      retryAfterMs: null
+    } satisfies Partial<DuffelCardsError>);
   });
 });

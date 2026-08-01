@@ -6,8 +6,30 @@ import {
   type FlightSearchProvider
 } from "@agents/flight-domain";
 import { MemoryCaptainPlatformStore } from "@agents/flight-store";
+import { DuffelCardsError, type DuffelCardsClient } from "@agents/provider-duffel";
 
 import { FlightWorker, notificationText } from "../src/worker.js";
+
+function buildIdleWorker(
+  store: MemoryCaptainPlatformStore,
+  cardsClient?: Partial<DuffelCardsClient>
+): FlightWorker {
+  return new FlightWorker({
+    store,
+    provider: {
+      provider: "official_duffel",
+      search: vi.fn()
+    } as unknown as FlightSearchProvider,
+    cardsClient: (cardsClient ?? null) as DuffelCardsClient | null,
+    telegramBotToken: "test",
+    captainPublicUrl: "https://captain.example.com",
+    trackingEnabled: true,
+    workerId: "worker-1",
+    leaseMs: 240_000,
+    freshnessMs: 900_000,
+    claimLimit: 1
+  });
+}
 
 describe("flight worker orchestration", () => {
   it("uses only the due-work gate while the worker is idle", async () => {
@@ -34,9 +56,9 @@ describe("flight worker orchestration", () => {
     });
 
     await expect(worker.tick(new Date("2026-08-01T12:00:00Z")))
-      .resolves.toEqual({ scheduled: 0, processed: 0, notified: 0 });
+      .resolves.toEqual({ scheduled: 0, processed: 0, notified: 0, cardsDeleted: 0 });
     await expect(worker.tick(new Date("2026-08-01T12:01:00Z")))
-      .resolves.toEqual({ scheduled: 0, processed: 0, notified: 0 });
+      .resolves.toEqual({ scheduled: 0, processed: 0, notified: 0, cardsDeleted: 0 });
 
     expect(worker.lastTickHadDueWork).toBe(false);
     expect(prune).toHaveBeenCalledTimes(1);
@@ -45,6 +67,58 @@ describe("flight worker orchestration", () => {
     expect(claim).not.toHaveBeenCalled();
     expect(digest).not.toHaveBeenCalled();
     expect(notifications).not.toHaveBeenCalled();
+  });
+
+  it("ages out setup intents on an interval even with no payment traffic", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    const cleanup = vi.spyOn(store, "cleanupPaymentCardSetupIntents");
+    const worker = buildIdleWorker(store);
+
+    await worker.tick(new Date("2026-08-01T12:00:00Z"));
+    await worker.tick(new Date("2026-08-01T12:01:00Z"));
+    expect(cleanup).toHaveBeenCalledTimes(1);
+
+    await worker.tick(new Date("2026-08-01T12:06:00Z"));
+    expect(cleanup).toHaveBeenCalledTimes(2);
+  });
+
+  it("records the provider detail when a card deletion fails", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    const now = new Date("2026-08-01T12:00:00Z");
+    const user = await store.ensureTelegramUser({
+      telegramUserId: 1, telegramChatId: 1, username: null, firstName: "Ada", lastName: null
+    }, now);
+    const intentId = crypto.randomUUID();
+    await store.reservePaymentCardSetupIntent(user.id, intentId, now);
+    const method = await store.finalizePaymentMethod(user.id, {
+      setupIntentId: intentId,
+      cardId: "tcd_worker",
+      brand: "visa",
+      last4: "4242",
+      cardholderName: "Ada Lovelace"
+    }, now);
+    await store.removePaymentMethod(user.id, method.id, now);
+
+    const deleteCard = vi.fn(async (_cardId: string, _timeoutMs: number) => {
+      throw new DuffelCardsError("rate_limited", "Slow down", 1);
+    });
+    const worker = buildIdleWorker(store, { deleteCard });
+    await worker.tick(now);
+
+    expect(deleteCard).toHaveBeenCalledWith("tcd_worker", expect.any(Number));
+    const timeoutMs = deleteCard.mock.calls[0]?.[1];
+    expect(timeoutMs).toBeGreaterThan(0);
+    expect(timeoutMs).toBeLessThanOrEqual(20_000);
+
+    // The worker stamps availableAt from the wall clock, not the injected date.
+    const [requeued] = await store.claimCardDeletions(
+      "probe",
+      new Date(Date.now() + 24 * 60 * 60_000),
+      60_000,
+      1
+    );
+    expect(requeued?.lastErrorCode).toBe("rate_limited");
+    expect(requeued?.lastErrorDetail).toBe("Slow down");
   });
 
   it("runs one shared search and fans results out", async () => {
@@ -109,7 +183,7 @@ describe("flight worker orchestration", () => {
       { status: 200, headers: { "content-type": "application/json" } }
     )));
     const result = await worker.tick(new Date("2026-08-01T12:00:00Z"));
-    expect(result).toEqual({ scheduled: 1, processed: 1, notified: 1 });
+    expect(result).toEqual({ scheduled: 1, processed: 1, notified: 1, cardsDeleted: 0 });
     expect(search).toHaveBeenCalledTimes(1);
     const sent = await store.getNotificationByTelegramMessage(user.id, 42);
     expect(sent).toMatchObject({
@@ -322,7 +396,7 @@ describe("flight worker orchestration", () => {
     )));
 
     const first = await worker.tick(new Date("2026-08-01T12:00:00Z"));
-    expect(first).toEqual({ scheduled: 1, processed: 1, notified: 0 });
+    expect(first).toEqual({ scheduled: 1, processed: 1, notified: 0, cardsDeleted: 0 });
     expect(await store.getNotificationByTelegramMessage(user.id, 77)).toBeNull();
     const createdTrip = (await store.listTrips(user.id))[0]!;
     expect(await store.getWatch(user.id, createdTrip.id)).toMatchObject({

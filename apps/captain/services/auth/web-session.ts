@@ -8,6 +8,8 @@ import {
 } from "@agents/flight-domain";
 import type { CaptainPlatformStore } from "@agents/flight-store";
 
+import type { ResolvedAuth } from "./legacy-bearer.js";
+
 const SESSION_COOKIE = "captain_session";
 const LOGIN_TTL_MS = 15 * 60_000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
@@ -72,15 +74,16 @@ export class CaptainWebAuth {
     return { userId: record.userId, redirectPath: record.redirectPath, sessionRaw };
   }
 
-  async resolve(request: Request, now = new Date()): Promise<string | null> {
+  async resolve(request: Request, now = new Date()): Promise<ResolvedAuth | null> {
     const cookieToken = readCookie(request.headers.get("cookie"), SESSION_COOKIE);
     if (cookieToken) {
       const userId = await this.#store.resolveWebSession(sha256hex(cookieToken), now);
-      if (userId) return userId;
+      if (userId) return { userId, credential: "session" };
     }
     const authorization = request.headers.get("authorization");
     const bearer = /^Bearer\s+(\S+)$/iu.exec(authorization ?? "")?.[1];
-    return bearer ? resolveCaptainAccessToken(bearer, this.#secret) : null;
+    const userId = bearer ? resolveCaptainAccessToken(bearer, this.#secret) : null;
+    return userId ? { userId, credential: "legacy-bearer" } : null;
   }
 
   async signOut(userId: string, now = new Date()): Promise<void> {
