@@ -881,12 +881,19 @@ export function describeCaptainPlatformStore(
       let mints = 0;
       const mint = async () => {
         mints += 1;
+        await new Promise((resolve) => setTimeout(resolve, 20));
         return `key_${mints}`;
       };
-      const first = await store.issuePaymentCardSetupClientKey(ada.id, intentId, mint, now);
-      const second = await store.issuePaymentCardSetupClientKey(ada.id, intentId, mint, now);
+      const [first, second] = await Promise.all([
+        store.issuePaymentCardSetupClientKey(ada.id, intentId, mint, now),
+        store.issuePaymentCardSetupClientKey(ada.id, intentId, mint, now)
+      ]);
       expect(first).toEqual({ setupIntentId: intentId, clientKey: "key_1" });
       expect(second).toEqual(first);
+      expect(mints).toBe(1);
+
+      const third = await store.issuePaymentCardSetupClientKey(ada.id, intentId, mint, now);
+      expect(third).toEqual(first);
       expect(mints).toBe(1);
 
       await store.finalizePaymentMethod(ada.id, {

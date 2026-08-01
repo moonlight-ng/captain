@@ -622,43 +622,56 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     mint: () => Promise<string>,
     now: Date
   ): Promise<{ setupIntentId: string; clientKey: string }> {
-    const reserved = await this.reservePaymentCardSetupIntent(userId, setupIntentId, now);
-    if (reserved.componentClientKey) {
-      return { setupIntentId: reserved.id, clientKey: reserved.componentClientKey };
+    // Hold a session advisory lock on a reserved connection across check/mint/persist
+    // so concurrent issuers cannot each call Duffel. One pending intent per user, so
+    // lock scope is the user.
+    const lockKey = `${userId}:payment_setup_key`;
+    const conn = await this.#sql.reserve();
+    try {
+      await conn`select pg_advisory_lock(hashtext(${lockKey}))`;
+      try {
+        const reserved = await this.reservePaymentCardSetupIntent(userId, setupIntentId, now);
+        if (reserved.componentClientKey) {
+          return { setupIntentId: reserved.id, clientKey: reserved.componentClientKey };
+        }
+        const minted = await mint();
+        return await conn.begin(async (tx) => {
+          const rows = await tx<PaymentCardSetupIntentRow[]>`
+            select * from captain.payment_card_setup_intents
+            where id = ${reserved.id} and user_id = ${userId}
+            for update
+          `;
+          const current = rows[0];
+          if (!current || current.status !== "pending") {
+            throw new PaymentSetupConflictError("setup_intent_invalid");
+          }
+          if (current.component_client_key) {
+            return { setupIntentId: current.id, clientKey: current.component_client_key };
+          }
+          const updated = await tx<PaymentCardSetupIntentRow[]>`
+            update captain.payment_card_setup_intents
+            set component_client_key = ${minted}, updated_at = ${now}
+            where id = ${current.id}
+              and component_client_key is null
+            returning *
+          `;
+          if (updated[0]?.component_client_key) {
+            return { setupIntentId: updated[0].id, clientKey: updated[0].component_client_key };
+          }
+          const again = await tx<PaymentCardSetupIntentRow[]>`
+            select * from captain.payment_card_setup_intents where id = ${current.id}
+          `;
+          if (!again[0]?.component_client_key) {
+            throw new PaymentSetupConflictError("setup_intent_invalid");
+          }
+          return { setupIntentId: again[0].id, clientKey: again[0].component_client_key };
+        });
+      } finally {
+        await conn`select pg_advisory_unlock(hashtext(${lockKey}))`;
+      }
+    } finally {
+      conn.release();
     }
-    const minted = await mint();
-    return this.#sql.begin(async (tx) => {
-      await tx`select pg_advisory_xact_lock(hashtext(${`${userId}:payment_methods`}))`;
-      const rows = await tx<PaymentCardSetupIntentRow[]>`
-        select * from captain.payment_card_setup_intents
-        where id = ${reserved.id} and user_id = ${userId}
-        for update
-      `;
-      const current = rows[0];
-      if (!current || current.status !== "pending") {
-        throw new PaymentSetupConflictError("setup_intent_invalid");
-      }
-      if (current.component_client_key) {
-        return { setupIntentId: current.id, clientKey: current.component_client_key };
-      }
-      const updated = await tx<PaymentCardSetupIntentRow[]>`
-        update captain.payment_card_setup_intents
-        set component_client_key = ${minted}, updated_at = ${now}
-        where id = ${current.id}
-          and component_client_key is null
-        returning *
-      `;
-      if (updated[0]?.component_client_key) {
-        return { setupIntentId: updated[0].id, clientKey: updated[0].component_client_key };
-      }
-      const again = await tx<PaymentCardSetupIntentRow[]>`
-        select * from captain.payment_card_setup_intents where id = ${current.id}
-      `;
-      if (!again[0]?.component_client_key) {
-        throw new PaymentSetupConflictError("setup_intent_invalid");
-      }
-      return { setupIntentId: again[0].id, clientKey: again[0].component_client_key };
-    });
   }
 
   async finalizePaymentMethod(
@@ -689,11 +702,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         const existing = existingRows[0];
         if (!existing) throw new PaymentSetupConflictError("setup_intent_invalid");
         if (existing.provider_card_id !== input.cardId) {
-          await enqueueCardDeletion(tx, {
-            id: null,
-            provider: "duffel",
-            provider_card_id: input.cardId
-          }, now);
+          // Client-asserted card IDs are not safe to queue for remote deletion.
           throw new PaymentSetupConflictError("setup_intent_mismatch");
         }
         return mapPaymentMethod(existing);
@@ -3262,11 +3271,7 @@ function mapPaymentCardDeletion(row: PaymentCardDeletionRow): PaymentCardDeletio
 
 async function enqueueCardDeletion(
   sql: Sql,
-  method: {
-    id: string | null;
-    provider: "duffel";
-    provider_card_id: string;
-  },
+  method: Pick<PaymentMethodRow, "id" | "provider" | "provider_card_id">,
   now: Date
 ): Promise<void> {
   await sql`

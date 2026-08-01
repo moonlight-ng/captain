@@ -151,6 +151,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   readonly #paymentMethods = new Map<string, PaymentMethod>();
   readonly #setupIntents = new Map<string, PaymentCardSetupIntent>();
   readonly #cardDeletions = new Map<string, PaymentCardDeletion>();
+  readonly #clientKeyIssues = new Map<string, Promise<{ setupIntentId: string; clientKey: string }>>();
 
   async ensureTelegramUser(input: TelegramUserInput, now: Date): Promise<CaptainUser> {
     const existing = this.#usersByTelegram.get(input.telegramUserId);
@@ -592,6 +593,28 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     mint: () => Promise<string>,
     now: Date
   ): Promise<{ setupIntentId: string; clientKey: string }> {
+    // One pending intent per user — coalesce concurrent mints for that user.
+    const issueKey = userId;
+    const inFlight = this.#clientKeyIssues.get(issueKey);
+    if (inFlight) return inFlight;
+
+    const work = this.#issuePaymentCardSetupClientKeyLocked(userId, setupIntentId, mint, now);
+    this.#clientKeyIssues.set(issueKey, work);
+    try {
+      return await work;
+    } finally {
+      if (this.#clientKeyIssues.get(issueKey) === work) {
+        this.#clientKeyIssues.delete(issueKey);
+      }
+    }
+  }
+
+  async #issuePaymentCardSetupClientKeyLocked(
+    userId: string,
+    setupIntentId: string,
+    mint: () => Promise<string>,
+    now: Date
+  ): Promise<{ setupIntentId: string; clientKey: string }> {
     const reserved = await this.reservePaymentCardSetupIntent(userId, setupIntentId, now);
     if (reserved.componentClientKey) {
       return { setupIntentId: reserved.id, clientKey: reserved.componentClientKey };
@@ -631,7 +654,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         throw new PaymentSetupConflictError("setup_intent_invalid");
       }
       if (existing.providerCardId !== input.cardId) {
-        this.#enqueueProviderCardDeletion(input.cardId, now);
         throw new PaymentSetupConflictError("setup_intent_mismatch");
       }
       return clone(existing);
@@ -850,23 +872,15 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   }
 
   #enqueueCardDeletion(method: PaymentMethod, now: Date): void {
-    this.#enqueueProviderCardDeletion(method.providerCardId, now, method.id);
-  }
-
-  #enqueueProviderCardDeletion(
-    providerCardId: string,
-    now: Date,
-    paymentMethodId: string | null = null
-  ): void {
     const existing = [...this.#cardDeletions.values()].find(
-      (deletion) => deletion.provider === "duffel"
-        && deletion.providerCardId === providerCardId
+      (deletion) => deletion.provider === method.provider
+        && deletion.providerCardId === method.providerCardId
     );
     if (existing) {
-      if (!existing.paymentMethodId && paymentMethodId) {
+      if (!existing.paymentMethodId && method.id) {
         this.#cardDeletions.set(existing.id, {
           ...existing,
-          paymentMethodId,
+          paymentMethodId: method.id,
           updatedAt: now.toISOString()
         });
       }
@@ -875,8 +889,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const deletion: PaymentCardDeletion = {
       id: randomUUID(),
       provider: "duffel",
-      providerCardId,
-      paymentMethodId,
+      providerCardId: method.providerCardId,
+      paymentMethodId: method.id,
       status: "queued",
       attempts: 0,
       availableAt: now.toISOString(),
