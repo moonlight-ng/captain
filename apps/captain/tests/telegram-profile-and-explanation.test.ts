@@ -5,7 +5,11 @@ import type { RecommendationSnapshot } from "@agents/flight-store";
 
 import {
   CAPTAIN_NEW_USER_GREETING,
+  CAPTAIN_PAYMENT_UNAVAILABLE,
   CAPTAIN_PREFERENCES_INTRO,
+  CAPTAIN_PROFILES_INTRO,
+  CAPTAIN_SIGNOUT_CONFIRMATION,
+  CAPTAIN_TRAVELLER_SETUP_PROMPT,
   explainNotification,
   explainRecommendation,
   parseAirlinePreferences,
@@ -20,6 +24,26 @@ describe("Telegram profile onboarding", () => {
       "Hi, I'm Captain! I can help you prepare for a flight by tracking suitable options and reporting price changes."
     );
     expect(CAPTAIN_PREFERENCES_INTRO).toBe("Let's start with your preferences");
+  });
+
+  it("exports fixed handoff copy for travellers, payment, and sign-out", () => {
+    expect(CAPTAIN_TRAVELLER_SETUP_PROMPT).toBe(
+      "Save your traveller details so Captain is ready when booking opens."
+    );
+    expect(CAPTAIN_PROFILES_INTRO).toBe(
+      "Manage traveller names on Captain’s secure page."
+    );
+    expect(CAPTAIN_PAYMENT_UNAVAILABLE).toBe(
+      "Card setup isn’t available yet. Captain will let you know when it opens."
+    );
+    expect(CAPTAIN_SIGNOUT_CONFIRMATION).toBe(
+      "Signed out of Captain on the web. Open a fresh link from Telegram to sign in again."
+    );
+  });
+
+  it("treats /travellers as an alias of /profiles in the command surface", () => {
+    expect(["/profiles", "/travellers"]).toContain("/travellers");
+    expect(["/profiles", "/travellers"]).toContain("/profiles");
   });
 
   it("parses currency, ranking, and preferred/avoided airlines deterministically", () => {

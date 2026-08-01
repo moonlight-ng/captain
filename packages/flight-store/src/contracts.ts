@@ -1,9 +1,15 @@
 import type {
+  CaptainSessionPath,
+  CreatePassengerInput,
   CreateTripInput,
   OfferSnapshot,
+  Passenger,
+  PaymentMethod,
+  SavePaymentMethodInput,
   SearchSpec,
   SearchSpecRequest,
   TravellerProfile,
+  UpdatePassengerInput,
   UpdateTravellerProfile,
   Trip,
   TripAction,
@@ -142,7 +148,12 @@ export type TrackingMaintenance = {
 
 export type LoginTokenRecord = {
   userId: string;
-  redirectPath: "/trip" | "/preferences";
+  redirectPath: CaptainSessionPath;
+};
+
+export type TripPassengerAssignment = {
+  passengerId: string;
+  ordinal: number;
 };
 
 export interface CaptainPlatformStore {
@@ -161,6 +172,7 @@ export interface CaptainPlatformStore {
     },
     now: Date
   ): Promise<TravellerProfile>;
+  markTravellerSetupPrompted(userId: string, now: Date): Promise<boolean>;
   createLoginToken(
     userId: string,
     tokenHash: string,
@@ -173,6 +185,26 @@ export interface CaptainPlatformStore {
   resolveWebSession(tokenHash: string, now: Date): Promise<string | null>;
   revokeWebSession(tokenHash: string, now: Date): Promise<void>;
   revokeUserSessions(userId: string, now: Date): Promise<void>;
+  listPassengers(userId: string): Promise<Passenger[]>;
+  getPassenger(userId: string, passengerId: string): Promise<Passenger | null>;
+  createPassenger(userId: string, input: CreatePassengerInput, now: Date): Promise<Passenger>;
+  updatePassenger(
+    userId: string,
+    passengerId: string,
+    input: UpdatePassengerInput,
+    now: Date
+  ): Promise<Passenger>;
+  deletePassenger(userId: string, passengerId: string): Promise<void>;
+  setDefaultPassenger(userId: string, passengerId: string, now: Date): Promise<Passenger>;
+  listTripPassengers(userId: string, tripId: string): Promise<Passenger[]>;
+  setTripPassengers(userId: string, tripId: string, passengerIds: string[]): Promise<void>;
+  listPaymentMethods(userId: string): Promise<PaymentMethod[]>;
+  savePaymentMethod(
+    userId: string,
+    input: SavePaymentMethodInput,
+    now: Date
+  ): Promise<PaymentMethod>;
+  removePaymentMethod(userId: string, paymentMethodId: string, now: Date): Promise<void>;
   reserveDailyResponseBudget(now: Date, amount: number, limit: number): Promise<boolean>;
   recordWebSearchCalls(now: Date, count: number): Promise<void>;
   claimTelegramUpdate(updateKey: string, userId: string, now: Date): Promise<boolean>;

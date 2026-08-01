@@ -1,12 +1,15 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import {
   ApiError,
+  listPassengers,
+  setTripTravellers,
   tripAction,
   updateProfile,
   updateTripBrief
 } from "../api";
 import type {
+  Passenger,
   RankingMode,
   TravellerProfile,
   TripPayload
@@ -22,6 +25,7 @@ import {
   timestampLabel
 } from "../format";
 import { AirlineSearchSelect } from "../components/AirlineSearchSelect";
+import { readinessLabel } from "../components/PassengerForm";
 
 export function Preferences({
   profile,
@@ -67,9 +71,23 @@ export function Preferences({
     };
   });
   const [tripStopped, setTripStopped] = useState(false);
-  const [saved, setSaved] = useState<"preferences" | "notifications" | "brief" | "">("");
+  const [saved, setSaved] = useState<"preferences" | "notifications" | "brief" | "traveller" | "">("");
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [availablePassengers, setAvailablePassengers] = useState<Passenger[]>([]);
+  const [assignedTravellers, setAssignedTravellers] = useState<Passenger[]>(
+    tripData?.travellers ?? []
+  );
+  const [changingTraveller, setChangingTraveller] = useState(false);
+
+  useEffect(() => {
+    void listPassengers().then(setAvailablePassengers).catch(() => setAvailablePassengers([]));
+  }, []);
+
+  useEffect(() => {
+    setAssignedTravellers(tripData?.travellers ?? []);
+  }, [tripData?.travellers]);
+
   const airportCodes = (value: string) => [...new Set(
     value.toUpperCase().match(/[A-Z]{3}/gu) ?? []
   )].slice(0, 6);
@@ -337,6 +355,95 @@ export function Preferences({
                 {busy ? "Saving…" : saved === "brief" ? "Trip updated" : "Update trip"}
               </button>
             </form>
+          </div>
+        </details>
+      )}
+      {trip && (
+        <details className="settings-card settings-disclosure" open>
+          <summary>
+            <span><strong>Traveller</strong></span>
+            <em>
+              {assignedTravellers[0]
+                ? readinessLabel(assignedTravellers[0])
+                : availablePassengers.length === 0
+                  ? "Not set up"
+                  : "Not assigned"}
+            </em>
+          </summary>
+          <div className="settings-body">
+            {availablePassengers.length === 0 ? (
+              <p>
+                No travellers saved yet.{" "}
+                <a className="quiet-link" href="/travellers">Set up on Travellers</a>.
+              </p>
+            ) : assignedTravellers[0] && !changingTraveller ? (
+              <>
+                <div className="settings-list">
+                  <div>
+                    <strong>
+                      {assignedTravellers[0].givenName} {assignedTravellers[0].familyName}
+                    </strong>
+                    <div>{readinessLabel(assignedTravellers[0])}</div>
+                  </div>
+                </div>
+                <div className="entity-row" style={{ marginTop: 16 }}>
+                  <button
+                    type="button"
+                    className="quiet-link"
+                    onClick={() => setChangingTraveller(true)}
+                  >
+                    Change
+                  </button>
+                  <a className="quiet-link" href="/travellers">Edit on Travellers</a>
+                </div>
+              </>
+            ) : (
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const select = event.currentTarget.elements.namedItem("passengerId");
+                  const passengerId = select && "value" in select ? String(select.value) : "";
+                  if (!passengerId || !trip) return;
+                  void (async () => {
+                    setBusy(true);
+                    setSaveError("");
+                    try {
+                      const next = await setTripTravellers(trip.id, [passengerId]);
+                      setAssignedTravellers(next);
+                      setChangingTraveller(false);
+                      setSaved("traveller");
+                    } catch (cause) {
+                      setSaveError(cause instanceof ApiError ? cause.message : "Could not assign traveller.");
+                    } finally {
+                      setBusy(false);
+                    }
+                  })();
+                }}
+              >
+                <label>
+                  Traveller for this trip
+                  <select
+                    name="passengerId"
+                    defaultValue={
+                      assignedTravellers[0]?.id
+                      ?? availablePassengers.find((passenger) => passenger.isDefault)?.id
+                      ?? availablePassengers[0]?.id
+                    }
+                  >
+                    {availablePassengers.map((passenger) => (
+                      <option key={passenger.id} value={passenger.id}>
+                        {passenger.givenName} {passenger.familyName}
+                        {passenger.isDefault ? " (default)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {saveError && <p className="form-error" role="alert">{saveError}</p>}
+                <button className="save-button" disabled={busy}>
+                  {busy ? "Saving…" : saved === "traveller" ? "Traveller saved" : "Save traveller"}
+                </button>
+              </form>
+            )}
           </div>
         </details>
       )}

@@ -20,8 +20,35 @@ export type TravellerProfile = {
   quietHoursEnd: number;
   onboardingCompletedAt: string | null;
   onboardingStep: "welcome" | "currency" | "ranking" | "airlines" | "complete";
+  travellerSetupPromptedAt: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type Passenger = {
+  id: string;
+  userId: string;
+  givenName: string;
+  familyName: string;
+  title: "mr" | "ms" | "mrs" | "miss" | "dr" | null;
+  gender: "m" | "f" | null;
+  bornOn: string | null;
+  email: string | null;
+  phoneNumber: string | null;
+  isDefault: boolean;
+  readyForBooking: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PaymentMethod = {
+  id: string;
+  brand: string;
+  last4: string;
+  expiryMonth: number;
+  expiryYear: number;
+  cardholderName: string;
+  isDefault: boolean;
 };
 
 export type Trip = {
@@ -128,6 +155,7 @@ export type TripPayload = {
   recommendation: Recommendation | null;
   selections: Array<{ itineraryKey: string; selectedBy: "agent" | "person" }>;
   activity: TripActivity[];
+  travellers: Passenger[];
 };
 
 export type TripActivity = {

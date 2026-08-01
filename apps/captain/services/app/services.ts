@@ -38,7 +38,8 @@ export async function createCaptainServices(): Promise<CaptainServices> {
     : new MemoryCaptainPlatformStore();
   const auth = new CaptainWebAuth({
     publicUrl: env.publicUrl,
-    secret: env.telegramBotToken ?? "captain-local-design-secret"
+    secret: env.telegramBotToken ?? "captain-local-design-secret",
+    store: platformStore
   });
   const trips = new TripService({ store: platformStore });
   return {

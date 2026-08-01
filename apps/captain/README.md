@@ -1,8 +1,8 @@
 # Captain
 
 Captain is a Telegram-first flight tracker for one traveller profile and up to
-three active trips. It researches fares but does not book, take payments, or collect
-passport data.
+three active trips. It researches and tracks fares; it does not place orders.
+Traveller names and cards are collected only on Captain’s secure web pages.
 
 ## Product contract
 
@@ -14,11 +14,13 @@ passport data.
   currency stays fixed; Duffel and Flysoar USD/GBP results are normalized into it.
 - The dashboard has **Flights**, **Airlines**, and **Browse** views. It only
   displays verified provider offers and never describes the set as exhaustive.
-- During product design, trip and Agent settings use direct reusable links
-  containing an opaque access key. Public-beta session authentication is
-  deferred until the interaction design settles.
+- `/trip` and `/preferences` still use deterministic `#access` bearer links.
+  `/travellers` and `/payment` use single-use login tokens exchanged for an
+  HttpOnly session cookie. Card vault routes stay behind
+  `CAPTAIN_PAYMENTS_ENABLED` (default `false`) until Duffel approves cards.
 - Archived trips and their evidence are retained for 90 days. `/delete_account`
-  removes the traveller, trip, sessions, and retained evidence.
+  removes the traveller, trip, sessions, passengers, payment methods, and
+  retained evidence.
 
 ## Architecture
 

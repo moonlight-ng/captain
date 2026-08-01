@@ -7,18 +7,24 @@ import {
   TripNotFoundError,
   TripVersionConflictError,
   EMPTY_TRIP_DRAFT_STATE,
+  type CreatePassengerInput,
   type CreateTripInput,
   type OfferSnapshot,
+  type Passenger,
+  type PaymentMethod,
+  type SavePaymentMethodInput,
   type TripCreationResult,
   type TripPlanDraft,
   type TripPlanDraftRevision,
   type TravellerProfile,
+  type UpdatePassengerInput,
   type UpdateTravellerProfile,
   type UpdateTripBrief,
   type SearchSpec,
   type Trip,
   type TripAction,
-  type Watch
+  type Watch,
+  type CaptainSessionPath
 } from "@agents/flight-domain";
 
 import type {
@@ -70,7 +76,7 @@ type StoredNotification = CaptainNotification & {
 };
 type StoredLoginToken = {
   userId: string;
-  redirectPath: "/trip" | "/preferences";
+  redirectPath: CaptainSessionPath;
   expiresAt: string;
   consumedAt: string | null;
 };
@@ -110,6 +116,9 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     string,
     Promise<{ draft: TripPlanDraft; result: TripCreationResult } | null>
   >();
+  readonly #passengers = new Map<string, Passenger>();
+  readonly #tripPassengers = new Map<string, Array<{ passengerId: string; ordinal: number }>>();
+  readonly #paymentMethods = new Map<string, PaymentMethod>();
 
   async ensureTelegramUser(input: TelegramUserInput, now: Date): Promise<CaptainUser> {
     const existing = this.#usersByTelegram.get(input.telegramUserId);
@@ -170,6 +179,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     this.#conversations.delete(userId);
     for (const [hash, token] of this.#loginTokens) if (token.userId === userId) this.#loginTokens.delete(hash);
     for (const [hash, session] of this.#webSessions) if (session.userId === userId) this.#webSessions.delete(hash);
+    for (const [id, passenger] of this.#passengers) if (passenger.userId === userId) this.#passengers.delete(id);
+    for (const [id, method] of this.#paymentMethods) if (method.userId === userId) this.#paymentMethods.delete(id);
     const tripIds = new Set(
       [...this.#trips.values()].filter((trip) => trip.userId === userId).map((trip) => trip.id)
     );
@@ -178,6 +189,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       this.#recommendations.delete(tripId);
       this.#personSelections.delete(tripId);
       this.#tripActivity.delete(tripId);
+      this.#tripPassengers.delete(tripId);
     }
     for (const [watchId, watch] of this.#watches) {
       if (tripIds.has(watch.tripId)) {
@@ -205,6 +217,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       excludedAirlineCodes: [],
       onboardingCompletedAt: null,
       onboardingStep: "welcome",
+      travellerSetupPromptedAt: null,
       createdAt: timestamp,
       updatedAt: timestamp
     };
@@ -307,7 +320,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   async createLoginToken(
     userId: string,
     tokenHash: string,
-    redirectPath: "/trip" | "/preferences",
+    redirectPath: CaptainSessionPath,
     expiresAt: Date,
     now: Date
   ): Promise<void> {
@@ -348,6 +361,210 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     for (const session of this.#webSessions.values()) {
       if (session.userId === userId) session.revokedAt = now.toISOString();
     }
+  }
+
+  async markTravellerSetupPrompted(userId: string, now: Date): Promise<boolean> {
+    await this.ensureProfile(userId, now);
+    const profile = this.#profiles.get(userId);
+    if (!profile || profile.travellerSetupPromptedAt) return false;
+    profile.travellerSetupPromptedAt = now.toISOString();
+    profile.updatedAt = now.toISOString();
+    return true;
+  }
+
+  async listPassengers(userId: string): Promise<Passenger[]> {
+    return [...this.#passengers.values()]
+      .filter((passenger) => passenger.userId === userId)
+      .sort((left, right) => {
+        if (left.isDefault !== right.isDefault) return left.isDefault ? -1 : 1;
+        return left.createdAt.localeCompare(right.createdAt);
+      })
+      .map(clone);
+  }
+
+  async getPassenger(userId: string, passengerId: string): Promise<Passenger | null> {
+    const passenger = this.#passengers.get(passengerId);
+    return passenger && passenger.userId === userId ? clone(passenger) : null;
+  }
+
+  async createPassenger(userId: string, input: CreatePassengerInput, now: Date): Promise<Passenger> {
+    if (!await this.getUser(userId)) throw new Error("User not found");
+    const existing = [...this.#passengers.values()].filter((passenger) => passenger.userId === userId);
+    if (existing.length >= 8) throw new Error("A traveller may have at most 8 passenger records");
+    const timestamp = now.toISOString();
+    const makeDefault = input.isDefault === true || existing.length === 0;
+    if (makeDefault) {
+      for (const passenger of existing) {
+        if (passenger.isDefault) {
+          this.#passengers.set(passenger.id, { ...passenger, isDefault: false, updatedAt: timestamp });
+        }
+      }
+    }
+    const passenger: Passenger = {
+      id: randomUUID(),
+      userId,
+      givenName: input.givenName,
+      familyName: input.familyName,
+      title: input.title ?? null,
+      gender: input.gender ?? null,
+      bornOn: input.bornOn ?? null,
+      email: input.email ?? null,
+      phoneNumber: input.phoneNumber ?? null,
+      isDefault: makeDefault,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    this.#passengers.set(passenger.id, passenger);
+    return clone(passenger);
+  }
+
+  async updatePassenger(
+    userId: string,
+    passengerId: string,
+    input: UpdatePassengerInput,
+    now: Date
+  ): Promise<Passenger> {
+    const current = await this.getPassenger(userId, passengerId);
+    if (!current) throw new Error("Passenger not found");
+    const timestamp = now.toISOString();
+    if (input.isDefault === true) {
+      for (const passenger of this.#passengers.values()) {
+        if (passenger.userId === userId && passenger.isDefault && passenger.id !== passengerId) {
+          this.#passengers.set(passenger.id, { ...passenger, isDefault: false, updatedAt: timestamp });
+        }
+      }
+    }
+    const updated: Passenger = {
+      ...current,
+      ...(input.givenName !== undefined ? { givenName: input.givenName } : {}),
+      ...(input.familyName !== undefined ? { familyName: input.familyName } : {}),
+      ...(input.title !== undefined ? { title: input.title } : {}),
+      ...(input.gender !== undefined ? { gender: input.gender } : {}),
+      ...(input.bornOn !== undefined ? { bornOn: input.bornOn } : {}),
+      ...(input.email !== undefined ? { email: input.email } : {}),
+      ...(input.phoneNumber !== undefined ? { phoneNumber: input.phoneNumber } : {}),
+      ...(input.isDefault !== undefined ? { isDefault: input.isDefault } : {}),
+      updatedAt: timestamp
+    };
+    this.#passengers.set(passengerId, updated);
+    return clone(updated);
+  }
+
+  async deletePassenger(userId: string, passengerId: string): Promise<void> {
+    const passenger = await this.getPassenger(userId, passengerId);
+    if (!passenger) return;
+    this.#passengers.delete(passengerId);
+    for (const [tripId, assignments] of this.#tripPassengers) {
+      const next = assignments.filter((assignment) => assignment.passengerId !== passengerId);
+      if (next.length !== assignments.length) this.#tripPassengers.set(tripId, next);
+    }
+    if (passenger.isDefault) {
+      const remaining = [...this.#passengers.values()]
+        .filter((candidate) => candidate.userId === userId)
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+      const nextDefault = remaining[0];
+      if (nextDefault) {
+        this.#passengers.set(nextDefault.id, { ...nextDefault, isDefault: true });
+      }
+    }
+  }
+
+  async setDefaultPassenger(userId: string, passengerId: string, now: Date): Promise<Passenger> {
+    return this.updatePassenger(userId, passengerId, { isDefault: true }, now);
+  }
+
+  async listTripPassengers(userId: string, tripId: string): Promise<Passenger[]> {
+    const trip = await this.getTrip(userId, tripId);
+    if (!trip) return [];
+    const assignments = [...(this.#tripPassengers.get(tripId) ?? [])]
+      .sort((left, right) => left.ordinal - right.ordinal);
+    return assignments
+      .map((assignment) => this.#passengers.get(assignment.passengerId))
+      .filter((passenger): passenger is Passenger => Boolean(passenger) && passenger!.userId === userId)
+      .map(clone);
+  }
+
+  async setTripPassengers(userId: string, tripId: string, passengerIds: string[]): Promise<void> {
+    const trip = await this.getTrip(userId, tripId);
+    if (!trip) throw new TripNotFoundError();
+    for (const passengerId of passengerIds) {
+      const passenger = await this.getPassenger(userId, passengerId);
+      if (!passenger) throw new Error("Passenger not found");
+    }
+    this.#tripPassengers.set(
+      tripId,
+      passengerIds.map((passengerId, ordinal) => ({ passengerId, ordinal }))
+    );
+  }
+
+  async listPaymentMethods(userId: string): Promise<PaymentMethod[]> {
+    return [...this.#paymentMethods.values()]
+      .filter((method) => method.userId === userId && method.status === "active")
+      .sort((left, right) => {
+        if (left.isDefault !== right.isDefault) return left.isDefault ? -1 : 1;
+        return left.createdAt.localeCompare(right.createdAt);
+      })
+      .map(clone);
+  }
+
+  async savePaymentMethod(
+    userId: string,
+    input: SavePaymentMethodInput,
+    now: Date
+  ): Promise<PaymentMethod> {
+    if (!await this.getUser(userId)) throw new Error("User not found");
+    const timestamp = now.toISOString();
+    for (const method of this.#paymentMethods.values()) {
+      if (method.userId === userId && method.isDefault && method.status === "active") {
+        this.#paymentMethods.set(method.id, { ...method, isDefault: false, updatedAt: timestamp });
+      }
+    }
+    const existing = [...this.#paymentMethods.values()].find(
+      (method) => method.userId === userId && method.providerCardId === input.cardId
+    );
+    if (existing) {
+      const updated: PaymentMethod = {
+        ...existing,
+        brand: input.brand,
+        last4: input.last4,
+        expiryMonth: input.expiryMonth,
+        expiryYear: input.expiryYear,
+        cardholderName: input.cardholderName,
+        status: "active",
+        isDefault: true,
+        updatedAt: timestamp
+      };
+      this.#paymentMethods.set(existing.id, updated);
+      return clone(updated);
+    }
+    const method: PaymentMethod = {
+      id: randomUUID(),
+      userId,
+      provider: "duffel",
+      providerCardId: input.cardId,
+      brand: input.brand,
+      last4: input.last4,
+      expiryMonth: input.expiryMonth,
+      expiryYear: input.expiryYear,
+      cardholderName: input.cardholderName,
+      status: "active",
+      isDefault: true,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    this.#paymentMethods.set(method.id, method);
+    return clone(method);
+  }
+
+  async removePaymentMethod(userId: string, paymentMethodId: string, now: Date): Promise<void> {
+    const method = this.#paymentMethods.get(paymentMethodId);
+    if (!method || method.userId !== userId) return;
+    this.#paymentMethods.set(paymentMethodId, {
+      ...method,
+      status: "removed",
+      isDefault: false,
+      updatedAt: now.toISOString()
+    });
   }
 
   async reserveDailyResponseBudget(now: Date, amount: number, limit: number): Promise<boolean> {

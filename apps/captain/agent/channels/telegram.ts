@@ -15,16 +15,13 @@ import {
   isSessionLimitContinuationRequest,
   looksLikeSessionBudgetPrompt,
   partitionSessionLimitRequests,
-  progressTextForRequest,
-  progressTextFromAttribute,
   statusTextForToolNames,
   storePendingSessionRotation,
   takePendingSessionRotation,
-  TELEGRAM_PROGRESS_ATTRIBUTE,
+  TELEGRAM_TYPING_KEEPALIVE_MS,
   TelegramProgressTracker,
   telegramMessageUpdateKey,
   toolNamesFromActions,
-  TRAVEL_PROGRESS_FALLBACK,
   type PendingSessionRotation,
   type SessionLimitInputRequest
 } from "@agents/telegram-core";
@@ -58,11 +55,10 @@ const credentials = {
 const pendingSessionRotations = new Map<string, PendingSessionRotation>();
 const agentProgress = new TelegramProgressTracker();
 const pendingConfirmationPosts = new Set<string>();
-const PLANNING_PROGRESS_TEXT = "Working through the route and dates…";
+// Only steps a traveller would recognise as work belong here. Tools left out
+// —reading recent context, for one—run under the typing indicator alone.
 const CAPTAIN_TOOL_STATUS: Readonly<Record<string, string>> = {
-  get_recent_context: "Checking the recent conversation…",
-  get_trip: "Checking your trip…",
-  prepare_trip: PLANNING_PROGRESS_TEXT,
+  prepare_trip: "Working through the route and dates…",
   select_trip_flight: "Comparing the flight options…",
   start_prepared_trip: "Starting your trip…",
   manage_trip: "Updating your trip…"
@@ -71,6 +67,16 @@ const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. 
 export const CAPTAIN_NEW_USER_GREETING =
   "Hi, I'm Captain! I can help you prepare for a flight by tracking suitable options and reporting price changes.";
 export const CAPTAIN_PREFERENCES_INTRO = "Let's start with your preferences";
+export const CAPTAIN_TRAVELLER_SETUP_PROMPT =
+  "Save your traveller details so Captain is ready when booking opens.";
+export const CAPTAIN_PROFILES_INTRO =
+  "Manage traveller names on Captain’s secure page.";
+export const CAPTAIN_PAYMENT_UNAVAILABLE =
+  "Card setup isn’t available yet. Captain will let you know when it opens.";
+export const CAPTAIN_PAYMENT_INTRO =
+  "Add or replace your saved card on Captain’s secure payment page.";
+export const CAPTAIN_SIGNOUT_CONFIRMATION =
+  "Signed out of Captain on the web. Open a fresh link from Telegram to sign in again.";
 
 export default telegramChannel({
   route: "/eve/v1/telegram",
@@ -173,11 +179,37 @@ export default telegramChannel({
       await postTelegramDashboardMessage(ctx, response);
       return null;
     }
+    if (content === "/profiles" || content === "/travellers") {
+      await services.platformStore.appendMessage(user.id, "user", content, new Date());
+      await postWithLink(
+        ctx,
+        CAPTAIN_PROFILES_INTRO,
+        "Open travellers",
+        await services.auth.createLoginLink(user.id, "/travellers")
+      );
+      return null;
+    }
+    if (content === "/payment") {
+      await services.platformStore.appendMessage(user.id, "user", content, new Date());
+      if (!services.env.paymentsEnabled) {
+        await ctx.telegram.post(CAPTAIN_PAYMENT_UNAVAILABLE);
+        return null;
+      }
+      await postWithLink(
+        ctx,
+        CAPTAIN_PAYMENT_INTRO,
+        "Open payment",
+        await services.auth.createLoginLink(user.id, "/payment")
+      );
+      return null;
+    }
     if (content === "/signout") {
-      await ctx.telegram.post("Captain’s design links are reusable for now. There is no web sign-out during design.");
+      await services.auth.signOut(user.id);
+      await ctx.telegram.post(CAPTAIN_SIGNOUT_CONFIRMATION);
       return null;
     }
     if (content === "/delete_account") {
+      await services.auth.signOut(user.id);
       await services.platformStore.deleteUser(user.id);
       await ctx.telegram.post("Your Captain account, trip, sessions, and retained fare evidence have been deleted.");
       return null;
@@ -233,7 +265,7 @@ export default telegramChannel({
     }
 
     try {
-      const handled = await withPlanningProgress(ctx, async () => {
+      const handled = await withTypingIndicator(ctx, async () => {
         const openDraftResult = await services.tripPlanning.handleOpenDraftText(
           user.id,
           content,
@@ -294,11 +326,7 @@ export default telegramChannel({
           captain_user_id: user.id,
           telegram_user_id: String(telegramUserId),
           chat_id: String(telegramChatId),
-          message_id: String(messageId),
-          [TELEGRAM_PROGRESS_ATTRIBUTE]: progressTextForRequest(content, {
-            context: "travel",
-            hasAttachments: Boolean(voice)
-          })
+          message_id: String(messageId)
         },
         authenticator: "captain-telegram-webhook",
         issuer: "telegram",
@@ -428,16 +456,11 @@ export default telegramChannel({
   events: {
     async "turn.started"(data, channel, ctx) {
       await channel.telegram.startTyping();
-      const initialStatusText = progressTextFromAttribute(
-        ctx.session.auth.current?.attributes[TELEGRAM_PROGRESS_ATTRIBUTE],
-        TRAVEL_PROGRESS_FALLBACK
-      );
       const chatId = channel.telegram.chatId;
       agentProgress.start({
         sessionId: ctx.session.id,
         chatId,
         turnId: data.turnId,
-        statusText: initialStatusText,
         onShow: async (statusText) => {
           try {
             const posted = await channel.telegram.post(statusText);
@@ -448,6 +471,20 @@ export default telegramChannel({
               error: error instanceof Error ? error.name : "UnknownError"
             }));
             return null;
+          }
+        },
+        onEdit: async (messageId, statusText) => {
+          try {
+            await channel.telegram.request("editMessageText", {
+              chat_id: chatId,
+              message_id: Number(messageId),
+              text: statusText
+            });
+          } catch (error) {
+            console.error(JSON.stringify({
+              event: "captain.telegram_progress_update_failed",
+              error: error instanceof Error ? error.name : "UnknownError"
+            }));
           }
         },
         onDiscard: async (messageId) => {
@@ -468,31 +505,13 @@ export default telegramChannel({
     },
     async "actions.requested"(data, channel, ctx) {
       await channel.telegram.startTyping();
-      const progress = agentProgress.updateStatus(ctx.session.id, data.turnId);
-      if (!progress) return;
       const label = statusTextForToolNames(
         toolNamesFromActions(data.actions as never),
-        CAPTAIN_TOOL_STATUS,
-        progress.statusText
+        CAPTAIN_TOOL_STATUS
       );
-      if (label === progress.statusText) return;
-      if (!progress.messageId) {
-        progress.statusText = label;
-        return;
-      }
-      try {
-        await channel.telegram.request("editMessageText", {
-          chat_id: progress.chatId,
-          message_id: Number(progress.messageId),
-          text: label
-        });
-        progress.statusText = label;
-      } catch (error) {
-        console.error(JSON.stringify({
-          event: "captain.telegram_progress_update_failed",
-          error: error instanceof Error ? error.name : "UnknownError"
-        }));
-      }
+      // Tools without a traveller-facing step keep the typing indicator only.
+      if (!label) return;
+      await agentProgress.setStatus(ctx.session.id, data.turnId, label);
     },
     async "input.requested"(data, channel, ctx) {
       const requests = Array.isArray(data.requests)
@@ -566,8 +585,12 @@ export default telegramChannel({
       let message = data.message;
       if (userId) {
         const services = await getCaptainServices();
-        message = await services.tripPlanning.groundAssistantMessage(userId, message);
+        const grounded = await services.tripPlanning.groundAssistantMessage(userId, message);
+        message = grounded.message;
         await services.platformStore.appendMessage(userId, "assistant", message, new Date());
+        if (grounded.createdTrip) {
+          await maybePostTravellerSetup(channel.telegram, userId);
+        }
       }
       await channel.telegram.post(message);
     },
@@ -875,12 +898,13 @@ async function completeOnboarding(
 }
 
 async function postWithLink(
-  ctx: TelegramContext,
+  telegramOrCtx: TelegramContext | Pick<TelegramContext["telegram"], "post">,
   text: string,
   label: string,
   url: string
 ): Promise<void> {
-  await ctx.telegram.post({
+  const telegram = "telegram" in telegramOrCtx ? telegramOrCtx.telegram : telegramOrCtx;
+  await telegram.post({
     text,
     link_preview_options: { is_disabled: true },
     reply_markup: { inline_keyboard: [[{ text: label, url }]] }
@@ -1099,9 +1123,26 @@ async function postTripPlanResult(
   await services.platformStore.appendMessage(userId, "assistant", message, new Date());
   if (result.status === "started") {
     await postTelegramDashboardMessage(ctx, message);
+    await maybePostTravellerSetup(ctx.telegram, userId);
     return;
   }
   await ctx.telegram.post(message);
+}
+
+async function maybePostTravellerSetup(
+  telegram: Pick<TelegramContext["telegram"], "post">,
+  userId: string
+): Promise<void> {
+  const services = await getCaptainServices();
+  const prompted = await services.platformStore.markTravellerSetupPrompted(userId, new Date());
+  if (!prompted) return;
+  await services.platformStore.appendMessage(userId, "assistant", CAPTAIN_TRAVELLER_SETUP_PROMPT, new Date());
+  await postWithLink(
+    telegram,
+    CAPTAIN_TRAVELLER_SETUP_PROMPT,
+    "Add traveller details",
+    await services.auth.createLoginLink(userId, "/travellers")
+  );
 }
 
 async function recoverUndeliveredTripConfirmation(
@@ -1192,42 +1233,28 @@ async function postTelegramDashboardMessage(
   });
 }
 
-async function withPlanningProgress<T>(
+/**
+ * Keeps Telegram's typing indicator alive while the deterministic path works
+ * out what the message is. Nothing is posted here: the traveller sees the
+ * standard placeholder until a real step has something to report.
+ */
+async function withTypingIndicator<T>(
   ctx: TelegramContext,
   operation: () => Promise<T>
 ): Promise<T> {
-  let statusMessageId: string | null = null;
-  let posting: Promise<void> | null = null;
-  const timer = setTimeout(() => {
-    posting = (async () => {
-      await ctx.telegram.startTyping();
-      const posted = await ctx.telegram.post(PLANNING_PROGRESS_TEXT);
-      statusMessageId = posted.id ?? null;
-    })().catch((error) => {
+  const keepalive = setInterval(() => {
+    void Promise.resolve(ctx.telegram.startTyping()).catch((error) => {
       console.error(JSON.stringify({
-        event: "captain.telegram_planning_progress_failed",
+        event: "captain.telegram_typing_keepalive_failed",
         error: error instanceof Error ? error.name : "UnknownError"
       }));
     });
-  }, 750);
+  }, TELEGRAM_TYPING_KEEPALIVE_MS);
+  keepalive.unref?.();
   try {
     return await operation();
   } finally {
-    clearTimeout(timer);
-    await posting;
-    if (statusMessageId) {
-      try {
-        await ctx.telegram.request("deleteMessage", {
-          chat_id: ctx.telegram.chatId,
-          message_id: Number(statusMessageId)
-        });
-      } catch (error) {
-        console.error(JSON.stringify({
-          event: "captain.telegram_planning_progress_clear_failed",
-          error: error instanceof Error ? error.name : "UnknownError"
-        }));
-      }
-    }
+    clearInterval(keepalive);
   }
 }
 

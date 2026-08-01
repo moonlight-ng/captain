@@ -125,19 +125,28 @@ describe("Captain trip planning", () => {
     expect(renderedReceipt.text).not.toContain("Trip reference");
     expect(renderedReceipt.text).not.toContain(started.receipt.tripId);
     await expect(planning.groundAssistantMessage(user.id, started.message))
-      .resolves.toBe(started.message);
+      .resolves.toEqual({ message: started.message, createdTrip: true });
     await expect(planning.groundAssistantMessage(
       user.id,
       `Your trip has been set up. trip reference: ${started.receipt.tripId}`
-    )).resolves.toBe("I couldn’t verify a trip-creation receipt. Send /trips to check your trips.");
+    )).resolves.toEqual({
+      message: "I couldn’t verify a trip-creation receipt. Send /trips to check your trips.",
+      createdTrip: false
+    });
     await expect(planning.groundAssistantMessage(user.id, "Your trip has been set up."))
-      .resolves.toBe("I couldn’t verify a trip-creation receipt. Send /trips to check your trips.");
+      .resolves.toEqual({
+        message: "I couldn’t verify a trip-creation receipt. Send /trips to check your trips.",
+        createdTrip: false
+      });
     for (const greeting of [
       "Hi there! I can help you get started planning a trip. Where would you like to go?",
       "Let’s get your trip started. Where are you flying from?",
       "I can help you set up a trip whenever you’re ready."
     ]) {
-      await expect(planning.groundAssistantMessage(user.id, greeting)).resolves.toBe(greeting);
+      await expect(planning.groundAssistantMessage(user.id, greeting)).resolves.toEqual({
+        message: greeting,
+        createdTrip: false
+      });
     }
 
     const retried = await planning.confirm(user.id, second.draft.id, second.draft.revision);

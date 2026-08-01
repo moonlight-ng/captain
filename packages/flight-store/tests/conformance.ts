@@ -32,7 +32,8 @@ export function describeCaptainPlatformStore(
         store.ensureProfile(ada.id, new Date("2026-08-01T12:00:00Z"))
       ).resolves.toMatchObject({
         onboardingStep: "welcome",
-        onboardingCompletedAt: null
+        onboardingCompletedAt: null,
+        travellerSetupPromptedAt: null
       });
     });
 
@@ -747,6 +748,125 @@ export function describeCaptainPlatformStore(
         "initial_results",
         "new_best"
       ]);
+    });
+    it("marks traveller setup as prompted at most once under concurrency", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      await store.ensureProfile(ada.id, new Date("2026-08-01T12:00:00Z"));
+      const now = new Date("2026-08-01T13:00:00Z");
+      const results = await Promise.all([
+        store.markTravellerSetupPrompted(ada.id, now),
+        store.markTravellerSetupPrompted(ada.id, now),
+        store.markTravellerSetupPrompted(ada.id, now)
+      ]);
+      expect(results.filter(Boolean)).toHaveLength(1);
+      await expect(store.getProfile(ada.id)).resolves.toMatchObject({
+        travellerSetupPromptedAt: now.toISOString()
+      });
+    });
+
+    it("stores passengers with one default and an eight-row cap", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const now = new Date("2026-08-01T12:00:00Z");
+      const first = await store.createPassenger(ada.id, {
+        givenName: "Ada",
+        familyName: "Lovelace"
+      }, now);
+      expect(first.isDefault).toBe(true);
+      const second = await store.createPassenger(ada.id, {
+        givenName: "Charles",
+        familyName: "Babbage",
+        isDefault: true
+      }, now);
+      expect(second.isDefault).toBe(true);
+      await expect(store.getPassenger(ada.id, first.id)).resolves.toMatchObject({ isDefault: false });
+      for (let index = 0; index < 6; index += 1) {
+        await store.createPassenger(ada.id, {
+          givenName: `Traveller`,
+          familyName: `Number${["One", "Two", "Three", "Four", "Five", "Six"][index]}`
+        }, now);
+      }
+      await expect(store.createPassenger(ada.id, {
+        givenName: "Too",
+        familyName: "Many"
+      }, now)).rejects.toThrow(/at most 8/i);
+      await expect(store.listPassengers(ada.id)).resolves.toHaveLength(8);
+    });
+
+    it("assigns trip passengers without bumping trip version", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const now = new Date("2026-08-01T12:00:00Z");
+      const created = await store.createTrip(ada.id, tripInput, buildSearchSpecs(tripInput.brief), now);
+      const version = created.trip.version;
+      const passenger = await store.createPassenger(ada.id, {
+        givenName: "Ada",
+        familyName: "Lovelace"
+      }, now);
+      await store.setTripPassengers(ada.id, created.trip.id, [passenger.id]);
+      await expect(store.listTripPassengers(ada.id, created.trip.id)).resolves.toEqual([
+        expect.objectContaining({ id: passenger.id, givenName: "Ada" })
+      ]);
+      await expect(store.getTrip(ada.id, created.trip.id)).resolves.toMatchObject({ version });
+    });
+
+    it("saves and removes payment methods", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const now = new Date("2026-08-01T12:00:00Z");
+      const method = await store.savePaymentMethod(ada.id, {
+        cardId: "tcd_abc123",
+        brand: "visa",
+        last4: "4242",
+        expiryMonth: 9,
+        expiryYear: 2028,
+        cardholderName: "Ada Lovelace"
+      }, now);
+      expect(method).toMatchObject({ last4: "4242", isDefault: true, status: "active" });
+      await store.removePaymentMethod(ada.id, method.id, now);
+      await expect(store.listPaymentMethods(ada.id)).resolves.toEqual([]);
+    });
+
+    it("sweeps passengers and payment methods when a user is deleted", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const now = new Date("2026-08-01T12:00:00Z");
+      const passenger = await store.createPassenger(ada.id, {
+        givenName: "Ada",
+        familyName: "Lovelace"
+      }, now);
+      const method = await store.savePaymentMethod(ada.id, {
+        cardId: "tcd_deleteMe",
+        brand: "visa",
+        last4: "1111",
+        expiryMonth: 1,
+        expiryYear: 2030,
+        cardholderName: "Ada Lovelace"
+      }, now);
+      const created = await store.createTrip(ada.id, tripInput, buildSearchSpecs(tripInput.brief), now);
+      await store.setTripPassengers(ada.id, created.trip.id, [passenger.id]);
+      await store.deleteUser(ada.id);
+      await expect(store.getPassenger(ada.id, passenger.id)).resolves.toBeNull();
+      await expect(store.listPaymentMethods(ada.id)).resolves.toEqual([]);
+      await expect(store.getUser(ada.id)).resolves.toBeNull();
+      void method;
+    });
+
+    it("accepts login tokens for session paths and rejects others at the type boundary", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const now = new Date("2026-08-01T12:00:00Z");
+      const expiresAt = new Date("2026-08-01T12:15:00Z");
+      await store.createLoginToken(ada.id, "a".repeat(64), "/travellers", expiresAt, now);
+      await store.createLoginToken(ada.id, "b".repeat(64), "/payment", expiresAt, now);
+      await expect(store.consumeLoginToken("a".repeat(64), now)).resolves.toMatchObject({
+        userId: ada.id,
+        redirectPath: "/travellers"
+      });
+      await expect(store.consumeLoginToken("b".repeat(64), now)).resolves.toMatchObject({
+        redirectPath: "/payment"
+      });
     });
   });
 }

@@ -368,28 +368,41 @@ export class TripPlanningService {
     return formatActiveTripList(inputs);
   }
 
-  async groundAssistantMessage(userId: string, message: string): Promise<string> {
-    if (!CREATION_SUCCESS_PATTERNS.some((pattern) => pattern.test(message))) return message;
+  async groundAssistantMessage(
+    userId: string,
+    message: string
+  ): Promise<{ message: string; createdTrip: boolean }> {
+    if (!CREATION_SUCCESS_PATTERNS.some((pattern) => pattern.test(message))) {
+      return { message, createdTrip: false };
+    }
     const tripId = UUID_PATTERN.exec(message)?.[0] ?? null;
     const trip = tripId
       ? await this.#trips.get(userId, tripId)
       : await this.#store.getActiveTrip(userId);
-    if (!trip) return UNGROUNDED_CREATION_MESSAGE;
+    if (!trip) return { message: UNGROUNDED_CREATION_MESSAGE, createdTrip: false };
     const departureDate = trip.brief.departureWindow.start;
     const returnDate = trip.brief.tripType === "round_trip" && trip.brief.stayNights
       ? addIsoDays(departureDate, trip.brief.stayNights.preferred)
       : null;
     const dashboardUrl = await this.dashboardUrlForTrip(userId, trip.id);
-    const validMessages = [true, false].map((created) =>
-      formatTripCreationReceipt(buildReceiptFromTrip(
-        trip,
-        created,
-        departureDate,
-        returnDate,
-        dashboardUrl
-      ))
-    );
-    return validMessages.includes(message.trim()) ? message : UNGROUNDED_CREATION_MESSAGE;
+    const createdMessage = formatTripCreationReceipt(buildReceiptFromTrip(
+      trip,
+      true,
+      departureDate,
+      returnDate,
+      dashboardUrl
+    ));
+    const reusedMessage = formatTripCreationReceipt(buildReceiptFromTrip(
+      trip,
+      false,
+      departureDate,
+      returnDate,
+      dashboardUrl
+    ));
+    const trimmed = message.trim();
+    if (trimmed === createdMessage) return { message, createdTrip: true };
+    if (trimmed === reusedMessage) return { message, createdTrip: false };
+    return { message: UNGROUNDED_CREATION_MESSAGE, createdTrip: false };
   }
 
   async handleOpenDraftText(

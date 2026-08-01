@@ -1,4 +1,4 @@
-import type { TravellerProfile, TripPayload } from "./domain";
+import type { TravellerProfile, TripPayload, Passenger, PaymentMethod } from "./domain";
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string, readonly body?: unknown) {
@@ -21,7 +21,11 @@ export function accessHref(path: "/trip" | "/preferences", tripId?: string): str
   return `${path}${search}#${new URLSearchParams({ access: accessToken }).toString()}`;
 }
 
-export function getSession(): Promise<{ authenticated: true; displayName: string }> {
+export function getSession(): Promise<{
+  authenticated: true;
+  displayName: string;
+  paymentsEnabled: boolean;
+}> {
   return api("/api/auth/session");
 }
 
@@ -97,9 +101,91 @@ export async function deleteAccount(): Promise<void> {
   await api("/api/me/account", { method: "DELETE", body: "{}" });
 }
 
+export async function listPassengers(): Promise<Passenger[]> {
+  return (await api<{ passengers: Passenger[] }>("/api/me/passengers")).passengers;
+}
+
+export async function createPassenger(
+  input: Omit<Passenger, "id" | "userId" | "readyForBooking" | "createdAt" | "updatedAt" | "isDefault"> & {
+    isDefault?: boolean;
+  }
+): Promise<Passenger> {
+  return (await api<{ passenger: Passenger }>("/api/me/passengers", {
+    method: "POST",
+    body: JSON.stringify(input)
+  })).passenger;
+}
+
+export async function updatePassenger(
+  id: string,
+  input: Partial<Pick<
+    Passenger,
+    "givenName" | "familyName" | "title" | "gender" | "bornOn" | "email" | "phoneNumber" | "isDefault"
+  >>
+): Promise<Passenger> {
+  return (await api<{ passenger: Passenger }>(`/api/me/passengers/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  })).passenger;
+}
+
+export async function deletePassenger(id: string): Promise<void> {
+  await api(`/api/me/passengers/${id}`, { method: "DELETE", body: "{}" });
+}
+
+export async function setDefaultPassenger(id: string): Promise<Passenger> {
+  return (await api<{ passenger: Passenger }>(`/api/me/passengers/${id}/default`, {
+    method: "POST",
+    body: "{}"
+  })).passenger;
+}
+
+export async function setTripTravellers(
+  tripId: string,
+  passengerIds: string[]
+): Promise<Passenger[]> {
+  return (await api<{ passengers: Passenger[] }>(
+    `/api/me/trip/travellers?${new URLSearchParams({ trip: tripId }).toString()}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ passengerIds })
+    }
+  )).passengers;
+}
+
+export async function listPaymentMethods(): Promise<PaymentMethod[]> {
+  return (await api<{ cards: PaymentMethod[] }>("/api/me/payments/cards")).cards;
+}
+
+export async function createPaymentClientKey(): Promise<string> {
+  return (await api<{ clientKey: string }>("/api/me/payments/client-key", {
+    method: "POST",
+    body: "{}"
+  })).clientKey;
+}
+
+export async function savePaymentMethod(input: {
+  cardId: string;
+  brand: string;
+  last4: string;
+  expiryMonth: number;
+  expiryYear: number;
+  cardholderName: string;
+}): Promise<PaymentMethod> {
+  return (await api<{ card: PaymentMethod }>("/api/me/payments/cards", {
+    method: "POST",
+    body: JSON.stringify(input)
+  })).card;
+}
+
+export async function removePaymentMethod(id: string): Promise<void> {
+  await api(`/api/me/payments/cards/${id}`, { method: "DELETE", body: "{}" });
+}
+
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     ...init,
+    credentials: "same-origin",
     headers: {
       ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
       ...(init.body ? { "content-type": "application/json" } : {}),
