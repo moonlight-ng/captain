@@ -26,6 +26,11 @@ describe("Payment card lifecycle migration", () => {
     expect(migration).toContain("if method_count >= 20 then");
     expect(migration).toContain("create table captain.payment_card_setup_intents");
     expect(migration).toContain("component_client_key text");
+    expect(migration).toContain("client_key_issue_token uuid");
+    expect(migration).toContain("client_key_issue_expires_at timestamptz");
+    expect(migration).toContain("captain_payment_card_setup_intents_issue_lease_pair");
+    expect(migration).toContain("captain_payment_card_setup_intents_issue_lease_without_key");
+    expect(migration).toContain("captain_payment_card_setup_intents_issue_lease_pending");
     expect(migration).toContain("captain_payment_card_setup_intents_one_pending_idx");
     expect(migration).toContain("where status = 'pending'");
   });

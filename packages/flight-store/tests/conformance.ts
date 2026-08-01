@@ -908,12 +908,75 @@ export function describeCaptainPlatformStore(
       expect(mints).toBe(1);
     });
 
+    it("releases a failed client-key issuance so the same intent can retry", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const now = new Date("2026-08-01T12:00:00Z");
+      const intentId = randomUUID();
+      await expect(store.issuePaymentCardSetupClientKey(
+        ada.id,
+        intentId,
+        async () => {
+          throw new Error("provider unavailable");
+        },
+        now
+      )).rejects.toThrow("provider unavailable");
+      await expect(store.issuePaymentCardSetupClientKey(
+        ada.id,
+        intentId,
+        async () => "key_retry",
+        now
+      )).resolves.toEqual({ setupIntentId: intentId, clientKey: "key_retry" });
+    });
+
+    it("keeps store capacity available while four client keys are minted", async () => {
+      const store = await createStore();
+      const travellers = await Promise.all([1, 2, 3, 4].map((id) => user(store, id)));
+      const now = new Date("2026-08-01T12:00:00Z");
+      let enteredCount = 0;
+      let markAllEntered!: () => void;
+      const allEntered = new Promise<void>((resolve) => {
+        markAllEntered = resolve;
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const issues = travellers.map((traveller, index) => {
+        const setupIntentId = randomUUID();
+        return store.issuePaymentCardSetupClientKey(
+          traveller.id,
+          setupIntentId,
+          async () => {
+            enteredCount += 1;
+            if (enteredCount === travellers.length) markAllEntered();
+            await gate;
+            return `key_${index + 1}`;
+          },
+          now
+        );
+      });
+
+      await allEntered;
+      try {
+        await expect(within(store.listPaymentMethods(travellers[0]!.id), 2_000))
+          .resolves.toEqual([]);
+      } finally {
+        release();
+      }
+      await expect(Promise.all(issues)).resolves.toHaveLength(4);
+    });
+
     it("rejects a concurrent client-key request with a different setup intent id", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
       const now = new Date("2026-08-01T12:00:00Z");
       const intentA = randomUUID();
       const intentB = randomUUID();
+      let markEntered!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        markEntered = resolve;
+      });
       let release!: () => void;
       const gate = new Promise<void>((resolve) => {
         release = resolve;
@@ -921,13 +984,12 @@ export function describeCaptainPlatformStore(
       let mints = 0;
       const mint = async () => {
         mints += 1;
+        markEntered();
         await gate;
         return `key_${mints}`;
       };
       const first = store.issuePaymentCardSetupClientKey(ada.id, intentA, mint, now);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      // Start before releasing the mint gate so Postgres may block on the session
-      // lock; after the first intent is pending, the second ID must still fail.
+      await entered;
       const second = store.issuePaymentCardSetupClientKey(ada.id, intentB, mint, now);
       release();
       await expect(first).resolves.toEqual({ setupIntentId: intentA, clientKey: "key_1" });
@@ -1072,6 +1134,20 @@ async function user(store: CaptainPlatformStore, telegramUserId: number) {
     telegramUserId, telegramChatId: telegramUserId, username: null,
     firstName: `User ${telegramUserId}`, lastName: null
   }, new Date("2026-08-01T12:00:00Z"));
+}
+
+async function within<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("operation timed out")), milliseconds);
+      })
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 function inputFor(title: string, destination: string, departure: string): CreateTripInput {

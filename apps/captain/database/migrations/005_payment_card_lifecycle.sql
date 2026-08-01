@@ -141,10 +141,21 @@ create table captain.payment_card_setup_intents (
   status text not null check (status in ('pending', 'completed', 'expired')),
   payment_method_id uuid references captain.payment_methods(id) on delete set null,
   component_client_key text,
+  client_key_issue_token uuid,
+  client_key_issue_expires_at timestamptz,
   expires_at timestamptz not null,
   completed_at timestamptz,
   created_at timestamptz not null,
-  updated_at timestamptz not null
+  updated_at timestamptz not null,
+  constraint captain_payment_card_setup_intents_issue_lease_pair check (
+    (client_key_issue_token is null) = (client_key_issue_expires_at is null)
+  ),
+  constraint captain_payment_card_setup_intents_issue_lease_without_key check (
+    component_client_key is null or client_key_issue_token is null
+  ),
+  constraint captain_payment_card_setup_intents_issue_lease_pending check (
+    client_key_issue_token is null or status = 'pending'
+  )
 );
 
 create unique index captain_payment_card_setup_intents_one_pending_idx
@@ -157,7 +168,7 @@ create index captain_payment_card_setup_intents_cleanup_idx
   on captain.payment_card_setup_intents (status, expires_at, completed_at);
 
 comment on table captain.payment_card_setup_intents is
-  'Single-use card setup reservations. Bind Duffel browser callbacks to one pending intent per user.';
+  'Single-use card setup reservations with leased client-key issuance. Bind Duffel browser callbacks to one pending intent per user.';
 
 -- Trap A: new tables get RLS + policies + grants inline.
 do $$
