@@ -58,9 +58,14 @@ set Captain's database, Telegram, and Eve settings:
 
 ```sh
 pnpm install
+# Prefer MIGRATION_DATABASE_URL; falls back to DATABASE_URL.
 pnpm --filter @agents/captain db:migrate
 pnpm --filter @agents/captain dev:agent
 ```
+
+After pulling schema changes (for example `004_traveller_records_and_payments`),
+run `db:migrate` again before starting the agent. Production applies pending
+migrations automatically via Fly `release_command` on deploy.
 
 Build the web dashboard separately with:
 

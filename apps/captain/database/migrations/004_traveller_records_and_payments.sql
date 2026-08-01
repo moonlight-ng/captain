@@ -95,7 +95,21 @@ alter table captain.login_tokens
   check (redirect_path in ('/trip', '/preferences', '/payment', '/travellers'));
 
 -- Trap A: new tables get RLS + policies + grants inline. roles.sql's policy
--- loop cannot be safely re-run after a new migration.
+-- loop cannot be safely re-run after a new migration. Fresh databases (CI)
+-- may not have run roles.sql yet, so ensure the group roles exist first.
+do $$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'captain_runtime') then
+    create role captain_runtime nologin;
+  end if;
+  if not exists (select 1 from pg_roles where rolname = 'captain_migrator') then
+    create role captain_migrator nologin;
+  end if;
+end
+$$;
+
+grant usage on schema captain to captain_runtime;
+
 do $$
 declare
   table_name text;

@@ -25,6 +25,8 @@ describe("Traveller records and payments migration", () => {
   });
 
   it("enables RLS and creates captain_runtime_full_access for each new table", () => {
+    expect(migration).toContain("create role captain_runtime nologin");
+    expect(migration).toContain("create role captain_migrator nologin");
     for (const table of ["passengers", "trip_passengers", "payment_methods"]) {
       expect(migration).toContain(`alter table captain.%I enable row level security`);
       expect(migration).toContain(

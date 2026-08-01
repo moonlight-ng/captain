@@ -4,9 +4,13 @@ import { resolve } from "node:path";
 import postgres from "postgres";
 import { buildSearchSpecs, tripBriefSchema } from "@agents/flight-domain";
 
-const databaseUrl = process.env.MIGRATION_DATABASE_URL?.trim();
+const databaseUrl = (
+  process.env.MIGRATION_DATABASE_URL?.trim()
+  || process.env.DATABASE_URL?.trim()
+  || ""
+);
 if (!databaseUrl) {
-  throw new Error("MIGRATION_DATABASE_URL is required for migrations");
+  throw new Error("MIGRATION_DATABASE_URL (or DATABASE_URL) is required for migrations");
 }
 
 // Installing the baseline into a database that has no Captain project is an
