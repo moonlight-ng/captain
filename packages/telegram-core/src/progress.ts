@@ -1,88 +1,19 @@
-export const TELEGRAM_PROGRESS_ATTRIBUTE = "telegram_progress_text";
 export const TELEGRAM_PROGRESS_DELAY_MS = 1_000;
 export const TELEGRAM_TYPING_KEEPALIVE_MS = 4_000;
-
-export const GENERAL_PROGRESS_FALLBACK = "Thinking that through…";
-export const TRAVEL_PROGRESS_FALLBACK = "Thinking through your trip…";
-
-type ProgressContext = "general" | "travel";
-
-type ProgressRule = {
-  pattern: RegExp;
-  text: string;
-};
 
 export type TelegramTurnProgress = {
   chatId: string;
   messageId: string | null;
   turnId: string;
-  statusText: string;
+  statusText: string | null;
+  delayMs: number;
+  posting: boolean;
   showTimer: ReturnType<typeof setTimeout> | null;
   keepalive: ReturnType<typeof setInterval> | null;
+  onShow: (statusText: string) => string | null | Promise<string | null>;
+  onEdit: (messageId: string, statusText: string) => void | Promise<void>;
   onDiscard: (messageId: string) => void | Promise<void>;
 };
-
-const GENERAL_RULES: readonly ProgressRule[] = [
-  {
-    pattern: /\b(?:search|find|look\s*up|research|latest|current|online|web)\b|https?:\/\//iu,
-    text: "Looking that up…"
-  },
-  {
-    pattern: /\b(?:debug|fix|broken|bug|error|failing|failure|crash|issue)\b/iu,
-    text: "Tracing the issue…"
-  },
-  {
-    pattern: /\b(?:compare|recommend|choose|best|option|trade-?offs?)\b/iu,
-    text: "Comparing the options…"
-  },
-  {
-    pattern: /\b(?:summari[sz]e|summary|key points|tl;?dr)\b/iu,
-    text: "Pulling out the key points…"
-  },
-  {
-    pattern: /\b(?:review|audit|inspect|analy[sz]e|assess|evaluate|check)\b/iu,
-    text: "Reviewing the details…"
-  },
-  {
-    pattern: /\b(?:write|draft|rewrite|compose|edit|email|message|resume|cover letter)\b/iu,
-    text: "Drafting that…"
-  },
-  {
-    pattern: /\b(?:plan|outline|roadmap|strategy|steps|approach)\b/iu,
-    text: "Putting a plan together…"
-  },
-  {
-    pattern: /\b(?:calculate|count|estimate|budget|total|percentage|forecast)\b/iu,
-    text: "Running the numbers…"
-  },
-  {
-    pattern: /\b(?:remember|recall|memory|notes?|journal)\b/iu,
-    text: "Checking what I remember…"
-  },
-  {
-    pattern: /\b(?:explain|why|how does|how do|what does|what is)\b/iu,
-    text: "Thinking through the explanation…"
-  }
-];
-
-const TRAVEL_RULES: readonly ProgressRule[] = [
-  {
-    pattern: /\b(?:cancel|pause|resume|refresh|remove|stop tracking|change|update|edit)\b/iu,
-    text: "Updating your trip…"
-  },
-  {
-    pattern: /\b(?:why|explain|reason|recommendation)\b/iu,
-    text: "Reviewing that recommendation…"
-  },
-  {
-    pattern: /\b(?:compare|cheapest|fastest|best|option|fare|price|flight|airline)\b/iu,
-    text: "Comparing the flight options…"
-  },
-  {
-    pattern: /\b(?:where|status|current|tracked|tracking|trip)\b/iu,
-    text: "Checking your trip…"
-  }
-];
 
 const GENERIC_TOOL_STATUS: Readonly<Record<string, string>> = {
   ask_question: "Narrowing down one detail…",
@@ -96,45 +27,15 @@ const GENERIC_TOOL_STATUS: Readonly<Record<string, string>> = {
   agent: "Coordinating the next step…"
 };
 
-export function progressTextForRequest(
-  text: string,
-  options: {
-    context?: ProgressContext;
-    hasAttachments?: boolean;
-  } = {}
-): string {
-  const context = options.context ?? "general";
-  const normalized = text.trim();
-  const rules = context === "travel" ? TRAVEL_RULES : GENERAL_RULES;
-  const match = rules.find((rule) => rule.pattern.test(normalized));
-  if (match) return match.text;
-  if (options.hasAttachments) return "Reading what you sent…";
-  return context === "travel"
-    ? TRAVEL_PROGRESS_FALLBACK
-    : GENERAL_PROGRESS_FALLBACK;
-}
-
-export function progressTextFromAttribute(
-  value: unknown,
-  fallback: string
-): string {
-  const candidate = Array.isArray(value) ? value[0] : value;
-  if (
-    typeof candidate !== "string"
-    || candidate.length === 0
-    || candidate.length > 96
-    || /[\r\n]/u.test(candidate)
-  ) {
-    return fallback;
-  }
-  return candidate;
-}
-
+/**
+ * Progress copy names work that is actually running, so an unrecognised tool
+ * reports nothing and the chat keeps Telegram's typing indicator on its own.
+ */
 export function statusTextForToolNames(
   toolNames: readonly string[],
   statusByTool: Readonly<Record<string, string>> = {},
-  fallback = GENERAL_PROGRESS_FALLBACK
-): string {
+  fallback: string | null = null
+): string | null {
   for (const rawName of toolNames) {
     const name = rawName.trim();
     if (!name) continue;
@@ -162,12 +63,17 @@ export class TelegramProgressTracker {
     return this.#bySession.get(sessionId);
   }
 
+  /**
+   * Starts a turn with the typing indicator alone. A status message is posted
+   * only once `setStatus` reports a step worth naming, and only if that step is
+   * still running after the delay.
+   */
   start(input: {
     sessionId: string;
     chatId: string;
     turnId: string;
-    statusText: string;
     onShow: (statusText: string) => string | null | Promise<string | null>;
+    onEdit: (messageId: string, statusText: string) => void | Promise<void>;
     onDiscard: (messageId: string) => void | Promise<void>;
     onTyping?: () => void | Promise<void>;
     delayMs?: number;
@@ -177,27 +83,15 @@ export class TelegramProgressTracker {
       chatId: input.chatId,
       messageId: null,
       turnId: input.turnId,
-      statusText: input.statusText,
+      statusText: null,
+      delayMs: input.delayMs ?? TELEGRAM_PROGRESS_DELAY_MS,
+      posting: false,
       showTimer: null,
       keepalive: null,
+      onShow: input.onShow,
+      onEdit: input.onEdit,
       onDiscard: input.onDiscard
     };
-
-    const delayMs = input.delayMs ?? TELEGRAM_PROGRESS_DELAY_MS;
-    progress.showTimer = setTimeout(() => {
-      progress.showTimer = null;
-      void Promise.resolve(input.onShow(progress.statusText))
-        .then(async (messageId) => {
-          if (!messageId) return;
-          if (this.#bySession.get(input.sessionId) === progress) {
-            progress.messageId = messageId;
-            return;
-          }
-          await input.onDiscard(messageId);
-        })
-        .catch(() => undefined);
-    }, delayMs);
-    progress.showTimer.unref?.();
 
     if (input.onTyping) {
       progress.keepalive = setInterval(() => {
@@ -210,9 +104,24 @@ export class TelegramProgressTracker {
     return progress;
   }
 
-  updateStatus(sessionId: string, turnId: string): TelegramTurnProgress | undefined {
+  async setStatus(
+    sessionId: string,
+    turnId: string,
+    statusText: string
+  ): Promise<TelegramTurnProgress | undefined> {
     const progress = this.#bySession.get(sessionId);
     if (!progress || progress.turnId !== turnId) return undefined;
+    if (progress.statusText === statusText) return progress;
+    progress.statusText = statusText;
+    // A scheduled or in-flight post picks up the latest text by itself.
+    if (progress.showTimer || progress.posting) return progress;
+    if (!progress.messageId) {
+      this.#scheduleShow(sessionId, progress);
+      return progress;
+    }
+    await Promise.resolve(progress.onEdit(progress.messageId, statusText)).catch(
+      () => undefined
+    );
     return progress;
   }
 
@@ -234,5 +143,31 @@ export class TelegramProgressTracker {
       );
     }
     return progress;
+  }
+
+  #scheduleShow(sessionId: string, progress: TelegramTurnProgress): void {
+    progress.showTimer = setTimeout(() => {
+      progress.showTimer = null;
+      const shown = progress.statusText;
+      if (!shown) return;
+      progress.posting = true;
+      void Promise.resolve(progress.onShow(shown))
+        .then(async (messageId) => {
+          if (!messageId) return;
+          if (this.#bySession.get(sessionId) !== progress) {
+            await progress.onDiscard(messageId);
+            return;
+          }
+          progress.messageId = messageId;
+          if (progress.statusText && progress.statusText !== shown) {
+            await progress.onEdit(messageId, progress.statusText);
+          }
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          progress.posting = false;
+        });
+    }, progress.delayMs);
+    progress.showTimer.unref?.();
   }
 }
