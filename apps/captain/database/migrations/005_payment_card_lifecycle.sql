@@ -15,7 +15,9 @@ create table captain.payment_card_deletions (
   provider text not null check (provider = 'duffel'),
   provider_card_id text not null,
   payment_method_id uuid,
-  status text not null check (status in ('queued', 'running')),
+  -- 'failed' is terminal: retries are exhausted and a human must reconcile the
+  -- token at Duffel. Never reclaimed, so it cannot pin a local card row forever.
+  status text not null check (status in ('queued', 'running', 'failed')),
   attempts integer not null default 0 check (attempts >= 0),
   available_at timestamptz not null,
   claimed_by text,
@@ -78,6 +80,21 @@ begin
     end if;
   end loop;
 
+  -- A Duffel token is global, so two users holding the same active card would let
+  -- one user's removal delete the other's card. Keep the oldest, retire the rest.
+  update captain.payment_methods duplicate
+  set is_default = false,
+      status = 'removed',
+      updated_at = now()
+  where duplicate.status = 'active'
+    and exists (
+      select 1 from captain.payment_methods keeper
+      where keeper.status = 'active'
+        and keeper.provider = duplicate.provider
+        and keeper.provider_card_id = duplicate.provider_card_id
+        and (keeper.created_at, keeper.id) < (duplicate.created_at, duplicate.id)
+    );
+
   insert into captain.payment_card_deletions (
     id, provider, provider_card_id, payment_method_id, status, attempts,
     available_at, claimed_by, lease_expires_at, last_error_code, last_error_detail,
@@ -99,6 +116,14 @@ begin
     now()
   from captain.payment_methods method
   where method.status = 'removed'
+    -- Never queue a token another row still holds active: the cross-user dedupe
+    -- above retires losers that share a token with a card we are keeping.
+    and not exists (
+      select 1 from captain.payment_methods holder
+      where holder.status = 'active'
+        and holder.provider = method.provider
+        and holder.provider_card_id = method.provider_card_id
+    )
   on conflict (provider, provider_card_id) do nothing;
 end
 $$;
@@ -106,6 +131,11 @@ $$;
 -- Safe now that each user has at most one active card.
 create unique index captain_payment_methods_one_active_idx
   on captain.payment_methods (user_id) where status = 'active';
+
+-- Card IDs are client-asserted and Duffel tokens are global, so a token may back
+-- at most one active card across all users. Backstops the application check.
+create unique index captain_payment_methods_active_card_idx
+  on captain.payment_methods (provider, provider_card_id) where status = 'active';
 
 -- Cap local payment rows so removed-but-pending-deletion cards cannot grow without bound.
 create function captain.enforce_payment_method_limit()

@@ -70,6 +70,8 @@ import {
 const SETUP_INTENT_TTL_MS = 30 * 60_000;
 const SETUP_INTENT_COMPLETED_RETENTION_MS = 24 * 60 * 60_000;
 const MAX_PAYMENT_METHODS_PER_USER = 20;
+/** Retries span roughly four days before a deletion is parked for manual reconciliation. */
+const MAX_CARD_DELETION_ATTEMPTS = 10;
 const CARD_DELETION_BACKOFF_MS = [
   60_000,
   5 * 60_000,
@@ -548,6 +550,14 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       .map(clone);
   }
 
+  async getPaymentCardSetupIntent(
+    userId: string,
+    setupIntentId: string
+  ): Promise<PaymentCardSetupIntent | null> {
+    const intent = this.#setupIntents.get(setupIntentId);
+    return intent && intent.userId === userId ? clone(intent) : null;
+  }
+
   async reservePaymentCardSetupIntent(
     userId: string,
     setupIntentId: string,
@@ -682,6 +692,16 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     );
     if (removedExisting) throw new PaymentSetupConflictError("card_pending_deletion");
 
+    // Card IDs are client-asserted and a Duffel token is global. Without this a
+    // caller who guessed another user's token would end up sharing it, and the
+    // first removal would delete the other user's card at Duffel.
+    const claimedElsewhere = [...this.#paymentMethods.values()].find(
+      (method) => method.providerCardId === input.cardId
+        && method.userId !== userId
+        && method.status === "active"
+    );
+    if (claimedElsewhere) throw new PaymentSetupConflictError("card_unavailable");
+
     const timestamp = now.toISOString();
     const retiring = [...this.#paymentMethods.values()].filter(
       (method) => method.userId === userId && method.status === "active"
@@ -735,6 +755,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       ...intent,
       status: "completed",
       paymentMethodId: method.id,
+      componentClientKey: null,
       completedAt: timestamp,
       updatedAt: timestamp
     });
@@ -788,17 +809,11 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     return claimed;
   }
 
-  async completeCardDeletion(workerId: string, deletionId: string, now: Date): Promise<boolean> {
+  async completeCardDeletion(workerId: string, deletionId: string): Promise<boolean> {
     const deletion = this.#cardDeletions.get(deletionId);
     if (!deletion || deletion.status !== "running" || deletion.claimedBy !== workerId) return false;
-    if (deletion.paymentMethodId) {
-      const method = this.#paymentMethods.get(deletion.paymentMethodId);
-      if (method && method.status === "removed" && method.providerCardId === deletion.providerCardId) {
-        this.#paymentMethods.delete(deletion.paymentMethodId);
-      }
-    }
+    this.#releaseDeletedCardRow(deletion);
     this.#cardDeletions.delete(deletionId);
-    void now;
     return true;
   }
 
@@ -806,11 +821,27 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     workerId: string,
     deletionId: string,
     errorCode: string,
+    errorDetail: string | null,
     retryAfterMs: number | null,
     now: Date
   ): Promise<boolean> {
     const deletion = this.#cardDeletions.get(deletionId);
     if (!deletion || deletion.status !== "running" || deletion.claimedBy !== workerId) return false;
+    if (deletion.attempts >= MAX_CARD_DELETION_ATTEMPTS) {
+      // Terminal: stop retrying, but free the local row so a card Duffel refuses
+      // to delete cannot consume the user's cap forever.
+      this.#releaseDeletedCardRow(deletion);
+      this.#cardDeletions.set(deletionId, {
+        ...deletion,
+        status: "failed",
+        claimedBy: null,
+        leaseExpiresAt: null,
+        lastErrorCode: errorCode.slice(0, 100),
+        lastErrorDetail: truncateErrorDetail(errorDetail),
+        updatedAt: now.toISOString()
+      });
+      return true;
+    }
     const delay = retryAfterMs !== null && retryAfterMs > 0
       ? Math.min(retryAfterMs, 24 * 60 * 60_000)
       : cardDeletionBackoffMs(deletion.attempts);
@@ -821,24 +852,38 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       claimedBy: null,
       leaseExpiresAt: null,
       lastErrorCode: errorCode.slice(0, 100),
-      lastErrorDetail: truncateErrorDetail(errorCode),
+      lastErrorDetail: truncateErrorDetail(errorDetail),
       updatedAt: now.toISOString()
     });
     return true;
   }
 
+  #releaseDeletedCardRow(deletion: PaymentCardDeletion): void {
+    if (!deletion.paymentMethodId) return;
+    const method = this.#paymentMethods.get(deletion.paymentMethodId);
+    if (method && method.status === "removed" && method.providerCardId === deletion.providerCardId) {
+      this.#paymentMethods.delete(deletion.paymentMethodId);
+    }
+  }
+
   async countPendingCardDeletions(): Promise<{
     queued: number;
     running: number;
+    failed: number;
     highAttempts: number;
     oldestQueuedAgeMs: number | null;
   }> {
     const now = Date.now();
     let queued = 0;
     let running = 0;
+    let failed = 0;
     let highAttempts = 0;
     let oldestQueuedAgeMs: number | null = null;
     for (const deletion of this.#cardDeletions.values()) {
+      if (deletion.status === "failed") {
+        failed += 1;
+        continue;
+      }
       if (deletion.attempts >= 5) highAttempts += 1;
       if (deletion.status === "queued") {
         queued += 1;
@@ -848,7 +893,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         running += 1;
       }
     }
-    return { queued, running, highAttempts, oldestQueuedAgeMs };
+    return { queued, running, failed, highAttempts, oldestQueuedAgeMs };
   }
 
   async cleanupPaymentCardSetupIntents(now: Date): Promise<number> {

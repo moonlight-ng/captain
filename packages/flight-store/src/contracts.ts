@@ -66,6 +66,7 @@ export class PaymentSetupConflictError extends Error {
     readonly code:
       | "setup_intent_mismatch"
       | "card_pending_deletion"
+      | "card_unavailable"
       | "setup_intent_invalid"
       | "setup_intent_completed"
   ) {
@@ -233,6 +234,11 @@ export interface CaptainPlatformStore {
     setupIntentId: string,
     now: Date
   ): Promise<PaymentCardSetupIntent>;
+  /** Read-only view for diagnostics and retention assertions; never mints or mutates. */
+  getPaymentCardSetupIntent(
+    userId: string,
+    setupIntentId: string
+  ): Promise<PaymentCardSetupIntent | null>;
   /**
    * Idempotent client-key issuance for a pending setup intent.
    * Rejects a different ID while one is pending, never mints for completed intents,
@@ -256,17 +262,24 @@ export interface CaptainPlatformStore {
     leaseMs: number,
     limit: number
   ): Promise<PaymentCardDeletion[]>;
-  completeCardDeletion(workerId: string, deletionId: string, now: Date): Promise<boolean>;
+  completeCardDeletion(workerId: string, deletionId: string): Promise<boolean>;
+  /**
+   * Requeues with backoff until MAX_CARD_DELETION_ATTEMPTS, then parks the row in
+   * the terminal `failed` state and drops the local card so a card Duffel will
+   * never delete cannot consume the per-user row cap forever.
+   */
   failCardDeletion(
     workerId: string,
     deletionId: string,
     errorCode: string,
+    errorDetail: string | null,
     retryAfterMs: number | null,
     now: Date
   ): Promise<boolean>;
   countPendingCardDeletions(): Promise<{
     queued: number;
     running: number;
+    failed: number;
     highAttempts: number;
     oldestQueuedAgeMs: number | null;
   }>;

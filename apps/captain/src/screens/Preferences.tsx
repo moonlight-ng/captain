@@ -32,7 +32,7 @@ export function Preferences({
   tripData,
   displayName,
   trackingError,
-  sessionCredential = true,
+  sessionCredential,
   onSaved,
   onTripChanged,
   onTripError,
@@ -42,7 +42,8 @@ export function Preferences({
   tripData: TripPayload | null;
   displayName: string;
   trackingError: string;
-  sessionCredential?: boolean;
+  /** Traveller controls need a revocable cookie session, not a legacy bearer. */
+  sessionCredential: boolean;
   onSaved: (profile: TravellerProfile) => void;
   onTripChanged: () => Promise<void>;
   onTripError: (value: string) => void;

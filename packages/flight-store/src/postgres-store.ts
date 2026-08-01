@@ -78,7 +78,11 @@ const SETUP_INTENT_COMPLETED_RETENTION_MS = 24 * 60 * 60_000;
 const CLIENT_KEY_ISSUE_LEASE_MS = 45_000;
 const CLIENT_KEY_ISSUE_POLL_INITIAL_MS = 25;
 const CLIENT_KEY_ISSUE_POLL_MAX_MS = 250;
+/** Bounds how long a client-key request may wait on another issuer's lease. */
+const CLIENT_KEY_ISSUE_DEADLINE_MS = 10_000;
 const MAX_PAYMENT_METHODS_PER_USER = 20;
+/** Retries span roughly four days before a deletion is parked for manual reconciliation. */
+const MAX_CARD_DELETION_ATTEMPTS = 10;
 const CARD_DELETION_BACKOFF_MS = [
   60_000,
   5 * 60_000,
@@ -208,6 +212,10 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
 
   async deleteUser(userId: string): Promise<void> {
     await this.#sql.begin(async (tx) => {
+      // Same lock finalizePaymentMethod takes. Without it a card finalized between
+      // this select and the cascade below would vanish locally without ever being
+      // queued for remote deletion.
+      await tx`select pg_advisory_xact_lock(hashtext(${`${userId}:payment_methods`}))`;
       const methods = await tx<PaymentMethodRow[]>`
         select * from captain.payment_methods where user_id = ${userId}
       `;
@@ -579,6 +587,17 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     return this.#reservePaymentCardSetupIntentWith(this.#sql, userId, setupIntentId, now);
   }
 
+  async getPaymentCardSetupIntent(
+    userId: string,
+    setupIntentId: string
+  ): Promise<PaymentCardSetupIntent | null> {
+    const rows = await this.#sql<PaymentCardSetupIntentRow[]>`
+      select * from captain.payment_card_setup_intents
+      where id = ${setupIntentId} and user_id = ${userId}
+    `;
+    return rows[0] ? mapPaymentCardSetupIntent(rows[0]) : null;
+  }
+
   async #reservePaymentCardSetupIntentWith(
     sql: Sql,
     userId: string,
@@ -688,7 +707,9 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
 
     const issueToken = randomUUID();
     let pollMs = CLIENT_KEY_ISSUE_POLL_INITIAL_MS;
+    const deadline = Date.now() + CLIENT_KEY_ISSUE_DEADLINE_MS;
     while (true) {
+      if (Date.now() >= deadline) throw new PaymentSetupInProgressError();
       const claim = await this.#sql.begin(async (tx) => {
         const reserved = await this.#reservePaymentCardSetupIntentInTransaction(
           tx,
@@ -850,6 +871,19 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       `;
       if (removedExisting[0]) throw new PaymentSetupConflictError("card_pending_deletion");
 
+      // Card IDs are client-asserted and a Duffel token is global. Without this a
+      // caller who guessed another user's token would end up sharing it, and the
+      // first removal would delete the other user's card at Duffel.
+      const claimedElsewhere = await tx<Array<{ id: string }>>`
+        select id from captain.payment_methods
+        where provider = 'duffel'
+          and provider_card_id = ${input.cardId}
+          and user_id <> ${userId}
+          and status = 'active'
+        limit 1
+      `;
+      if (claimedElsewhere[0]) throw new PaymentSetupConflictError("card_unavailable");
+
       const retiring = await tx<PaymentMethodRow[]>`
         select * from captain.payment_methods
         where user_id = ${userId}
@@ -866,13 +900,14 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         await enqueueCardDeletion(tx, method, now);
       }
 
-      const existingActive = await tx<PaymentMethodRow[]>`
+      // Any row for this card is necessarily active: the removed case threw above.
+      const existingForCard = await tx<PaymentMethodRow[]>`
         select * from captain.payment_methods
         where user_id = ${userId} and provider_card_id = ${input.cardId}
         for update
       `;
       let methodRow: PaymentMethodRow;
-      if (existingActive[0]) {
+      if (existingForCard[0]) {
         const updated = await tx<PaymentMethodRow[]>`
           update captain.payment_methods set
             brand = ${input.brand},
@@ -881,7 +916,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
             status = 'active',
             is_default = true,
             updated_at = ${now}
-          where id = ${existingActive[0].id}
+          where id = ${existingForCard[0].id}
           returning *
         `;
         methodRow = updated[0]!;
@@ -909,6 +944,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         update captain.payment_card_setup_intents set
           status = 'completed',
           payment_method_id = ${methodRow.id},
+          component_client_key = null,
           client_key_issue_token = null,
           client_key_issue_expires_at = null,
           completed_at = ${now},
@@ -973,7 +1009,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     return rows.map(mapPaymentCardDeletion);
   }
 
-  async completeCardDeletion(workerId: string, deletionId: string, now: Date): Promise<boolean> {
+  async completeCardDeletion(workerId: string, deletionId: string): Promise<boolean> {
     return this.#sql.begin(async (tx) => {
       const rows = await tx<PaymentCardDeletionRow[]>`
         select * from captain.payment_card_deletions
@@ -982,16 +1018,8 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       `;
       const deletion = rows[0];
       if (!deletion) return false;
-      if (deletion.payment_method_id) {
-        await tx`
-          delete from captain.payment_methods
-          where id = ${deletion.payment_method_id}
-            and status = 'removed'
-            and provider_card_id = ${deletion.provider_card_id}
-        `;
-      }
+      await releaseDeletedCardRow(tx, deletion);
       await tx`delete from captain.payment_card_deletions where id = ${deletionId}`;
-      void now;
       return true;
     });
   }
@@ -1000,6 +1028,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     workerId: string,
     deletionId: string,
     errorCode: string,
+    errorDetail: string | null,
     retryAfterMs: number | null,
     now: Date
   ): Promise<boolean> {
@@ -1011,6 +1040,23 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       `;
       const deletion = rows[0];
       if (!deletion) return false;
+      if (deletion.attempts >= MAX_CARD_DELETION_ATTEMPTS) {
+        // Give up remotely, but free the local row so a card Duffel refuses to
+        // delete cannot consume the user's cap forever. The token survives here
+        // for manual reconciliation.
+        await releaseDeletedCardRow(tx, deletion);
+        await tx`
+          update captain.payment_card_deletions set
+            status = 'failed',
+            claimed_by = null,
+            lease_expires_at = null,
+            last_error_code = ${errorCode.slice(0, 100)},
+            last_error_detail = ${truncateErrorDetail(errorDetail)},
+            updated_at = ${now}
+          where id = ${deletionId}
+        `;
+        return true;
+      }
       const delay = retryAfterMs !== null && retryAfterMs > 0
         ? Math.min(retryAfterMs, 24 * 60 * 60_000)
         : cardDeletionBackoffMs(deletion.attempts);
@@ -1021,7 +1067,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           claimed_by = null,
           lease_expires_at = null,
           last_error_code = ${errorCode.slice(0, 100)},
-          last_error_detail = ${truncateErrorDetail(errorCode)},
+          last_error_detail = ${truncateErrorDetail(errorDetail)},
           updated_at = ${now}
         where id = ${deletionId}
       `;
@@ -1032,19 +1078,22 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
   async countPendingCardDeletions(): Promise<{
     queued: number;
     running: number;
+    failed: number;
     highAttempts: number;
     oldestQueuedAgeMs: number | null;
   }> {
     const rows = await this.#sql<Array<{
       queued: number;
       running: number;
+      failed: number;
       high_attempts: number;
       oldest_created_at: Date | null;
     }>>`
       select
         count(*) filter (where status = 'queued')::int as queued,
         count(*) filter (where status = 'running')::int as running,
-        count(*) filter (where attempts >= 5)::int as high_attempts,
+        count(*) filter (where status = 'failed')::int as failed,
+        count(*) filter (where attempts >= 5 and status <> 'failed')::int as high_attempts,
         min(created_at) filter (where status = 'queued') as oldest_created_at
       from captain.payment_card_deletions
     `;
@@ -1053,6 +1102,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     return {
       queued: row?.queued ?? 0,
       running: row?.running ?? 0,
+      failed: row?.failed ?? 0,
       highAttempts: row?.high_attempts ?? 0,
       oldestQueuedAgeMs: oldest ? Date.now() - new Date(oldest).getTime() : null
     };
@@ -3401,6 +3451,20 @@ function mapPaymentCardDeletion(row: PaymentCardDeletionRow): PaymentCardDeletio
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at)
   };
+}
+
+/** Drops the local card row a deletion was holding open, once we stop tracking it remotely. */
+async function releaseDeletedCardRow(
+  sql: Sql,
+  deletion: Pick<PaymentCardDeletionRow, "payment_method_id" | "provider_card_id">
+): Promise<void> {
+  if (!deletion.payment_method_id) return;
+  await sql`
+    delete from captain.payment_methods
+    where id = ${deletion.payment_method_id}
+      and status = 'removed'
+      and provider_card_id = ${deletion.provider_card_id}
+  `;
 }
 
 async function enqueueCardDeletion(

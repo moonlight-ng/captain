@@ -46,6 +46,23 @@ describe("Payment card lifecycle migration", () => {
     expect(deletionsTable).not.toMatch(/user_id/u);
   });
 
+  it("gives the deletion queue a terminal failed state", () => {
+    expect(migration).toContain("check (status in ('queued', 'running', 'failed'))");
+  });
+
+  it("keeps a Duffel token bound to at most one active card, deduping first", () => {
+    expect(migration).toContain("create unique index captain_payment_methods_active_card_idx");
+    const dedupeAt = migration.indexOf("Keep the oldest, retire the rest");
+    const indexAt = migration.indexOf("create unique index captain_payment_methods_active_card_idx");
+    expect(dedupeAt).toBeGreaterThan(-1);
+    expect(indexAt).toBeGreaterThan(dedupeAt);
+  });
+
+  it("never queues a token that another row still holds active", () => {
+    expect(migration).toContain("Never queue a token another row still holds active");
+    expect(migration).toMatch(/where method\.status = 'removed'[\s\S]*?not exists \(\s*select 1 from captain\.payment_methods holder/u);
+  });
+
   it("enables RLS and captain_runtime_full_access for the new tables", () => {
     for (const table of ["payment_card_setup_intents", "payment_card_deletions"]) {
       expect(migration).toContain(`'${table}'`);

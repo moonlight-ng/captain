@@ -17,8 +17,13 @@ active or paused trips. Passenger identity lives in `captain.passengers` and is
 assigned to trips via `captain.trip_passengers`. Tokenised cards (Duffel card
 IDs only — never PAN, CVC, or expiry) live in `captain.payment_methods` behind
 `CAPTAIN_PAYMENTS_ENABLED` (default off). Captain keeps at most one active card
-per user; retired cards are deleted remotely through a leased Postgres queue
-processed by the flight worker.
+per user, and a Duffel token backs at most one active card across all users;
+retired cards are deleted remotely through a leased Postgres queue processed by
+the flight worker. A deletion retries for roughly four days, then parks in a
+terminal `failed` state for manual reconciliation and releases the local row so
+it cannot consume the per-user cap. The worker also ages out card setup intents
+on an interval, so an unused reservation cannot outlive its retention window
+just because no further payment traffic arrives.
 
 Confirmed trip currency is immutable; changing the profile default affects
 only future trips.

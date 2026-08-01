@@ -121,7 +121,7 @@ export type PaymentCardDeletion = {
   provider: "duffel";
   providerCardId: string;
   paymentMethodId: string | null;
-  status: "queued" | "running";
+  status: "queued" | "running" | "failed";
   attempts: number;
   availableAt: string;
   claimedBy: string | null;

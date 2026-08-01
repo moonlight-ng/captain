@@ -1042,13 +1042,14 @@ export function describeCaptainPlatformStore(
       const owner = firstClaim[0] ? "worker-a" : "worker-b";
       const other = owner === "worker-a" ? "worker-b" : "worker-a";
 
-      await expect(store.completeCardDeletion(other, deletion.id, now)).resolves.toBe(false);
-      await expect(store.failCardDeletion(other, deletion.id, "stale", null, now)).resolves.toBe(false);
+      await expect(store.completeCardDeletion(other, deletion.id)).resolves.toBe(false);
+      await expect(store.failCardDeletion(other, deletion.id, "stale", null, null, now))
+        .resolves.toBe(false);
 
       const leaseExpired = new Date(now.getTime() + 61_000);
       const reclaimed = await store.claimCardDeletions(other, leaseExpired, 60_000, 10);
       expect(reclaimed).toEqual([expect.objectContaining({ id: deletion.id, claimedBy: other })]);
-      await expect(store.failCardDeletion(other, deletion.id, "upstream", 1, leaseExpired))
+      await expect(store.failCardDeletion(other, deletion.id, "upstream", "boom", 1, leaseExpired))
         .resolves.toBe(true);
 
       let attemptClock = new Date(leaseExpired.getTime() + 2);
@@ -1059,6 +1060,7 @@ export function describeCaptainPlatformStore(
           "retry-worker",
           rows[0]!.id,
           "upstream",
+          "boom",
           1,
           attemptClock
         )).resolves.toBe(true);
@@ -1066,8 +1068,126 @@ export function describeCaptainPlatformStore(
       }
       const stillClaimable = await store.claimCardDeletions("retry-worker", attemptClock, 60_000, 10);
       expect(stillClaimable).toHaveLength(1);
-      await expect(store.completeCardDeletion("retry-worker", stillClaimable[0]!.id, attemptClock))
+      await expect(store.completeCardDeletion("retry-worker", stillClaimable[0]!.id))
         .resolves.toBe(true);
+    });
+
+    it("records the provider detail separately from the error code", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const now = new Date("2026-08-01T12:00:00Z");
+      const intentId = randomUUID();
+      await store.reservePaymentCardSetupIntent(ada.id, intentId, now);
+      const method = await store.finalizePaymentMethod(ada.id, {
+        setupIntentId: intentId,
+        cardId: "tcd_detail",
+        brand: "visa",
+        last4: "4242",
+        cardholderName: "Ada Lovelace"
+      }, now);
+      await store.removePaymentMethod(ada.id, method.id, now);
+      const [claim] = await store.claimCardDeletions("worker-a", now, 60_000, 1);
+      await store.failCardDeletion(
+        "worker-a",
+        claim!.id,
+        "rate_limited",
+        "Too many requests for this token",
+        null,
+        now
+      );
+      const [requeued] = await store.claimCardDeletions(
+        "worker-a",
+        new Date(now.getTime() + 10 * 60_000),
+        60_000,
+        1
+      );
+      expect(requeued!.lastErrorCode).toBe("rate_limited");
+      expect(requeued!.lastErrorDetail).toBe("Too many requests for this token");
+    });
+
+    it("parks a permanently failing deletion and frees the local card row", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      let clock = new Date("2026-08-01T12:00:00Z");
+      const intentId = randomUUID();
+      await store.reservePaymentCardSetupIntent(ada.id, intentId, clock);
+      const method = await store.finalizePaymentMethod(ada.id, {
+        setupIntentId: intentId,
+        cardId: "tcd_doomed",
+        brand: "visa",
+        last4: "0000",
+        cardholderName: "Ada Lovelace"
+      }, clock);
+      await store.removePaymentMethod(ada.id, method.id, clock);
+
+      // Ten attempts exhaust the ladder; the eleventh claim must find nothing.
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const [claim] = await store.claimCardDeletions("worker-a", clock, 60_000, 1);
+        expect(claim).toBeDefined();
+        await store.failCardDeletion("worker-a", claim!.id, "unauthorized", "nope", null, clock);
+        clock = new Date(clock.getTime() + 48 * 60 * 60_000);
+      }
+      await expect(store.claimCardDeletions("worker-a", clock, 60_000, 1)).resolves.toEqual([]);
+
+      const counts = await store.countPendingCardDeletions();
+      expect(counts.failed).toBe(1);
+      expect(counts.queued + counts.running).toBe(0);
+
+      // The local row is released so a doomed card cannot consume the per-user cap.
+      const nextIntent = randomUUID();
+      await store.reservePaymentCardSetupIntent(ada.id, nextIntent, clock);
+      await expect(store.finalizePaymentMethod(ada.id, {
+        setupIntentId: nextIntent,
+        cardId: "tcd_replacement",
+        brand: "visa",
+        last4: "1234",
+        cardholderName: "Ada Lovelace"
+      }, clock)).resolves.toMatchObject({ last4: "1234" });
+    });
+
+    it("refuses a card ID already active on another traveller", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const grace = await user(store, 2);
+      const now = new Date("2026-08-01T12:00:00Z");
+      const adaIntent = randomUUID();
+      await store.reservePaymentCardSetupIntent(ada.id, adaIntent, now);
+      await store.finalizePaymentMethod(ada.id, {
+        setupIntentId: adaIntent,
+        cardId: "tcd_shared",
+        brand: "visa",
+        last4: "5555",
+        cardholderName: "Ada Lovelace"
+      }, now);
+
+      const graceIntent = randomUUID();
+      await store.reservePaymentCardSetupIntent(grace.id, graceIntent, now);
+      await expect(store.finalizePaymentMethod(grace.id, {
+        setupIntentId: graceIntent,
+        cardId: "tcd_shared",
+        brand: "visa",
+        last4: "5555",
+        cardholderName: "Grace Hopper"
+      }, now)).rejects.toMatchObject({ code: "card_unavailable" });
+    });
+
+    it("clears the component client key once the intent completes", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const now = new Date("2026-08-01T12:00:00Z");
+      const intentId = randomUUID();
+      await store.reservePaymentCardSetupIntent(ada.id, intentId, now);
+      await store.issuePaymentCardSetupClientKey(ada.id, intentId, async () => "ck_secret", now);
+      await store.finalizePaymentMethod(ada.id, {
+        setupIntentId: intentId,
+        cardId: "tcd_clears",
+        brand: "visa",
+        last4: "7777",
+        cardholderName: "Ada Lovelace"
+      }, now);
+      const intent = await store.getPaymentCardSetupIntent(ada.id, intentId);
+      expect(intent?.status).toBe("completed");
+      expect(intent?.componentClientKey).toBeNull();
     });
 
     it("sweeps passengers and payment methods when a user is deleted", async () => {

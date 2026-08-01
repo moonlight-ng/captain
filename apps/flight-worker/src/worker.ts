@@ -17,6 +17,9 @@ import { DuffelCardsClient, DuffelCardsError } from "@agents/provider-duffel";
 
 const CARD_DELETION_LEASE_MS = 60_000;
 const CARD_DELETION_CLAIM_LIMIT = 10;
+/** Keeps a backlog of slow provider calls from starving search runs in the same tick. */
+const CARD_DELETION_BUDGET_MS = 20_000;
+const SETUP_INTENT_CLEANUP_INTERVAL_MS = 5 * 60_000;
 
 export class FlightWorker {
   readonly #store: CaptainPlatformStore;
@@ -31,6 +34,7 @@ export class FlightWorker {
   readonly #claimLimit: number;
   #running = false;
   #lastPrunedAt = 0;
+  #lastSetupIntentCleanupAt = 0;
   #lastTickHadDueWork = false;
 
   constructor(options: {
@@ -76,6 +80,8 @@ export class FlightWorker {
         this.#lastPrunedAt = now.getTime();
       }
 
+      await this.#cleanupSetupIntents(now);
+
       const deletionResult = await this.#processCardDeletions(now);
       const cardsDeleted = deletionResult.deleted;
       if (deletionResult.claimed > 0) this.#lastTickHadDueWork = true;
@@ -119,6 +125,7 @@ export class FlightWorker {
         card_deletions_claimed: deletionResult.claimed,
         card_deletions_queued: deletionCounts.queued,
         card_deletions_running: deletionCounts.running,
+        card_deletions_failed: deletionCounts.failed,
         card_deletions_high_attempts: deletionCounts.highAttempts,
         card_deletions_oldest_queued_age_ms: deletionCounts.oldestQueuedAgeMs,
         tracking_enabled: this.#trackingEnabled,
@@ -139,7 +146,9 @@ export class FlightWorker {
     if (!this.#cardsClient) return { deleted: 0, claimed: 0 };
     let deleted = 0;
     let claimed = 0;
+    const budgetExpiresAt = Date.now() + CARD_DELETION_BUDGET_MS;
     for (let i = 0; i < CARD_DELETION_CLAIM_LIMIT; i += 1) {
+      if (Date.now() >= budgetExpiresAt) break;
       const tickNow = new Date(Math.max(now.getTime(), Date.now()));
       const [claim] = await this.#store.claimCardDeletions(
         this.#workerId,
@@ -151,15 +160,19 @@ export class FlightWorker {
       claimed += 1;
       try {
         await this.#cardsClient.deleteCard(claim.providerCardId);
-        const completed = await this.#store.completeCardDeletion(this.#workerId, claim.id, new Date());
+        const completed = await this.#store.completeCardDeletion(this.#workerId, claim.id);
         if (completed) deleted += 1;
       } catch (error) {
         const code = error instanceof DuffelCardsError ? error.code : "unavailable";
         const retryAfterMs = error instanceof DuffelCardsError ? error.retryAfterMs : null;
+        // Duffel's own message, not just our code — this is the only diagnostic a
+        // stuck deletion leaves behind. Never includes the card token.
+        const detail = error instanceof Error && error.message ? error.message : null;
         await this.#store.failCardDeletion(
           this.#workerId,
           claim.id,
           code,
+          detail,
           retryAfterMs,
           new Date()
         );
@@ -175,6 +188,19 @@ export class FlightWorker {
     return { deleted, claimed };
   }
 
+  /** Expired/completed setup intents must age out even with no payment traffic. */
+  async #cleanupSetupIntents(now: Date): Promise<void> {
+    if (now.getTime() - this.#lastSetupIntentCleanupAt < SETUP_INTENT_CLEANUP_INTERVAL_MS) return;
+    this.#lastSetupIntentCleanupAt = now.getTime();
+    const removed = await this.#store.cleanupPaymentCardSetupIntents(now);
+    if (removed > 0) {
+      logEvent("info", "flight_worker.payment_setup_intents_cleaned", {
+        removed,
+        worker_id: this.#workerId
+      });
+    }
+  }
+
   async #logDeletionMetrics(now: Date, cardsDeleted: number, cardsClaimed: number): Promise<void> {
     const deletionCounts = await this.#store.countPendingCardDeletions();
     logEvent("info", "flight_worker.card_deletions_tick", {
@@ -182,6 +208,7 @@ export class FlightWorker {
       card_deletions_claimed: cardsClaimed,
       card_deletions_queued: deletionCounts.queued,
       card_deletions_running: deletionCounts.running,
+      card_deletions_failed: deletionCounts.failed,
       card_deletions_high_attempts: deletionCounts.highAttempts,
       card_deletions_oldest_queued_age_ms: deletionCounts.oldestQueuedAgeMs,
       worker_id: this.#workerId,
