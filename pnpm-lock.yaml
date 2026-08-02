@@ -22,6 +22,9 @@ importers:
       '@agents/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      '@agents/provider-duffel':
+        specifier: workspace:*
+        version: link:../../packages/provider-duffel
       '@agents/telegram-core':
         specifier: workspace:*
         version: link:../../packages/telegram-core

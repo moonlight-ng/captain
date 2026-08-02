@@ -45,8 +45,6 @@ export type PaymentMethod = {
   id: string;
   brand: string;
   last4: string;
-  expiryMonth: number;
-  expiryYear: number;
   cardholderName: string;
   isDefault: boolean;
 };

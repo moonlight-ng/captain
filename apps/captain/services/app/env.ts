@@ -47,6 +47,14 @@ export function loadEnv(): CaptainEnv {
       if (!value) throw new Error(`Missing required production environment variable: ${name}`);
     }
   }
+  if (env.paymentsEnabled) {
+    if (!env.databaseUrl) {
+      throw new Error("DATABASE_URL is required when CAPTAIN_PAYMENTS_ENABLED is true");
+    }
+    if (!env.duffelAccessToken) {
+      throw new Error("DUFFEL_ACCESS_TOKEN is required when CAPTAIN_PAYMENTS_ENABLED is true");
+    }
+  }
   return env;
 }
 

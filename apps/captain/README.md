@@ -14,19 +14,22 @@ Traveller names and cards are collected only on Captain’s secure web pages.
   currency stays fixed; Duffel and Flysoar USD/GBP results are normalized into it.
 - The dashboard has **Flights**, **Airlines**, and **Browse** views. It only
   displays verified provider offers and never describes the set as exhaustive.
-- `/trip` and `/preferences` still use deterministic `#access` bearer links.
-  `/travellers` and `/payment` use single-use login tokens exchanged for an
-  HttpOnly session cookie. Card vault routes stay behind
-  `CAPTAIN_PAYMENTS_ENABLED` (default `false`) until Duffel approves cards.
+- `/trip` and `/preferences` still use deterministic `#access` bearer links for
+  trip and preference APIs. Passengers, payment, trip-traveller assignment, and
+  account deletion require a revocable HttpOnly session cookie (via single-use
+  login tokens). Card vault routes stay behind `CAPTAIN_PAYMENTS_ENABLED`
+  (default `false`) until Duffel approves cards; enabling payments also requires
+  `DATABASE_URL` and `DUFFEL_ACCESS_TOKEN` (memory mode refuses to start).
 - Archived trips and their evidence are retained for 90 days. `/delete_account`
-  removes the traveller, trip, sessions, passengers, payment methods, and
-  retained evidence.
+  queues remote Duffel card deletions, then removes the traveller, trip,
+  sessions, passengers, payment methods, and retained evidence.
 
 ## Architecture
 
 `apps/captain` owns Telegram onboarding, trip setup, authenticated profile and
-trip APIs, and the dashboard. `apps/flight-worker` owns scheduled searches and
-notifications. Both use `@agents/flight-store`.
+trip APIs, and the dashboard. `apps/flight-worker` owns scheduled searches,
+notifications, and the leased Duffel card-deletion queue. Both use
+`@agents/flight-store` and share `@agents/provider-duffel` for Duffel access.
 
 trip setup uses a versioned turn interpreter. It keeps one ordered list of
 dated legs, records the pending question and field provenance, and applies
