@@ -7,7 +7,8 @@ import {
   getSession,
   getTrip,
   initializeAccessToken,
-  setTripFlightSelection
+  setTripFlightSelection,
+  tripAction
 } from "./api";
 import {
   EMPTY_BROWSE_PREFERENCES,
@@ -46,7 +47,7 @@ import {
   stops,
   timestampLabel
 } from "./format";
-import { ChevronRightIcon, FilterIcon } from "./components/icons";
+import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./components/icons";
 import { FilterSheet } from "./components/FilterSheet";
 import { Preferences } from "./screens/Preferences";
 import { Travellers } from "./screens/Travellers";
@@ -89,6 +90,7 @@ export function App() {
   const [draftPreferences, setDraftPreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
   const [watchlistFocus, setWatchlistFocus] = useState<WatchlistFocus | null>(null);
   const [dismissedItineraryKeys, setDismissedItineraryKeys] = useState<string[]>([]);
+  const [searchBusy, setSearchBusy] = useState(false);
   const page = currentPage();
 
   async function load() {
@@ -121,7 +123,7 @@ export function App() {
     } catch (cause) {
       setAuthenticated(false);
       if (!(cause instanceof ApiError && cause.status === 401)) {
-        setError("Captain couldn’t load this page. Please try the latest link from Telegram.");
+        setError("Captain couldn’t load this page.");
       }
     } finally {
       setLoading(false);
@@ -131,6 +133,29 @@ export function App() {
   useEffect(() => {
     void load();
   }, []);
+
+  const trip = tripData?.trip ?? null;
+  const watch = tripData?.watch ?? null;
+  const searching = searchBusy || isWatchSearching(watch, trip);
+
+  useEffect(() => {
+    if (!searching || !trip) return;
+    let cancelled = false;
+    const tripId = trip.id;
+    const tick = async () => {
+      try {
+        const next = await getTrip(tripId);
+        if (!cancelled) setTripData(next);
+      } catch {
+        /* keep current trip data while the search runs */
+      }
+    };
+    const id = window.setInterval(() => { void tick(); }, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [searching, trip?.id]);
 
   if (loading) return <CenteredState title="Opening Captain…" detail="Loading your trip." />;
   if (!authenticated) {
@@ -197,8 +222,32 @@ export function App() {
     );
   }
 
-  const trip = tripData?.trip ?? null;
   const offers = tripData?.offers ?? [];
+  const needsManualSearch = Boolean(
+    trip && trip.status !== "paused" && watch?.status === "scheduled"
+  );
+
+  async function searchFlights() {
+    if (!trip) return;
+    setSearchBusy(true);
+    setError("");
+    try {
+      await tripAction("refresh", trip.id, trip.version);
+      setTripData(await getTrip(trip.id));
+    } catch {
+      setError("That search didn’t start. Try again.");
+    } finally {
+      setSearchBusy(false);
+    }
+  }
+
+  const emptySearch = {
+    needsManualSearch,
+    searching,
+    busy: searchBusy,
+    onSearch: () => { void searchFlights(); }
+  };
+
   return (
     <main className="shell">
       <header className="topbar">
@@ -281,6 +330,7 @@ export function App() {
                 offers={offers}
                 profile={profile!}
                 dismissedItineraryKeys={dismissedItineraryKeys}
+                emptySearch={emptySearch}
                 onOpen={(offer, mode) => {
                   setError("");
                   setWatchlistFocus({ offerId: offer.id, mode });
@@ -290,6 +340,7 @@ export function App() {
             {tab === "airlines" && (
               <AirlinesTab
                 offers={offers}
+                emptySearch={emptySearch}
                 onChoose={(airline) => {
                   const next = { ...EMPTY_BROWSE_PREFERENCES, airlines: [airline] };
                   setBrowsePreferences(next);
@@ -304,6 +355,7 @@ export function App() {
                 preferences={browsePreferences}
                 filterOpen={filterOpen}
                 draftPreferences={draftPreferences}
+                emptySearch={emptySearch}
                 onOpenFilters={() => {
                   setDraftPreferences(browsePreferences);
                   setFilterOpen(true);
@@ -331,15 +383,37 @@ export function App() {
   );
 }
 
+type EmptySearchProps = {
+  needsManualSearch: boolean;
+  searching: boolean;
+  busy: boolean;
+  onSearch: () => void;
+};
+
+function isWatchSearching(
+  watch: TripPayload["watch"] | null | undefined,
+  trip: TripPayload["trip"] | null
+): boolean {
+  if (!trip || trip.status === "paused" || !watch || watch.status !== "active") return false;
+  if (!watch.lastCheckAt) return true;
+  if (watch.lastManualRefreshAt && Date.parse(watch.lastManualRefreshAt) > Date.parse(watch.lastCheckAt)) {
+    return true;
+  }
+  if (watch.nextCheckAt && Date.parse(watch.nextCheckAt) <= Date.now() + 60_000) return true;
+  return false;
+}
+
 function FlightsTab({
   offers,
   profile,
   dismissedItineraryKeys,
+  emptySearch,
   onOpen
 }: {
   offers: VerifiedOffer[];
   profile: TravellerProfile;
   dismissedItineraryKeys: string[];
+  emptySearch: EmptySearchProps;
   onOpen: (offer: VerifiedOffer, mode: RankingMode) => void;
 }) {
   const dismissed = useMemo(() => new Set(dismissedItineraryKeys), [dismissedItineraryKeys]);
@@ -348,7 +422,7 @@ function FlightsTab({
     balanced: rankOffers(offers, "balanced", profile.preferredAirlineCodes)[0],
     fastest: rankOffers(offers, "fastest", profile.preferredAirlineCodes)[0]
   }), [offers, profile.preferredAirlineCodes]);
-  if (offers.length === 0) return <ResultsEmpty />;
+  if (offers.length === 0) return <ResultsEmpty {...emptySearch} />;
   const modes = (["cheapest", "balanced", "fastest"] as RankingMode[])
     .sort((left, right) => Number(right === profile.rankingMode) - Number(left === profile.rankingMode));
   const visible = modes
@@ -649,13 +723,15 @@ function PeerPricePlot({
 
 function AirlinesTab({
   offers,
+  emptySearch,
   onChoose
 }: {
   offers: VerifiedOffer[];
+  emptySearch: EmptySearchProps;
   onChoose: (airline: string) => void;
 }) {
   const groups = useMemo(() => airlineGroups(offers), [offers]);
-  if (groups.length === 0) return <ResultsEmpty />;
+  if (groups.length === 0) return <ResultsEmpty {...emptySearch} />;
   return (
     <>
       <div className="airline-grid">
@@ -690,6 +766,7 @@ function BrowseTab({
   preferences,
   filterOpen,
   draftPreferences,
+  emptySearch,
   onOpenFilters,
   onDraftPreferences,
   onCloseFilters,
@@ -701,6 +778,7 @@ function BrowseTab({
   preferences: BrowsePreferences;
   filterOpen: boolean;
   draftPreferences: BrowsePreferences;
+  emptySearch: EmptySearchProps;
   onOpenFilters: () => void;
   onDraftPreferences: Dispatch<SetStateAction<BrowsePreferences>>;
   onCloseFilters: () => void;
@@ -710,7 +788,7 @@ function BrowseTab({
 }) {
   const visible = useMemo(() => sortAndFilterOffers(offers, preferences), [offers, preferences]);
   const activeFilters = countFilters(preferences);
-  if (offers.length === 0) return <ResultsEmpty />;
+  if (offers.length === 0) return <ResultsEmpty {...emptySearch} />;
   return (
     <>
       <div className="browse-toolbar">
@@ -801,12 +879,30 @@ function CenteredState({ title, detail }: { title: string; detail: string }) {
   return <main className="centered"><span className="brand-mark">C</span><h1>{title}</h1><p>{detail}</p></main>;
 }
 
-function ResultsEmpty() {
+function ResultsEmpty({ needsManualSearch, searching, busy, onSearch }: EmptySearchProps) {
+  if (searching) {
+    return (
+      <div className="results-empty searching">
+        <span aria-hidden="true"><SearchRadarIcon /></span>
+        <h2>Searching for flights</h2>
+        <p>Captain is checking the internet for flights. You’ll get a notification in Telegram when options come up.</p>
+      </div>
+    );
+  }
   return (
     <div className="results-empty">
-      <span>⌁</span>
+      <span aria-hidden="true"><FlightIcon /></span>
       <h2>No flights found</h2>
-      <p>Captain is checking the internet for flights. You’ll be notified when new options come up.</p>
+      {needsManualSearch ? (
+        <>
+          <p>Regular tracking starts closer to departure. Search now to check current options.</p>
+          <button className="primary" disabled={busy} onClick={onSearch}>
+            {busy ? "Searching…" : "Search"}
+          </button>
+        </>
+      ) : (
+        <p>Captain will keep watching and notify you in Telegram when new options come up.</p>
+      )}
     </div>
   );
 }

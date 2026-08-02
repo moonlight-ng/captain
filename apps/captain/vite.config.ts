@@ -18,7 +18,18 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: apiProxyTarget,
-        changeOrigin: true
+        changeOrigin: true,
+        // Prod mutations require Origin === CAPTAIN_PUBLIC_URL. When the UI is on
+        // localhost and /api is proxied to prod, rewrite Origin so refresh/etc work.
+        configure: (proxy) => {
+          proxy.on("proxyReq", (proxyReq) => {
+            try {
+              proxyReq.setHeader("origin", new URL(apiProxyTarget).origin);
+            } catch {
+              // leave Origin unchanged if the proxy target is not a valid URL
+            }
+          });
+        }
       }
     }
   },

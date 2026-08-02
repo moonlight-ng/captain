@@ -714,12 +714,44 @@ a.offer-row:active { transform: scale(.99); }
   color: rgba(255, 255, 255, .48);
   font-size: var(--type-body);
 }
+.results-empty > span > svg {
+  width: 22px;
+  height: 22px;
+}
+.results-empty.searching > span {
+  color: rgba(255, 255, 255, .72);
+  animation: empty-search-pulse 1.8s ease-in-out infinite;
+}
+.results-empty.searching > span > svg {
+  animation: empty-search-sweep 2.4s linear infinite;
+}
+@keyframes empty-search-pulse {
+  0%, 100% { border-color: rgba(255, 255, 255, .12); box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+  50% { border-color: rgba(255, 255, 255, .28); box-shadow: 0 0 0 8px rgba(255, 255, 255, .03); }
+}
+@keyframes empty-search-sweep {
+  to { transform: rotate(360deg); }
+}
 .results-empty p, .empty-hero p, .centered p {
   max-width: 280px;
   margin: 0;
   color: var(--muted);
   font-size: var(--type-body);
   line-height: 1.55;
+}
+.results-empty > button {
+  margin-top: 18px;
+  min-height: 40px;
+  padding: 10px 22px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .1);
+  color: var(--ink);
+  font-size: var(--type-body);
+  font-weight: 600;
+}
+.results-empty > button:disabled {
+  opacity: .55;
 }
 .empty-hero h1 { margin-bottom: 10px; }
 .centered > .brand-mark { margin-bottom: 10px; }
