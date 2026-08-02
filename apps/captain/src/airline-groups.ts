@@ -4,7 +4,9 @@ export type AirlineGroup = {
   airline: string;
   offers: VerifiedOffer[];
   cheapest: VerifiedOffer;
-  fastest: VerifiedOffer;
+  priceMax: number;
+  durationMinSeconds: number;
+  durationMaxSeconds: number;
   mixed: boolean;
   stopMix: string;
   latestVerified: string;
@@ -18,17 +20,20 @@ export function airlineGroups(offers: VerifiedOffer[]): AirlineGroup[] {
       [...(groups.get(offer.primaryAirlineCode) ?? []), offer]
     );
   }
-  return [...groups.entries()].map(([airline, values]) => ({
-    airline,
-    offers: values,
-    cheapest: [...values].sort((left, right) => left.price - right.price)[0]!,
-    fastest: [...values].sort(
-      (left, right) => durationSeconds(left) - durationSeconds(right)
-    )[0]!,
-    mixed: values.some((offer) => offer.participatingAirlineCodes.length > 1),
-    stopMix: [...new Set(values.map(stopLabel))].join(", "),
-    latestVerified: values.map((offer) => offer.verifiedAt).sort().at(-1)!
-  })).sort((left, right) =>
+  return [...groups.entries()].map(([airline, values]) => {
+    const durations = values.map(durationSeconds).filter((seconds) => seconds > 0);
+    return {
+      airline,
+      offers: values,
+      cheapest: [...values].sort((left, right) => left.price - right.price)[0]!,
+      priceMax: Math.max(...values.map((offer) => offer.price)),
+      durationMinSeconds: durations.length ? Math.min(...durations) : 0,
+      durationMaxSeconds: durations.length ? Math.max(...durations) : 0,
+      mixed: values.some((offer) => offer.participatingAirlineCodes.length > 1),
+      stopMix: [...new Set(values.map(stopLabel))].join(" · "),
+      latestVerified: values.map((offer) => offer.verifiedAt).sort().at(-1)!
+    };
+  }).sort((left, right) =>
     left.cheapest.price - right.cheapest.price
     || left.airline.localeCompare(right.airline)
   );

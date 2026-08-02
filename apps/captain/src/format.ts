@@ -71,6 +71,19 @@ export function formatMoney(amount: number, currency: string): string {
   }
 }
 
+export function moneyRange(min: number, max: number, currency: string): string {
+  const low = formatMoney(min, currency);
+  if (min === max) return low;
+  return `${low} – ${formatMoney(max, currency)}`;
+}
+
+export function durationRange(minSeconds: number, maxSeconds: number): string {
+  if (minSeconds <= 0 && maxSeconds <= 0) return "Time unavailable";
+  const low = formatDurationSeconds(minSeconds);
+  if (minSeconds === maxSeconds) return low;
+  return `${low} – ${formatDurationSeconds(maxSeconds)}`;
+}
+
 export function routeLabel(trip: NonNullable<TripPayload["trip"]>): string {
   const legs = trip.brief.legs ?? [];
   return trip.brief.tripType === "multi_city" && legs.length > 0

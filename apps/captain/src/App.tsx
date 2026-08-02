@@ -30,6 +30,7 @@ import {
   countFilters,
   dateLabel,
   duration,
+  durationRange,
   durationSeconds,
   filterChips,
   formatDurationSeconds,
@@ -37,6 +38,7 @@ import {
   isMixed,
   label,
   money,
+  moneyRange,
   outboundSegments,
   peerPriceComparison,
   relativeTime,
@@ -90,6 +92,7 @@ export function App() {
   const [draftPreferences, setDraftPreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
   const [watchlistFocus, setWatchlistFocus] = useState<WatchlistFocus | null>(null);
   const [dismissedItineraryKeys, setDismissedItineraryKeys] = useState<string[]>([]);
+  const [watchedOfferCache, setWatchedOfferCache] = useState<Record<string, VerifiedOffer>>({});
   const [searchBusy, setSearchBusy] = useState(false);
   const page = currentPage();
 
@@ -145,7 +148,14 @@ export function App() {
     const tick = async () => {
       try {
         const next = await getTrip(tripId);
-        if (!cancelled) setTripData(next);
+        if (cancelled) return;
+        setTripData((current) => {
+          // Keep the last good offer set while a refresh briefly returns none.
+          if (next.offers.length === 0 && (current?.offers.length ?? 0) > 0) {
+            return { ...next, offers: current!.offers };
+          }
+          return next;
+        });
       } catch {
         /* keep current trip data while the search runs */
       }
@@ -156,6 +166,47 @@ export function App() {
       window.clearInterval(id);
     };
   }, [searching, trip?.id]);
+
+  const personSelectionKeys = useMemo(
+    () => [...new Set(
+      (tripData?.selections ?? [])
+        .filter((item) => item.selectedBy === "person")
+        .map((item) => item.itineraryKey)
+    )],
+    [tripData?.selections]
+  );
+
+  useEffect(() => {
+    if (!trip?.id) {
+      setWatchedOfferCache({});
+      return;
+    }
+    const liveOffers = tripData?.offers ?? [];
+    const selected = new Set(personSelectionKeys);
+    const stored = readWatchedOfferCache(trip.id);
+    setWatchedOfferCache((current) => {
+      const next: Record<string, VerifiedOffer> = {};
+      for (const key of selected) {
+        const live = liveOffers.find((offer) => offer.itineraryKey === key);
+        if (live) next[key] = live;
+        else if (current[key]) next[key] = current[key];
+        else if (stored[key]) next[key] = stored[key];
+      }
+      writeWatchedOfferCache(trip.id, next);
+      return next;
+    });
+  }, [trip?.id, personSelectionKeys, tripData?.offers]);
+
+  const offers = tripData?.offers ?? [];
+  const watchedOffers = useMemo(() => {
+    const items: VerifiedOffer[] = [];
+    for (const key of personSelectionKeys) {
+      const offer = watchedOfferCache[key]
+        ?? offers.find((item) => item.itineraryKey === key);
+      if (offer) items.push(offer);
+    }
+    return items;
+  }, [personSelectionKeys, watchedOfferCache, offers]);
 
   if (loading) return <CenteredState title="Opening Captain…" detail="Loading your trip." />;
   if (!authenticated) {
@@ -222,7 +273,6 @@ export function App() {
     );
   }
 
-  const offers = tripData?.offers ?? [];
   const needsManualSearch = Boolean(
     trip && trip.status !== "paused" && watch?.status === "scheduled"
   );
@@ -233,7 +283,13 @@ export function App() {
     setError("");
     try {
       await tripAction("refresh", trip.id, trip.version);
-      setTripData(await getTrip(trip.id));
+      const next = await getTrip(trip.id);
+      setTripData((current) => {
+        if (next.offers.length === 0 && (current?.offers.length ?? 0) > 0) {
+          return { ...next, offers: current!.offers };
+        }
+        return next;
+      });
     } catch {
       setError("That search didn’t start. Try again.");
     } finally {
@@ -247,6 +303,16 @@ export function App() {
     busy: searchBusy,
     onSearch: () => { void searchFlights(); }
   };
+
+  const focusOffer = watchlistFocus
+    ? offers.find((item) => item.id === watchlistFocus.offerId)
+      ?? watchedOffers.find((item) => item.id === watchlistFocus.offerId)
+      ?? null
+    : null;
+  const focusWatching = Boolean(
+    focusOffer
+    && personSelectionKeys.includes(focusOffer.itineraryKey)
+  );
 
   return (
     <main className="shell">
@@ -271,13 +337,50 @@ export function App() {
         <>
           {error && <div className="notice">{error}</div>}
           <WatchlistDetail
-            offer={offers.find((item) => item.id === watchlistFocus.offerId) ?? null}
+            offer={focusOffer}
             {...(watchlistFocus.mode ? { mode: watchlistFocus.mode } : {})}
             offers={offers}
             watch={tripData?.watch ?? null}
             activity={tripData?.activity ?? []}
             tripId={trip.id}
+            watching={focusWatching}
             onBack={() => setWatchlistFocus(null)}
+            onSelectionChange={(itineraryKey, selected) => {
+              setTripData((current) => {
+                if (!current) return current;
+                const selections = current.selections.filter((item) =>
+                  !(item.itineraryKey === itineraryKey && item.selectedBy === "person")
+                );
+                return {
+                  ...current,
+                  selections: selected
+                    ? [...selections, { itineraryKey, selectedBy: "person" as const }]
+                    : selections
+                };
+              });
+              if (selected) {
+                const offer = focusOffer?.itineraryKey === itineraryKey
+                  ? focusOffer
+                  : offers.find((item) => item.itineraryKey === itineraryKey)
+                    ?? watchedOfferCache[itineraryKey];
+                if (offer && trip) {
+                  setWatchedOfferCache((current) => {
+                    const next = { ...current, [itineraryKey]: offer };
+                    writeWatchedOfferCache(trip.id, next);
+                    return next;
+                  });
+                }
+                setDismissedItineraryKeys((current) => current.filter((key) => key !== itineraryKey));
+                setTab("flights");
+              } else if (trip) {
+                setWatchedOfferCache((current) => {
+                  const next = { ...current };
+                  delete next[itineraryKey];
+                  writeWatchedOfferCache(trip.id, next);
+                  return next;
+                });
+              }
+            }}
             onRemoved={(itineraryKey) => {
               setDismissedItineraryKeys((current) =>
                 current.includes(itineraryKey) ? current : [...current, itineraryKey]
@@ -328,12 +431,13 @@ export function App() {
             {tab === "flights" && (
               <FlightsTab
                 offers={offers}
+                watchedOffers={watchedOffers}
                 profile={profile!}
                 dismissedItineraryKeys={dismissedItineraryKeys}
                 emptySearch={emptySearch}
                 onOpen={(offer, mode) => {
                   setError("");
-                  setWatchlistFocus({ offerId: offer.id, mode });
+                  setWatchlistFocus(mode ? { offerId: offer.id, mode } : { offerId: offer.id });
                 }}
               />
             )}
@@ -405,45 +509,74 @@ function isWatchSearching(
 
 function FlightsTab({
   offers,
+  watchedOffers,
   profile,
   dismissedItineraryKeys,
   emptySearch,
   onOpen
 }: {
   offers: VerifiedOffer[];
+  watchedOffers: VerifiedOffer[];
   profile: TravellerProfile;
   dismissedItineraryKeys: string[];
   emptySearch: EmptySearchProps;
-  onOpen: (offer: VerifiedOffer, mode: RankingMode) => void;
+  onOpen: (offer: VerifiedOffer, mode?: RankingMode) => void;
 }) {
   const dismissed = useMemo(() => new Set(dismissedItineraryKeys), [dismissedItineraryKeys]);
+  const watched = useMemo(() => {
+    const seen = new Set<string>();
+    return watchedOffers.filter((offer) => {
+      if (seen.has(offer.itineraryKey)) return false;
+      seen.add(offer.itineraryKey);
+      return true;
+    });
+  }, [watchedOffers]);
+  const watchedKeys = useMemo(
+    () => new Set(watched.map((offer) => offer.itineraryKey)),
+    [watched]
+  );
   const recommendations = useMemo(() => ({
     cheapest: rankOffers(offers, "cheapest", profile.preferredAirlineCodes)[0],
     balanced: rankOffers(offers, "balanced", profile.preferredAirlineCodes)[0],
     fastest: rankOffers(offers, "fastest", profile.preferredAirlineCodes)[0]
   }), [offers, profile.preferredAirlineCodes]);
-  if (offers.length === 0) return <ResultsEmpty {...emptySearch} />;
   const modes = (["cheapest", "balanced", "fastest"] as RankingMode[])
     .sort((left, right) => Number(right === profile.rankingMode) - Number(left === profile.rankingMode));
-  const visible = modes
+  const suggested = modes
     .map((mode) => {
       const offer = recommendations[mode];
-      if (!offer || dismissed.has(offer.itineraryKey)) return null;
+      if (!offer || dismissed.has(offer.itineraryKey) || watchedKeys.has(offer.itineraryKey)) {
+        return null;
+      }
       return { mode, offer };
     })
     .filter((item): item is { mode: RankingMode; offer: VerifiedOffer } => item !== null);
-  if (visible.length === 0) {
+  if (offers.length === 0 && watched.length === 0) return <ResultsEmpty {...emptySearch} />;
+  if (watched.length === 0 && suggested.length === 0) {
     return (
       <div className="results-empty compact">
         <span>⌁</span>
         <h2>Watchlist is clear</h2>
-        <p>Removed options stay out of this list until you reload the page.</p>
+        <p>Watch a flight from the Flights tab to keep an eye on it here.</p>
       </div>
     );
   }
   return (
     <div className="recommendation-grid">
-      {visible.map(({ mode, offer }) => (
+      {watched.map((offer) => (
+        <OfferRow
+          key={`watched-${offer.itineraryKey}`}
+          offer={offer}
+          watching
+          onOpen={() => onOpen(offer)}
+        />
+      ))}
+      {watched.length > 0 && suggested.length > 0 ? (
+        <div className="watchlist-divider" role="separator">
+          <span>Recommendations</span>
+        </div>
+      ) : null}
+      {suggested.map(({ mode, offer }) => (
         <RecommendationCard
           key={`${mode}-${offer.id}`}
           offer={offer}
@@ -496,7 +629,9 @@ function WatchlistDetail({
   watch,
   activity,
   tripId,
+  watching,
   onBack,
+  onSelectionChange,
   onRemoved,
   onError
 }: {
@@ -506,11 +641,13 @@ function WatchlistDetail({
   watch: Watch | null;
   activity: TripPayload["activity"];
   tripId: string;
+  watching: boolean;
   onBack: () => void;
+  onSelectionChange: (itineraryKey: string, selected: boolean) => void;
   onRemoved: (itineraryKey: string) => void;
   onError: (message: string) => void;
 }) {
-  const [removing, setRemoving] = useState(false);
+  const [busy, setBusy] = useState(false);
   if (!offer) {
     return (
       <section className="watchlist-detail">
@@ -527,15 +664,20 @@ function WatchlistDetail({
   const outbound = outboundSegments(offer.snapshot.segments ?? []);
   const comparison = peerPriceComparison(offer, offers);
 
-  async function remove() {
-    setRemoving(true);
+  async function toggleWatchlist() {
+    setBusy(true);
     onError("");
+    const next = !watching;
     try {
-      await setTripFlightSelection(tripId, offer!.itineraryKey, false);
-      onRemoved(offer!.itineraryKey);
+      await setTripFlightSelection(tripId, offer!.itineraryKey, next);
+      onSelectionChange(offer!.itineraryKey, next);
+      if (!next) onRemoved(offer!.itineraryKey);
+      else setBusy(false);
     } catch (cause) {
-      onError(cause instanceof ApiError ? cause.message : "Couldn’t remove that option.");
-      setRemoving(false);
+      onError(cause instanceof ApiError ? cause.message : next
+        ? "Couldn’t add that option."
+        : "Couldn’t remove that option.");
+      setBusy(false);
     }
   }
 
@@ -543,14 +685,21 @@ function WatchlistDetail({
     <section className="watchlist-detail">
       <header className="watchlist-detail-header">
         <button type="button" className="back-link" onClick={onBack}>Back</button>
-        <span className="mode-label">
-          {mode ? label(mode) : airlineName(offer.primaryAirlineCode, [offer])}
-        </span>
+        <button
+          type="button"
+          className={`watchlist-toggle${watching ? " watching" : ""}`}
+          aria-pressed={watching}
+          disabled={busy}
+          onClick={() => { void toggleWatchlist(); }}
+        >
+          {busy ? (watching ? "Removing…" : "Adding…") : watching ? "Watching" : "Watch"}
+        </button>
       </header>
 
       <div className="watchlist-detail-summary">
         <strong className="price">{money(offer)}</strong>
         <p className="watchlist-airline">
+          {mode ? `${label(mode)} · ` : ""}
           {airlineName(offer.primaryAirlineCode, [offer])}
           {isMixed(offer) ? ` · Mixed · ${offer.participatingAirlineCodes.join(", ")}` : ""}
         </p>
@@ -621,30 +770,27 @@ function WatchlistDetail({
           </div>
         </dl>
         {activity.length > 0 ? (
-          <div className="activity-list">
-            {activity.slice(0, 8).map((item) => (
-              <article key={item.id}>
-                <i />
-                <span>
-                  <strong>{activityLabel(item.eventType)}</strong>
-                  <small>{timestampLabel(item.createdAt)}</small>
-                </span>
-              </article>
-            ))}
-          </div>
+          <details className="activity-disclosure">
+            <summary>
+              <span>Recent activity</span>
+              <em>{Math.min(activity.length, 8)}</em>
+            </summary>
+            <div className="activity-list">
+              {activity.slice(0, 8).map((item) => (
+                <article key={item.id}>
+                  <i />
+                  <span>
+                    <strong>{activityLabel(item.eventType)}</strong>
+                    <small>{timestampLabel(item.createdAt)}</small>
+                  </span>
+                </article>
+              ))}
+            </div>
+          </details>
         ) : (
           <p className="set-note">Activity appears here as Captain works.</p>
         )}
       </div>
-
-      <button
-        type="button"
-        className="remove-watchlist"
-        disabled={removing}
-        onClick={() => { void remove(); }}
-      >
-        {removing ? "Removing…" : "Remove from watchlist"}
-      </button>
     </section>
   );
 }
@@ -747,13 +893,24 @@ function AirlinesTab({
                 Carriers: {[...new Set(group.offers.flatMap((offer) => offer.participatingAirlineCodes))].join(", ")}
               </p>
             )}
-            <dl>
-              <div><dt>Lowest fare</dt><dd>{money(group.cheapest)}</dd></div>
-              <div><dt>Shortest</dt><dd>{duration(group.fastest)}</dd></div>
-              <div><dt>Stops</dt><dd>{group.stopMix}</dd></div>
-              <div><dt>Results</dt><dd>{group.offers.length}</dd></div>
-            </dl>
-            <p>Checked {relativeTime(group.latestVerified)}</p>
+            <ul className="airline-stats">
+              <li>
+                <span>Price</span>
+                <strong>{moneyRange(group.cheapest.price, group.priceMax, group.cheapest.currency)}</strong>
+              </li>
+              <li>
+                <span>Duration</span>
+                <strong>{durationRange(group.durationMinSeconds, group.durationMaxSeconds)}</strong>
+              </li>
+              <li>
+                <span>Stops</span>
+                <strong>{group.stopMix}</strong>
+              </li>
+              <li>
+                <span>Flights</span>
+                <strong>{group.offers.length}</strong>
+              </li>
+            </ul>
           </button>
         ))}
       </div>
@@ -838,13 +995,26 @@ function BrowseTab({
   );
 }
 
-function OfferRow({ offer, onOpen }: { offer: VerifiedOffer; onOpen: () => void }) {
+function OfferRow({
+  offer,
+  watching = false,
+  onOpen
+}: {
+  offer: VerifiedOffer;
+  watching?: boolean;
+  onOpen: () => void;
+}) {
   const schedule = offerScheduleSpine(offer);
   return (
-    <button type="button" className="recommendation-card" onClick={onOpen}>
+    <button
+      type="button"
+      className={`recommendation-card${watching ? " selected" : ""}`}
+      onClick={onOpen}
+    >
       <div className="card-top">
         <span className="mode-label">{airlineName(offer.primaryAirlineCode, [offer])}</span>
-        {isMixed(offer) && <span className="pill">Mixed</span>}
+        {watching ? <span className="pill">Watching</span> : null}
+        {!watching && isMixed(offer) ? <span className="pill">Mixed</span> : null}
       </div>
       <strong className="price">{money(offer)}</strong>
       <div className="metrics">
@@ -864,6 +1034,7 @@ function agentRunningLabel(
 ): string {
   if (!trip) return "";
   if (trip.status === "paused" || watch?.status === "paused") return "Paused";
+  if (watch?.lastCheckAt) return `Checked ${relativeTime(watch.lastCheckAt)}`;
   if (watch?.status === "scheduled" && watch.trackingStartsAt) {
     return `Scheduled · starts ${dateLabel(watch.trackingStartsAt.slice(0, 10))}`;
   }
@@ -871,7 +1042,6 @@ function agentRunningLabel(
     const next = scheduleTime(watch.nextCheckAt);
     return next === "Due now" ? "Checking soon" : `Next check ${next.toLowerCase()}`;
   }
-  if (watch?.lastCheckAt) return `Checked ${relativeTime(watch.lastCheckAt)}`;
   return "Tracking";
 }
 
@@ -989,4 +1159,27 @@ function ScheduleSpine({ spine }: { spine: ScheduleSpineData }) {
       ))}
     </div>
   );
+}
+
+function watchedOfferCacheKey(tripId: string) {
+  return `captain:watched-offers:${tripId}`;
+}
+
+function readWatchedOfferCache(tripId: string): Record<string, VerifiedOffer> {
+  try {
+    const raw = sessionStorage.getItem(watchedOfferCacheKey(tripId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, VerifiedOffer>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeWatchedOfferCache(tripId: string, cache: Record<string, VerifiedOffer>) {
+  try {
+    sessionStorage.setItem(watchedOfferCacheKey(tripId), JSON.stringify(cache));
+  } catch {
+    /* ignore quota / private mode failures */
+  }
 }
