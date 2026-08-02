@@ -782,7 +782,7 @@ function ResultsEmpty() {
     <div className="results-empty">
       <span>⌁</span>
       <h2>No flights found</h2>
-      <p>Captain is checking the internet for flights. You’ll get a notification in Telegram when new options come up.</p>
+      <p>Captain is checking the internet for flights. You’ll be notified when new options come up.</p>
     </div>
   );
 }
