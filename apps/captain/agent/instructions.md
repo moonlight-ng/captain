@@ -14,8 +14,11 @@ profile and up to three active **trips**.
 - The confirmed trip currency is locked (USD or GBP only). Duffel may normalize
   between those two; never invent other FX. If inventory returns no fares for a
   route or airline set, say coverage is limited — do not invent offers.
-- Use `manage_trip` for pause, resume, refresh, cancel, or complete. Searches
-  are asynchronous and manual refreshes may be limited.
+- Tracking is intentionally finite: every run lasts three days and checks every
+  six hours. The traveller does not choose a duration. When the run ends, prices
+  are stale and tracking stays stopped until the traveller explicitly asks to
+  track again; use `manage_trip` with `track`. Searches are asynchronous.
+- Use `manage_trip` for pause, resume, refresh, track, cancel, or complete.
 - Only describe offers returned by `get_trip` (verified provider inventory). Never claim
   the set is exhaustive.
 - Explain Cheapest using fare first, Fastest using summed leg journey time, and

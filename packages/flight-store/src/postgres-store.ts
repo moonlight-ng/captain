@@ -68,7 +68,7 @@ import {
   PRICE_HISTORY_RETENTION_MS,
   retainSearchOffers,
   TRACKING_SEARCH_SPEC_LIMIT,
-  trackingStartsAt,
+  trackingRunEndsAt,
   INACTIVITY_AUTO_PAUSE_MS,
   INACTIVITY_CHECKIN_MS
 } from "./watch-policy.js";
@@ -1312,15 +1312,20 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         where id = ${tripId}
         returning *
       `;
-      const startsAt = trackingStartsAt(input.brief.departureWindow.start);
-      const futureTracking = startsAt.getTime() > now.getTime();
+      const durationHours = 72 as const;
       const watches = await tx<Array<{ id: string }>>`
         update captain.watches set
           status = 'active',
+          cadence_hours = 6,
+          tracking_duration_hours = ${durationHours},
+          run_started_at = ${now},
+          run_ends_at = ${trackingRunEndsAt(now)},
+          completed_at = null,
+          checks_completed = 0,
           next_check_at = ${now},
-          tracking_starts_at = ${futureTracking ? startsAt : null},
+          tracking_starts_at = null,
           baseline_completed_at = null,
-          activated_at = ${futureTracking ? null : now},
+          activated_at = ${now},
           last_user_activity_at = ${now},
           check_in_sent_at = null,
           auto_pause_at = null,
@@ -1552,31 +1557,37 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         update captain.trips set status = ${status}, version = version + 1, updated_at = ${now}
         where id = ${tripId} returning *
       `;
-      const watches = await tx<WatchRow[]>`
+      await tx<WatchRow[]>`
         select * from captain.watches where trip_id = ${tripId} for update
       `;
-      const currentWatch = watches[0];
-      const futureScheduled = Boolean(
-        currentWatch?.tracking_starts_at
-        && currentWatch.tracking_starts_at.getTime() > now.getTime()
-        && currentWatch.baseline_completed_at
-      );
       const watchStatus = status === "paused"
         ? "paused"
         : ["cancelled", "completed"].includes(status)
           ? "completed"
-          : action.type === "resume" && futureScheduled
-            ? "scheduled"
-            : "active";
+          : "active";
+      const durationHours = 72 as const;
       await tx`
         update captain.watches set status = ${watchStatus},
+          tracking_duration_hours = case
+            when ${action.type} = 'track' then ${durationHours}
+            else tracking_duration_hours
+          end,
+          run_started_at = case when ${action.type} = 'track' then ${now} else run_started_at end,
+          run_ends_at = case
+            when ${action.type} = 'track' then ${trackingRunEndsAt(now)}
+            else run_ends_at
+          end,
+          completed_at = case when ${action.type} = 'track' then null else completed_at end,
+          checks_completed = case when ${action.type} = 'track' then 0 else checks_completed end,
           next_check_at = case
+            when ${action.type} = 'track' then ${now}
             when ${action.type} = 'refresh' then ${now}
-            when ${action.type} = 'resume' and ${futureScheduled}
-              then tracking_starts_at
             when ${action.type} = 'resume' then ${now}
             else next_check_at
           end,
+          activated_at = case when ${action.type} = 'track' then ${now} else activated_at end,
+          delayed_at = case when ${action.type} = 'track' then null else delayed_at end,
+          delay_reason = case when ${action.type} = 'track' then null else delay_reason end,
           last_manual_refresh_at = case when ${action.type} = 'refresh' then ${now} else last_manual_refresh_at end,
           last_user_activity_at = ${now},
           check_in_sent_at = null,
@@ -1823,6 +1834,10 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
                 and watch.next_check_at <= ${now}
               )
               or (
+                watch.status = 'active'
+                and watch.run_ends_at <= ${now}
+              )
+              or (
                 watch.status = 'scheduled'
                 and watch.tracking_starts_at is not null
                 and watch.tracking_starts_at <= ${now}
@@ -1898,20 +1913,29 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       departure_date: string | null;
       watch_status: Watch["status"];
       tracking_starts_at: Date | null;
+      tracking_duration_hours: 72;
+      run_started_at: Date;
+      run_ends_at: Date;
+      checks_completed: number;
       last_user_activity_at: Date;
       check_in_sent_at: Date | null;
       auto_pause_at: Date | null;
       notification_mode: TravellerProfile["notificationMode"];
       tracking_checkins_enabled: boolean;
+      recommendation_summary: string | null;
     }>>`
       select watch.id as watch_id, trip.id as trip_id, trip.user_id, trip.title,
         trip.brief #>> '{departureWindow,start}' as departure_date,
         watch.status as watch_status, watch.tracking_starts_at,
+        watch.tracking_duration_hours, watch.run_started_at, watch.run_ends_at,
+        watch.checks_completed,
         watch.last_user_activity_at, watch.check_in_sent_at, watch.auto_pause_at,
-        profile.notification_mode, profile.tracking_checkins_enabled
+        profile.notification_mode, profile.tracking_checkins_enabled,
+        recommendation.summary as recommendation_summary
       from captain.watches watch
       join captain.trips trip on trip.id = watch.trip_id
       join captain.traveller_profiles profile on profile.user_id = trip.user_id
+      left join captain.trip_recommendations recommendation on recommendation.trip_id = trip.id
       where watch.status in ('active', 'scheduled')
         and trip.status not in ('cancelled', 'completed', 'archived')
         and (
@@ -1919,6 +1943,17 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
             watch.status = 'scheduled'
             and watch.tracking_starts_at is not null
             and watch.tracking_starts_at <= ${now}
+          )
+          or (
+            watch.status = 'active'
+            and watch.run_ends_at <= ${now}
+            and not exists (
+              select 1
+              from captain.watch_search_specs link
+              join captain.search_runs run on run.search_spec_id = link.search_spec_id
+              where link.watch_id = watch.id
+                and run.status in ('queued', 'running', 'deferred')
+            )
           )
           or (
             watch.status = 'active'
@@ -1938,7 +1973,70 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     let activated = 0;
     let checkInsQueued = 0;
     let autoPaused = 0;
+    let completed = 0;
     for (const row of rows) {
+      if (row.watch_status === "active" && row.run_ends_at.getTime() <= now.getTime()) {
+        const didComplete = await this.#sql.begin(async (tx) => {
+          const watches = await tx<Array<{ id: string }>>`
+            update captain.watches set
+              status = 'completed',
+              next_check_at = null,
+              completed_at = ${now},
+              check_in_sent_at = null,
+              auto_pause_at = null,
+              updated_at = ${now}
+            where id = ${row.watch_id}
+              and status = 'active'
+              and run_ends_at <= ${now}
+              and not exists (
+                select 1
+                from captain.watch_search_specs link
+                join captain.search_runs run on run.search_spec_id = link.search_spec_id
+                where link.watch_id = ${row.watch_id}
+                  and run.status in ('queued', 'running', 'deferred')
+              )
+            returning id
+          `;
+          if (!watches[0]) return false;
+          await tx`
+            update captain.trips set
+              status = 'recommended',
+              version = version + 1,
+              updated_at = ${now}
+            where id = ${row.trip_id}
+          `;
+          await tx`
+            insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
+            values (
+              ${randomUUID()}, ${row.trip_id}, ${row.user_id}, 'tracking_completed',
+              ${tx.json(json({
+                durationHours: row.tracking_duration_hours,
+                checksCompleted: row.checks_completed,
+                recommendationSummary: row.recommendation_summary
+              }))}, ${now}
+            )
+          `;
+          return true;
+        });
+        if (!didComplete) continue;
+        if (row.notification_mode !== "off") {
+          await enqueueNotification(this.#sql, {
+            userId: row.user_id,
+            tripId: row.trip_id,
+            kind: "tracking_summary",
+            dedupKey: `${row.trip_id}:tracking_summary:${row.run_started_at.toISOString()}`,
+            payload: {
+              tripTitle: row.title,
+              durationHours: row.tracking_duration_hours,
+              checksCompleted: row.checks_completed,
+              summary: row.recommendation_summary ?? "The latest verified options are ready to review."
+            },
+            now
+          });
+        }
+        completed += 1;
+        continue;
+      }
       if (
         row.watch_status === "scheduled"
         && row.tracking_starts_at
@@ -2051,7 +2149,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         if (queued) checkInsQueued += 1;
       }
     }
-    return { activated, checkInsQueued, autoPaused };
+    return { activated, checkInsQueued, autoPaused, completed };
   }
 
   async finalizeFarFutureBaseline(searchSpecId: string, now: Date): Promise<void> {
@@ -2212,12 +2310,15 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         id: string;
         trip_id: string;
         cadence_hours: number;
+        run_ends_at: Date;
         brief: Trip["brief"];
       }>>`
-        select watch.id, watch.trip_id, watch.cadence_hours, trip.brief
+        select watch.id, watch.trip_id, watch.cadence_hours, watch.run_ends_at, trip.brief
         from captain.watches watch
         join captain.trips trip on trip.id = watch.trip_id
-        where watch.status = 'active' and watch.next_check_at <= ${now}
+        where watch.status = 'active'
+          and watch.next_check_at <= ${now}
+          and watch.run_ends_at > ${now}
         order by watch.next_check_at asc limit ${limit}
         for update skip locked
       `;
@@ -2267,10 +2368,13 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           scheduled += 1;
         }
         await tx`
-          update captain.watches set next_check_at = ${new Date(now.getTime() + adaptiveWatchIntervalMs(
-            watch.cadence_hours,
-            watch.brief.departureWindow.start,
-            now
+          update captain.watches set next_check_at = ${new Date(Math.min(
+            watch.run_ends_at.getTime(),
+            now.getTime() + adaptiveWatchIntervalMs(
+              watch.cadence_hours,
+              watch.brief.departureWindow.start,
+              now
+            )
           ))}, updated_at = ${now}
           where id = ${watch.id}
         `;
@@ -2338,6 +2442,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       if (retainedOffers.length === 0) {
         await tx`
           update captain.watches watch set last_check_at = ${now},
+            checks_completed = checks_completed + 1,
             delayed_at = ${now},
             delay_reason = ${"No fares were found in the latest check."},
             updated_at = ${now}
@@ -2392,6 +2497,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       `;
       await tx`
         update captain.watches watch set last_check_at = ${now},
+          checks_completed = checks_completed + 1,
           delayed_at = null, delay_reason = null, updated_at = ${now}
         from captain.watch_search_specs link
         where link.watch_id = watch.id and link.search_spec_id = ${run.search_spec_id}
@@ -2922,8 +3028,7 @@ async function createTripInTransaction(
   }
   const tripId = randomUUID();
   const watchId = randomUUID();
-  const startsAt = trackingStartsAt(input.brief.departureWindow.start);
-  const futureTracking = startsAt.getTime() > now.getTime();
+  const runEndsAt = trackingRunEndsAt(now);
   await sql`
     insert into captain.trips (
       id, user_id, title, status, version, brief, created_at, updated_at
@@ -2934,12 +3039,14 @@ async function createTripInTransaction(
   `;
   await sql`
     insert into captain.watches (
-      id, trip_id, status, cadence_hours, next_check_at,
+      id, trip_id, status, cadence_hours, tracking_duration_hours,
+      run_started_at, run_ends_at, checks_completed, next_check_at,
       tracking_starts_at, activated_at, last_user_activity_at,
       created_at, updated_at
     ) values (
-      ${watchId}, ${tripId}, 'active', ${input.cadenceHours}, ${now},
-      ${futureTracking ? startsAt : null}, ${futureTracking ? null : now}, ${now},
+      ${watchId}, ${tripId}, 'active', ${input.cadenceHours}, ${input.trackingDurationHours},
+      ${now}, ${runEndsAt}, 0, ${now},
+      null, ${now}, ${now},
       ${now}, ${now}
     )
   `;
@@ -2970,12 +3077,17 @@ async function createTripInTransaction(
       tripId,
       status: "active",
       cadenceHours: input.cadenceHours,
+      trackingDurationHours: input.trackingDurationHours,
+      runStartedAt: now.toISOString(),
+      runEndsAt: runEndsAt.toISOString(),
+      completedAt: null,
+      checksCompleted: 0,
       nextCheckAt: now.toISOString(),
       lastCheckAt: null,
       lastManualRefreshAt: null,
-      trackingStartsAt: futureTracking ? startsAt.toISOString() : null,
+      trackingStartsAt: null,
       baselineCompletedAt: null,
-      activatedAt: futureTracking ? null : now.toISOString(),
+      activatedAt: now.toISOString(),
       lastUserActivityAt: now.toISOString(),
       checkInSentAt: null,
       autoPauseAt: null,
@@ -3111,7 +3223,7 @@ function localParts(now: Date, timezone: string): { date: string; hour: number }
 
 function actionStatus(action: TripAction["type"], current: TripStatus): TripStatus {
   if (action === "pause") return "paused";
-  if (action === "resume" || action === "refresh") return "tracking";
+  if (["resume", "refresh", "track"].includes(action)) return "tracking";
   if (action === "cancel") return "cancelled";
   if (action === "complete") return "completed";
   return current;
@@ -3144,6 +3256,9 @@ type OfferRow = {
 };
 type WatchRow = {
   id: string; trip_id: string; status: Watch["status"]; cadence_hours: number;
+  tracking_duration_hours: 72;
+  run_started_at: Date; run_ends_at: Date; completed_at: Date | null;
+  checks_completed: number;
   next_check_at: Date | null; last_check_at: Date | null;
   last_manual_refresh_at: Date | null;
   tracking_starts_at: Date | null; baseline_completed_at: Date | null;
@@ -3307,6 +3422,11 @@ function toOffer(row: OfferRow): OfferSnapshot {
 function toWatch(row: WatchRow): Watch {
   return {
     id: row.id, tripId: row.trip_id, status: row.status, cadenceHours: row.cadence_hours,
+    trackingDurationHours: row.tracking_duration_hours,
+    runStartedAt: iso(row.run_started_at),
+    runEndsAt: iso(row.run_ends_at),
+    completedAt: row.completed_at ? iso(row.completed_at) : null,
+    checksCompleted: row.checks_completed,
     nextCheckAt: row.next_check_at ? iso(row.next_check_at) : null,
     lastCheckAt: row.last_check_at ? iso(row.last_check_at) : null,
     lastManualRefreshAt: row.last_manual_refresh_at ? iso(row.last_manual_refresh_at) : null,

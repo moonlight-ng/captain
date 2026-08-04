@@ -6,7 +6,7 @@ import { getCaptainServices } from "../../services/app/services.js";
 import { requireCaptainUser } from "../lib/principal.js";
 
 export default defineTool({
-  description: "Pause, resume, refresh, cancel, or complete a trip. Refresh wakes its Watch; the orchestration worker performs the search asynchronously.",
+  description: "Pause, resume, refresh, explicitly track stale prices again for three days, cancel, or complete a trip. Searches run asynchronously.",
   inputSchema: z.object({ tripId: z.uuid().optional(), action: tripActionSchema }).strict(),
   async execute({ tripId, action }, ctx) {
     const services = await getCaptainServices();

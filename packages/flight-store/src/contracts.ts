@@ -164,7 +164,8 @@ export type CaptainNotification = {
     | "price_rise"
     | "tracking_activation"
     | "tracking_checkin"
-    | "tracking_paused";
+    | "tracking_paused"
+    | "tracking_summary";
   payload: Record<string, unknown>;
   attempts: number;
   telegramMessageId: number | null;
@@ -174,6 +175,7 @@ export type TrackingMaintenance = {
   activated: number;
   checkInsQueued: number;
   autoPaused: number;
+  completed: number;
 };
 
 export type LoginTokenRecord = {

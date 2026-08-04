@@ -8,9 +8,9 @@ export const WATCH_DATA_PRUNE_INTERVAL_MS = 24 * 3_600_000;
 export const MAX_RETAINED_OFFERS_PER_SEARCH = 60;
 /** Trips carried in one daily digest, newest-updated first. */
 export const DIGEST_TRIP_LIMIT = 3;
-export const TRACKING_WINDOW_DAYS = 30;
 export const INACTIVITY_CHECKIN_MS = 7 * 86_400_000;
 export const INACTIVITY_AUTO_PAUSE_MS = 48 * 3_600_000;
+export const TRACKING_CHECK_INTERVAL_MS = 6 * 3_600_000;
 
 export function retainSearchOffers(offers: CompletedProviderOffer[]): CompletedProviderOffer[] {
   const bestByItinerary = new Map<string, CompletedProviderOffer>();
@@ -57,27 +57,14 @@ export function compactOfferSnapshot(snapshot: Record<string, unknown>): Record<
 }
 
 export function adaptiveWatchIntervalMs(cadenceHours: number, departureStart: string, now: Date): number {
-  const departure = Date.parse(`${departureStart}T00:00:00.000Z`);
-  const daysUntilDeparture = Number.isFinite(departure)
-    ? Math.ceil((departure - now.getTime()) / 86_400_000)
-    : 0;
-  const adaptiveFloor = daysUntilDeparture < 0
-    ? 24
-    : daysUntilDeparture > 7
-      ? 6
-      : 3;
   void cadenceHours;
-  return adaptiveFloor * 3_600_000;
+  void departureStart;
+  void now;
+  return TRACKING_CHECK_INTERVAL_MS;
 }
 
-export function trackingStartsAt(departureStart: string): Date {
-  const departure = Date.parse(`${departureStart}T00:00:00.000Z`);
-  if (!Number.isFinite(departure)) throw new Error("Invalid departure date");
-  return new Date(departure - TRACKING_WINDOW_DAYS * 86_400_000);
-}
-
-export function requiresScheduledTracking(departureStart: string, now: Date): boolean {
-  return trackingStartsAt(departureStart).getTime() > now.getTime();
+export function trackingRunEndsAt(startedAt: Date): Date {
+  return new Date(startedAt.getTime() + 72 * 3_600_000);
 }
 
 function compareOffers(left: CompletedProviderOffer, right: CompletedProviderOffer): number {

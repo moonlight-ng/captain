@@ -39,6 +39,7 @@ export default defineChannel({
     GET("/ready", readiness),
     GET("/", serveIndex),
     GET("/trip", serveIndex),
+    GET("/trip/:id", serveIndex),
     GET("/profile", serveIndex),
     GET("/settings", serveIndex),
     GET("/preferences", serveIndex),

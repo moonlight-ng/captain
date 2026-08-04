@@ -50,7 +50,9 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
 
 export function formatTripCreationReceipt(receipt: TripCreationReceipt): string {
   return [
-    receipt.created ? "Your trip is saved and tracking." : "That trip was already saved; I’m using the existing one.",
+    receipt.created
+      ? "Your trip is saved. I’ve started a three-day price watch, checking every six hours."
+      : "That trip was already saved; I’m using the existing one.",
     "",
     ...formatTripSummaryLines(receipt),
     "",

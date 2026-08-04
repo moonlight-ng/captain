@@ -16,9 +16,13 @@ export function initializeAccessToken(): boolean {
 }
 
 export function accessHref(path: "/trip" | "/profile", tripId?: string): string {
-  const search = tripId ? `?${new URLSearchParams({ trip: tripId }).toString()}` : "";
-  if (!accessToken) return `${path}${search}`;
-  return `${path}${search}#${new URLSearchParams({ access: accessToken }).toString()}`;
+  const target = path === "/trip" && tripId
+    ? `/trip/${encodeURIComponent(tripId)}`
+    : `${path}${path === "/profile" && tripId
+      ? `?${new URLSearchParams({ trip: tripId }).toString()}`
+      : ""}`;
+  if (!accessToken) return target;
+  return `${target}#${new URLSearchParams({ access: accessToken }).toString()}`;
 }
 
 export function getSession(): Promise<{
@@ -66,7 +70,7 @@ export function getTrip(tripId?: string): Promise<TripPayload> {
 }
 
 export async function tripAction(
-  type: "pause" | "resume" | "refresh" | "cancel",
+  type: "pause" | "resume" | "refresh" | "track" | "cancel",
   tripId: string,
   expectedVersion: number
 ): Promise<void> {
