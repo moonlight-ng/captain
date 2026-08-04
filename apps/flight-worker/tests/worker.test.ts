@@ -188,7 +188,7 @@ describe("flight worker orchestration", () => {
       { status: 200, headers: { "content-type": "application/json" } }
     )));
     const result = await worker.tick(new Date("2026-08-01T12:00:00Z"));
-    expect(result).toEqual({ scheduled: 1, processed: 1, notified: 0, cardsDeleted: 0 });
+    expect(result).toEqual({ scheduled: 1, processed: 1, notified: 1, cardsDeleted: 0 });
     expect(search).toHaveBeenCalledTimes(1);
     const trip = (await store.listTrips(user.id))[0]!;
     expect(await store.getRecommendation(user.id, trip.id)).toMatchObject({
@@ -198,6 +198,10 @@ describe("flight worker orchestration", () => {
           evidence: [{ url: "https://ba.com/flight" }]
         }
       }
+    });
+    expect(await store.getNotificationByTelegramMessage(user.id, 42)).toMatchObject({
+      kind: "daily_digest",
+      telegramMessageId: 42
     });
     vi.unstubAllGlobals();
   });
