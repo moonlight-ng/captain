@@ -1016,13 +1016,17 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     await this.#sql.begin(async (tx) => {
       await tx`select pg_advisory_xact_lock(hashtext(${`${userId}:payment_methods`}))`;
       const rows = await tx<PaymentMethodRow[]>`
-        update captain.payment_methods
-        set status = 'removed', is_default = false, updated_at = ${now}
+        select * from captain.payment_methods
         where user_id = ${userId} and id = ${paymentMethodId} and status = 'active'
-        returning *
+        for update
       `;
       const method = rows[0];
       if (!method) return;
+      await tx`
+        update captain.payment_methods
+        set status = 'removed', is_default = false, updated_at = ${now}
+        where id = ${method.id}
+      `;
       await enqueueCardDeletion(tx, method, now);
       if (method.is_default) {
         await tx`
