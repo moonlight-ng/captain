@@ -81,6 +81,6 @@ describe("passenger schemas", () => {
     // @ts-expect-error payment is a CaptainSessionPath, not a CaptainWebPath
     createCaptainAccessLink("https://captain.example", "/payment", "11111111-1111-4111-8111-111111111111", "secret");
     expectTypeOf<Parameters<typeof createCaptainAccessLink>[1]>()
-      .toEqualTypeOf<"/trip" | "/preferences" | "/settings">();
+      .toEqualTypeOf<"/trip" | "/profile" | "/preferences" | "/settings">();
   });
 });

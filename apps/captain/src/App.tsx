@@ -51,6 +51,14 @@ import {
 } from "./format";
 import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./components/icons";
 import { FilterSheet } from "./components/FilterSheet";
+import {
+  createMockBooking,
+  readMockBooking,
+  removeMockBooking,
+  writeMockBooking,
+  type MockBooking
+} from "./mock-booking";
+import { BookedFlight } from "./screens/BookedFlight";
 import { Preferences } from "./screens/Preferences";
 
 type Tab = "flights" | "airlines" | "browse";
@@ -60,12 +68,12 @@ const tabLabels: Record<Tab, string> = {
   browse: "Flights"
 };
 
-type Page = "trip" | "settings";
+type Page = "trip" | "profile";
 
 function currentPage(): Page {
-  return ["/settings", "/preferences", "/travellers", "/payment"].includes(
+  return ["/profile", "/settings", "/preferences", "/travellers", "/payment"].includes(
     window.location.pathname
-  ) ? "settings" : "trip";
+  ) ? "profile" : "trip";
 }
 
 type WatchlistFocus = {
@@ -90,6 +98,7 @@ export function App() {
   const [dismissedItineraryKeys, setDismissedItineraryKeys] = useState<string[]>([]);
   const [watchedOfferCache, setWatchedOfferCache] = useState<Record<string, VerifiedOffer>>({});
   const [searchBusy, setSearchBusy] = useState(false);
+  const [mockBooking, setMockBooking] = useState<MockBooking | null>(null);
   const page = currentPage();
 
   async function load() {
@@ -120,8 +129,8 @@ export function App() {
   }
 
   useEffect(() => {
-    if (["/preferences", "/travellers", "/payment"].includes(window.location.pathname)) {
-      window.history.replaceState(null, "", `/settings${window.location.search}${window.location.hash}`);
+    if (["/settings", "/preferences", "/travellers", "/payment"].includes(window.location.pathname)) {
+      window.history.replaceState(null, "", `/profile${window.location.search}${window.location.hash}`);
     }
     void load();
   }, []);
@@ -129,6 +138,10 @@ export function App() {
   const trip = tripData?.trip ?? null;
   const watch = tripData?.watch ?? null;
   const searching = searchBusy || isWatchSearching(watch, trip);
+
+  useEffect(() => {
+    setMockBooking(trip?.id ? readMockBooking(trip.id) : null);
+  }, [trip?.id]);
 
   useEffect(() => {
     if (!searching || !trip) return;
@@ -202,11 +215,11 @@ export function App() {
     return (
       <CenteredState
         title="Open Captain from Telegram"
-        detail={error || "Use Open trip or Agent settings from Captain in Telegram."}
+        detail={error || "Use Open trip or Profile from Captain in Telegram."}
       />
     );
   }
-  if (page === "settings" && profile) {
+  if (page === "profile" && profile) {
     return (
       <Preferences
         profile={profile}
@@ -272,8 +285,8 @@ export function App() {
           <span>Captain</span>
         </a>
         <div className="top-actions">
-          <span className="name">{agentRunningLabel(tripData?.watch, trip)}</span>
-          <a className="quiet-link" href={accessHref("/settings", trip?.id)}>Settings</a>
+          <span className="name">{mockBooking ? "Mock booking" : agentRunningLabel(tripData?.watch, trip)}</span>
+          <a className="quiet-link" href={accessHref("/profile", trip?.id)}>Profile</a>
         </div>
       </header>
 
@@ -283,6 +296,18 @@ export function App() {
           <h1>Tell Captain where you want to go.</h1>
           <p>Return to Telegram to create a trip. Captain can track up to three at once.</p>
         </section>
+      ) : mockBooking && mockBooking.tripId === trip.id ? (
+        <BookedFlight
+          booking={mockBooking}
+          onChange={(next) => {
+            setMockBooking(next);
+            writeMockBooking(next);
+          }}
+          onReset={() => {
+            removeMockBooking(trip.id);
+            setMockBooking(null);
+          }}
+        />
       ) : watchlistFocus ? (
         <>
           {error && <div className="notice">{error}</div>}
@@ -295,6 +320,12 @@ export function App() {
             tripId={trip.id}
             watching={focusWatching}
             onBack={() => setWatchlistFocus(null)}
+            onBook={(offer) => {
+              const booking = createMockBooking(trip.id, offer);
+              writeMockBooking(booking);
+              setMockBooking(booking);
+              setWatchlistFocus(null);
+            }}
             onSelectionChange={(itineraryKey, selected) => {
               setTripData((current) => {
                 if (!current) return current;
@@ -581,6 +612,7 @@ function WatchlistDetail({
   tripId,
   watching,
   onBack,
+  onBook,
   onSelectionChange,
   onRemoved,
   onError
@@ -593,6 +625,7 @@ function WatchlistDetail({
   tripId: string;
   watching: boolean;
   onBack: () => void;
+  onBook: (offer: VerifiedOffer) => void;
   onSelectionChange: (itineraryKey: string, selected: boolean) => void;
   onRemoved: (itineraryKey: string) => void;
   onError: (message: string) => void;
@@ -657,6 +690,17 @@ function WatchlistDetail({
           <span>{duration(offer)}</span>
           <span>{stops(offer)}</span>
         </div>
+      </div>
+
+      <div className="mock-booking-cta">
+        <div>
+          <span className="pill mock-pill">Prototype</span>
+          <strong>Preview booking this flight</strong>
+          <p>No provider call, reservation, or card charge will be made.</p>
+        </div>
+        <button type="button" className="primary-action" onClick={() => onBook(offer)}>
+          Book flight · mock
+        </button>
       </div>
 
       {outbound.length > 0 && (

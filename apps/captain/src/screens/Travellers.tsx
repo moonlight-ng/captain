@@ -202,7 +202,7 @@ export function Travellers({
 
       {paymentsEnabled && !embedded && (
         <p className="settings-card">
-          Next, add a card in <a className="quiet-link" href="/settings#payment">settings</a>.
+          Next, add a card in your <a className="quiet-link" href="/profile#payment">profile</a>.
         </p>
       )}
     </>
@@ -213,7 +213,7 @@ export function Travellers({
   return (
     <main className="shell settings-shell">
       <header className="topbar">
-        <a className="brand" href="/settings" aria-label="Captain settings">
+        <a className="brand" href="/profile" aria-label="Captain profile">
           <span className="brand-mark">C</span>
           <span>Captain</span>
         </a>

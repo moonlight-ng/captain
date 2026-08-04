@@ -179,12 +179,19 @@ export function Preferences({
         <span className="name">{displayName}</span>
       </header>
       <section className="settings-intro">
-        <h1>Settings</h1>
+        <h1>Profile</h1>
         <p>{trip
           ? `${routeLabel(trip)} · ${dateRangeLabel(trip.brief.departureWindow.start, trip.brief.departureWindow.end)}`
           : tripStopped
             ? "Trip tracking has stopped. Choose another trip from Telegram."
             : "Manage your traveller profile, saved card, preferences, and notifications."}</p>
+      </section>
+      <section className="mock-preview-banner" role="note" aria-label="Prototype notice">
+        <span>Prototype</span>
+        <div>
+          <strong>Booking and flight-management actions are simulated.</strong>
+          <p>Your traveller details and any real card you add are saved securely; mock bookings never charge it.</p>
+        </div>
       </section>
       {trip && tripData && (
         <details className="settings-card settings-disclosure" open>
@@ -406,7 +413,7 @@ export function Preferences({
         <section className="settings-card" id="traveller-profiles">
           <p className="eyebrow">Traveller &amp; payment</p>
           <h1>Secure setup</h1>
-          <p>Open /settings in Captain on Telegram to manage traveller profiles and saved cards.</p>
+          <p>Open /profile in Captain on Telegram to manage traveller profiles and saved cards.</p>
         </section>
       )}
       {trip && sessionCredential && (

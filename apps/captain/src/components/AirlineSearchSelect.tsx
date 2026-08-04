@@ -7,7 +7,7 @@ import {
 } from "../airline-catalog";
 
 export function AirlineSearchSelect({
-  values,
+  values = [],
   placeholder,
   onChange,
   max = 12

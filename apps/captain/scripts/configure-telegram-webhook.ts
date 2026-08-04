@@ -36,7 +36,7 @@ if (deleting) {
     scope: { type: "all_private_chats" },
     commands: [
       { command: "trips", description: "Show your active trips" },
-      { command: "settings", description: "Manage your Captain settings" },
+      { command: "profile", description: "Manage your Captain profile" },
       { command: "signout", description: "Sign out of Captain on the web" },
       { command: "delete_account", description: "Delete your Captain account" }
     ]

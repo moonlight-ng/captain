@@ -14,13 +14,17 @@ Traveller names and cards are collected only on Captain’s secure web pages.
   currency stays fixed; Duffel and Flysoar USD/GBP results are normalized into it.
 - The dashboard has **Flights**, **Airlines**, and **Browse** views. It only
   displays verified provider offers and never describes the set as exhaustive.
-- `/settings` is the single web destination for traveller profiles, saved cards,
+- `/profile` is the single web destination for traveller details, saved cards,
   flight preferences, notifications, and trip controls. `/preferences`,
-  `/travellers`, and `/payment` are compatibility aliases. Passenger, payment,
+  `/settings`, `/travellers`, and `/payment` are compatibility aliases. Passenger, payment,
   trip-traveller assignment, and account deletion mutations require a revocable
   HttpOnly session cookie (via single-use login tokens). Production enables the
   card vault with `CAPTAIN_PAYMENTS_ENABLED=true`; it also requires `DATABASE_URL`
   and `DUFFEL_ACCESS_TOKEN` (memory mode refuses to start).
+- Booking and post-booking management are currently a labelled client-side
+  prototype. The Book, seat, baggage, and cancellation actions never call an
+  airline or payment API. Mock booking state stays in the browser and can be
+  reset from the flight activity screen.
 - Archived trips and their evidence are retained for 90 days. `/delete_account`
   queues remote Duffel card deletions, then removes the traveller, trip,
   sessions, passengers, payment methods, and retained evidence.
@@ -90,7 +94,7 @@ Optional worker controls include `DUFFEL_BASE_URL`, `FLYSOAR_MCP_URL`,
 Captain uses `AI_MODEL=openai/gpt-5.6-terra` for its general agent and
 `TRIP_INTERPRETER_MODEL=openai/gpt-5.6-luna` for strict, low-latency trip
 interpretation. Relative Telegram dates use the traveller timezone selected in
-Agent settings.
+Profile.
 
 Production now runs with `CAPTAIN_PUBLIC_BETA_ENABLED=true`, admitting new
 travellers up to the capped beta limit. Set it back to `false` to close
