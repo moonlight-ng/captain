@@ -1186,10 +1186,20 @@ export function describeCaptainPlatformStore(
       expect(intent?.componentClientKey).toBeNull();
     });
 
-    it("sweeps passengers and payment methods when a user is deleted", async () => {
+    it("clears all user-owned data when a user is deleted", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
+      const grace = await user(store, 2);
       const now = new Date("2026-08-01T12:00:00Z");
+      const expiresAt = new Date("2026-08-01T13:00:00Z");
+      const loginToken = "d".repeat(64);
+      const sessionToken = "e".repeat(64);
+      await store.ensureProfile(ada.id, now);
+      const sourceMessageId = await store.appendMessage(ada.id, "user", "Delete this", now);
+      const draft = await store.createTripPlanDraft(ada.id, "Plan a trip", sourceMessageId, now);
+      await store.createLoginToken(ada.id, loginToken, "/travellers", expiresAt, now);
+      await store.createWebSession(ada.id, sessionToken, expiresAt, now);
+      await expect(store.claimTelegramUpdate("delete-me", ada.id, now)).resolves.toBe(true);
       const passenger = await store.createPassenger(ada.id, {
         givenName: "Ada",
         familyName: "Lovelace"
@@ -1206,8 +1216,16 @@ export function describeCaptainPlatformStore(
       const created = await store.createTrip(ada.id, tripInput, buildSearchSpecs(tripInput.brief), now);
       await store.setTripPassengers(ada.id, created.trip.id, [passenger.id]);
       await store.deleteUser(ada.id);
+      await expect(store.getProfile(ada.id)).resolves.toBeNull();
+      await expect(store.getConversation(ada.id)).rejects.toThrow("Conversation not found");
+      await expect(store.listTrips(ada.id)).resolves.toEqual([]);
+      await expect(store.listPassengers(ada.id)).resolves.toEqual([]);
       await expect(store.getPassenger(ada.id, passenger.id)).resolves.toBeNull();
       await expect(store.listPaymentMethods(ada.id)).resolves.toEqual([]);
+      await expect(store.getTripPlanDraft(ada.id, draft.id, now)).resolves.toBeNull();
+      await expect(store.consumeLoginToken(loginToken, now)).resolves.toBeNull();
+      await expect(store.resolveWebSession(sessionToken, now)).resolves.toBeNull();
+      await expect(store.claimTelegramUpdate("delete-me", grace.id, now)).resolves.toBe(true);
       await expect(store.getUser(ada.id)).resolves.toBeNull();
       const pending = await store.countPendingCardDeletions();
       expect(pending.queued + pending.running).toBeGreaterThan(0);

@@ -2,6 +2,13 @@ import type { VerifiedOffer } from "./domain.js";
 
 export type MockBookingStatus = "confirmed" | "cancelled";
 
+export type MockBookingTraveller = {
+  givenName: string;
+  familyName: string;
+  email: string;
+  phoneNumber: string;
+};
+
 export type MockBooking = {
   version: 1;
   tripId: string;
@@ -11,6 +18,14 @@ export type MockBooking = {
   status: MockBookingStatus;
   seat: string | null;
   checkedBags: number;
+  traveller: MockBookingTraveller;
+};
+
+export const DEFAULT_MOCK_TRAVELLER: MockBookingTraveller = {
+  givenName: "Sample",
+  familyName: "Traveller",
+  email: "sample@example.com",
+  phoneNumber: ""
 };
 
 export type BookingStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -28,7 +43,8 @@ export function createMockBooking(
     bookedAt: now.toISOString(),
     status: "confirmed",
     seat: null,
-    checkedBags: 0
+    checkedBags: 0,
+    traveller: { ...DEFAULT_MOCK_TRAVELLER }
   };
 }
 
@@ -38,7 +54,7 @@ export function readMockBooking(
 ): MockBooking | null {
   try {
     const value = JSON.parse(storage.getItem(mockBookingKey(tripId)) ?? "null") as unknown;
-    return isMockBooking(value, tripId) ? value : null;
+    return isMockBooking(value, tripId) ? withTraveller(value) : null;
   } catch {
     return null;
   }
@@ -70,7 +86,27 @@ function mockBookingKey(tripId: string): string {
   return `captain:mock-booking:${tripId}`;
 }
 
-function isMockBooking(value: unknown, tripId: string): value is MockBooking {
+function withTraveller(booking: StoredMockBooking): MockBooking {
+  return {
+    ...booking,
+    traveller: isMockTraveller(booking.traveller) ? booking.traveller : { ...DEFAULT_MOCK_TRAVELLER }
+  };
+}
+
+function isMockTraveller(value: unknown): value is MockBookingTraveller {
+  if (!value || typeof value !== "object") return false;
+  const traveller = value as Partial<MockBookingTraveller>;
+  return typeof traveller.givenName === "string"
+    && typeof traveller.familyName === "string"
+    && typeof traveller.email === "string"
+    && typeof traveller.phoneNumber === "string";
+}
+
+type StoredMockBooking = Omit<MockBooking, "traveller"> & {
+  traveller?: MockBookingTraveller;
+};
+
+function isMockBooking(value: unknown, tripId: string): value is StoredMockBooking {
   if (!value || typeof value !== "object") return false;
   const booking = value as Partial<MockBooking>;
   return booking.version === 1

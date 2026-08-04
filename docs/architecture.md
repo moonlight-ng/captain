@@ -14,16 +14,11 @@ shared credentials, redirects, or access to Captain profiles and trips.
 
 Each Telegram traveller has one `TravellerProfile` (preferences) and up to three
 active or paused trips. Passenger identity lives in `captain.passengers` and is
-assigned to trips via `captain.trip_passengers`. Tokenised cards (Duffel card
-IDs only — never PAN, CVC, or expiry) live in `captain.payment_methods` behind
-`CAPTAIN_PAYMENTS_ENABLED` (enabled in production). Captain keeps at most one active card
-per user, and a Duffel token backs at most one active card across all users;
-retired cards are deleted remotely through a leased Postgres queue processed by
-the flight worker. A deletion retries for roughly four days, then parks in a
-terminal `failed` state for manual reconciliation and releases the local row so
-it cannot consume the per-user cap. The worker also ages out card setup intents
-on an interval, so an unused reservation cannot outlive its retention window
-just because no further payment traffic arrives.
+assigned to trips via `captain.trip_passengers`. Payment processing is outside
+the prototype boundary: the UI always uses one display-only test-card fixture,
+the service reports payments disabled, and environment configuration cannot
+enable card capture. Legacy payment tables and the worker deletion queue remain
+only to clean up tokenised cards created before this boundary was adopted.
 
 Confirmed trip currency is immutable; changing the profile default affects
 only future trips.
@@ -34,14 +29,14 @@ the trip brief, the traveller assigned to it, and its activity log. What that sc
 offers is driven by the trip's stage (`src/trip-stage.ts`); once a mock booking exists
 it drops tracking and the brief and shows the booking instead. `/profile` is the
 account surface and is never scoped to a trip: Preferences, Travellers, and
-Payment tabs (card + invoices), each holding re-usable information, selected by `?tab=`. Nothing
-inside a trip links to it — profile is entered from Telegram or from home.
+a Test card tab. `?tab=` selects the active tab; the test card keeps the legacy
+`payment` value for compatibility. Nothing inside a trip links to the profile.
 
 Trip and read-only profile dashboard links still use deterministic `#access` bearer
 tokens for backwards compatibility with live beta Telegram history; those
 tokens may only call an explicit allowlist of trip/profile routes. New
 Telegram profile links target `/profile`, deep-linking a tab where it helps
-(`?tab=payment` from `/payment`). All passenger/payment/account mutations require a
+(`?tab=payment` from `/payment`). All passenger and account mutations require a
 single-use login token in the URL **query string** (`/auth/link?t=…`). The old
 `/settings`, `/preferences`, `/travellers`, and `/payment` paths remain compatibility
 aliases and redirect to the profile tab each one used to mean.
@@ -50,11 +45,10 @@ The booking transition is intentionally a prototype boundary. A mock booking is
 stored only in browser local storage and drives a post-booking flight activity
 screen with simulated seat, baggage, and cancellation actions. It never invokes
 Duffel Orders, an airline booking endpoint, or a payment charge. The default
-mock card is display-only; a traveller may separately save a real tokenised card
-through Duffel Components for future production booking work.
+test card is display-only and Captain never collects or charges a real card.
 Tokens expire after 15 minutes and exchange for a hashed, revocable, HttpOnly,
 SameSite=Lax session cookie lasting 30 days. The authenticated API exposes the
-current profile, selected trip, passengers, and (when enabled) payment methods.
+current profile, selected trip, and passengers.
 
 ## Search flow
 

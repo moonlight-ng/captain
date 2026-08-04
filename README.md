@@ -15,7 +15,7 @@ They share Captain's Postgres schema but have independent Fly applications and
 deployment credentials. Pilot is a separate private product and repository.
 
 The current release stops at flight discovery. It does not book travel, take
-payments, or collect passenger documents.
+payments, or collect passenger documents. Booking uses a fixed display-only test card.
 
 ## Commands
 

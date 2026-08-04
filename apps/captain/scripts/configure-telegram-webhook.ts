@@ -38,7 +38,7 @@ if (deleting) {
       { command: "trips", description: "Show your active trips" },
       { command: "profile", description: "Manage your Captain profile" },
       { command: "signout", description: "Sign out of Captain on the web" },
-      { command: "delete_account", description: "Delete your Captain account" }
+      { command: "delete", description: "Delete all your Captain data" }
     ]
   });
   console.info(JSON.stringify({ event: "captain.telegram_webhook_configured" }));

@@ -124,7 +124,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   readonly #loginTokens = new Map<string, StoredLoginToken>();
   readonly #webSessions = new Map<string, StoredWebSession>();
   readonly #apiUsage = new Map<string, { responses: number; webSearchCalls: number }>();
-  readonly #updates = new Set<string>();
+  readonly #updates = new Map<string, string>();
   readonly #conversations = new Map<string, MemoryConversation>();
   readonly #trips = new Map<string, Trip>();
   readonly #watches = new Map<string, Watch>();
@@ -219,6 +219,11 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     }
     this.#profiles.delete(userId);
     this.#conversations.delete(userId);
+    this.#lastDigestAt.delete(userId);
+    this.#clientKeyIssues.delete(userId);
+    for (const [updateKey, ownerId] of this.#updates) {
+      if (ownerId === userId) this.#updates.delete(updateKey);
+    }
     for (const [hash, token] of this.#loginTokens) if (token.userId === userId) this.#loginTokens.delete(hash);
     for (const [hash, session] of this.#webSessions) if (session.userId === userId) this.#webSessions.delete(hash);
     for (const [id, passenger] of this.#passengers) if (passenger.userId === userId) this.#passengers.delete(id);
@@ -241,7 +246,12 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       }
     }
     for (const [id, notification] of this.#notifications) if (notification.userId === userId) this.#notifications.delete(id);
-    for (const [id, draft] of this.#tripPlanDrafts) if (draft.userId === userId) this.#tripPlanDrafts.delete(id);
+    for (const [id, draft] of this.#tripPlanDrafts) {
+      if (draft.userId === userId) {
+        this.#tripPlanDrafts.delete(id);
+        this.#tripPlanConfirmations.delete(id);
+      }
+    }
   }
 
   async getProfile(userId: string): Promise<TravellerProfile | null> {
@@ -1018,8 +1028,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
 
   async claimTelegramUpdate(updateKey: string, userId: string, now: Date): Promise<boolean> {
     if (this.#updates.has(updateKey)) return false;
-    this.#updates.add(updateKey);
-    void userId;
+    this.#updates.set(updateKey, userId);
     void now;
     return true;
   }
@@ -1081,6 +1090,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   }
 
   async createTrip(userId: string, input: CreateTripInput, specs: SearchSpec[], now: Date): Promise<TripCreationResult> {
+    if (!await this.getUser(userId)) throw new Error("User not found");
     const duplicate = [...this.#trips.values()].find((trip) =>
       trip.userId === userId
       && isActiveTripStatus(trip.status)

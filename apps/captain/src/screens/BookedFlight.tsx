@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
+import { ChevronRightIcon, CloseIcon } from "../components/icons";
 import type { Segment } from "../domain";
 import {
   airlineName,
@@ -9,7 +10,7 @@ import {
   outboundSegments,
   timestampLabel
 } from "../format";
-import type { MockBooking } from "../mock-booking";
+import { DEFAULT_MOCK_TRAVELLER, type MockBooking, type MockBookingTraveller } from "../mock-booking";
 
 type MockAction = "seats" | "bags" | "cancel" | null;
 
@@ -23,6 +24,7 @@ export function BookedFlight({
   onReset: () => void;
 }) {
   const [action, setAction] = useState<MockAction>(null);
+  const [travellerOpen, setTravellerOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const segments = outboundSegments(booking.offer.snapshot.segments ?? []);
   const first = segments[0] ?? null;
@@ -30,8 +32,11 @@ export function BookedFlight({
   const cancelled = booking.status === "cancelled";
   const terminal = mockTerminal(booking.offer.primaryAirlineCode);
   const gate = mockGate(booking.offer.itineraryKey);
+  const traveller = booking.traveller ?? DEFAULT_MOCK_TRAVELLER;
+  const travellerName = `${traveller.givenName} ${traveller.familyName}`.trim();
+  const travellerInitials = initials(traveller);
 
-  function update(next: Partial<Pick<MockBooking, "status" | "seat" | "checkedBags">>, message: string) {
+  function update(next: Partial<Pick<MockBooking, "status" | "seat" | "checkedBags" | "traveller">>, message: string) {
     onChange({ ...booking, ...next });
     setAction(null);
     setNotice(message);
@@ -39,18 +44,10 @@ export function BookedFlight({
 
   return (
     <section className="booked-flight">
-      <section className="mock-preview-banner mock-preview-banner-trip" role="note">
-        <span>Mock booking</span>
-        <div>
-          <strong>No airline reservation or charge has been made.</strong>
-          <p>This screen previews the post-booking Captain experience. Every action below is simulated.</p>
-        </div>
-      </section>
-
       <header className="booking-hero">
         <div className="booking-status-row">
           <span className={`booking-status ${cancelled ? "cancelled" : "confirmed"}`}>
-            {cancelled ? "Mock cancelled" : "Mock confirmed"}
+            {cancelled ? "Mock cancelled" : "Mock Booking"}
           </span>
           <span>{booking.reference}</span>
         </div>
@@ -66,39 +63,48 @@ export function BookedFlight({
       {notice && <div className="notice notice-mock-success" role="status">{notice}</div>}
 
       <section className="flight-now-card">
-        <div>
-          <p className="eyebrow">Next</p>
-          <h2>{cancelled ? "Booking cancelled in this demo" : departureHeadline(first)}</h2>
-          <p>{cancelled ? "No real booking was changed." : departureDetail(first)}</p>
+        <div className="flight-now-top">
+          <div className="flight-now-copy">
+            <h2>{cancelled ? "Booking cancelled in this demo" : departureHeadline(first)}</h2>
+            <p>{cancelled ? "No real booking was changed." : departureDetail(first)}</p>
+          </div>
+          {!cancelled && first && (
+            <div className="flight-clock">
+              <strong>{clockLabel(first.departure)}</strong>
+              <span>{dateLabel(first.departure.slice(0, 10))}</span>
+            </div>
+          )}
         </div>
         {!cancelled && first && (
-          <div className="flight-clock">
-            <strong>{clockLabel(first.departure)}</strong>
-            <span>{dateLabel(first.departure.slice(0, 10))}</span>
-          </div>
+          <DepartureCountdown departure={first.departure} bookedAt={booking.bookedAt} />
         )}
-      </section>
-
-      <section className="flight-facts" aria-label="Flight details">
-        <article><span>Terminal</span><strong>{cancelled ? "—" : terminal}</strong></article>
-        <article><span>Gate</span><strong>{cancelled ? "—" : gate}</strong></article>
-        <article><span>Seat</span><strong>{booking.seat ?? "Choose"}</strong></article>
-        <article><span>Bags</span><strong>{booking.checkedBags}</strong></article>
+        <div className="flight-facts" aria-label="Flight details">
+          <article><span>Terminal</span><strong>{cancelled ? "—" : terminal}</strong></article>
+          <article><span>Gate</span><strong>{cancelled ? "—" : gate}</strong></article>
+          <article><span>Seat</span><strong>{booking.seat ?? "Choose"}</strong></article>
+          <article><span>Bags</span><strong>{booking.checkedBags}</strong></article>
+        </div>
       </section>
 
       <section className="booking-section">
-        <div className="booking-section-heading">
-          <div><p className="eyebrow">Flight activity</p><h2>What happens next</h2></div>
-          <span>Live preview</span>
-        </div>
-        <MockFlightActivity booking={booking} segments={segments} />
-      </section>
-
-      <section className="booking-section">
-        <div className="booking-section-heading">
-          <div><p className="eyebrow">Manage</p><h2>Booking actions</h2></div>
-          <span>Simulated</span>
-        </div>
+        <button
+          type="button"
+          className="booking-traveller-row"
+          onClick={() => setTravellerOpen(true)}
+        >
+          <span className="traveller-avatar" aria-hidden="true">{travellerInitials}</span>
+          <span className="traveller-card-main">
+            <span>
+              <strong>{travellerName || "Add traveller"}</strong>
+            </span>
+            <small>
+              {traveller.email
+                || traveller.phoneNumber
+                || "Tap to edit traveller details"}
+            </small>
+          </span>
+          <ChevronRightIcon />
+        </button>
         <div className="booking-actions">
           <button type="button" disabled={cancelled} onClick={() => setAction("seats")}>Buy seats</button>
           <button type="button" disabled={cancelled} onClick={() => setAction("bags")}>Add baggage</button>
@@ -123,10 +129,133 @@ export function BookedFlight({
         )}
       </section>
 
-      <button type="button" className="reset-demo" onClick={onReset}>
-        Exit booked-flight demo
-      </button>
+      <section className="booking-section">
+        <div className="booking-section-heading">
+          <div><p className="eyebrow">Flight activity</p></div>
+          <span>Live preview</span>
+        </div>
+        <MockFlightActivity booking={booking} segments={segments} />
+      </section>
+
+      <p className="prototype-disclaimer" role="note">
+        Prototype only — no airline reservation or charge has been made. Every action here is simulated.{" "}
+        <button type="button" onClick={onReset}>Exit demo</button>
+      </p>
+
+      <TravellerSheet
+        open={travellerOpen}
+        traveller={traveller}
+        onClose={() => setTravellerOpen(false)}
+        onSave={(nextTraveller) => {
+          update({ traveller: nextTraveller }, "Traveller details updated for this demo.");
+          setTravellerOpen(false);
+        }}
+      />
     </section>
+  );
+}
+
+function TravellerSheet({
+  open,
+  traveller,
+  onClose,
+  onSave
+}: {
+  open: boolean;
+  traveller: MockBookingTraveller;
+  onClose: () => void;
+  onSave: (traveller: MockBookingTraveller) => void;
+}) {
+  const [draft, setDraft] = useState(traveller);
+
+  useEffect(() => {
+    if (open) setDraft(traveller);
+  }, [open, traveller]);
+
+  function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    onSave({
+      givenName: draft.givenName.trim(),
+      familyName: draft.familyName.trim(),
+      email: draft.email.trim(),
+      phoneNumber: draft.phoneNumber.trim()
+    });
+  }
+
+  return (
+    <div
+      className="sheet-backdrop traveller-sheet-backdrop"
+      data-open={open}
+      aria-hidden={!open}
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <section
+        className="bottom-sheet traveller-sheet"
+        role="dialog"
+        aria-modal={open}
+        aria-label="Edit traveller"
+      >
+        <header>
+          <span>
+            <strong>Traveller</strong>
+          </span>
+          <button type="button" className="icon-button" aria-label="Close traveller" onClick={onClose}>
+            <CloseIcon />
+          </button>
+        </header>
+        <form className="traveller-sheet-form" onSubmit={handleSubmit}>
+          <div className="traveller-sheet-row">
+            <label>
+              Given name
+              <input
+                required
+                autoComplete="given-name"
+                maxLength={40}
+                value={draft.givenName}
+                onChange={(event) => setDraft({ ...draft, givenName: event.target.value })}
+              />
+            </label>
+            <label>
+              Family name
+              <input
+                required
+                autoComplete="family-name"
+                maxLength={40}
+                value={draft.familyName}
+                onChange={(event) => setDraft({ ...draft, familyName: event.target.value })}
+              />
+            </label>
+            <label>
+              Email
+              <input
+                type="email"
+                autoComplete="email"
+                maxLength={80}
+                value={draft.email}
+                onChange={(event) => setDraft({ ...draft, email: event.target.value })}
+              />
+            </label>
+            <label>
+              Phone
+              <input
+                type="tel"
+                autoComplete="tel"
+                maxLength={24}
+                value={draft.phoneNumber}
+                onChange={(event) => setDraft({ ...draft, phoneNumber: event.target.value })}
+              />
+            </label>
+          </div>
+          <footer>
+            <button type="button" className="secondary-action" onClick={onClose}>Cancel</button>
+            <button type="submit" className="primary-action">Save traveller</button>
+          </footer>
+        </form>
+      </section>
+    </div>
   );
 }
 
@@ -139,7 +268,7 @@ function MockActionPanel({
   action: Exclude<MockAction, null>;
   booking: MockBooking;
   onClose: () => void;
-  onUpdate: (next: Partial<Pick<MockBooking, "status" | "seat" | "checkedBags">>, message: string) => void;
+  onUpdate: (next: Partial<Pick<MockBooking, "status" | "seat" | "checkedBags" | "traveller">>, message: string) => void;
 }) {
   if (action === "seats") {
     return (
@@ -201,7 +330,7 @@ function MockFlightActivity({ booking, segments }: { booking: MockBooking; segme
     ? new Date(Date.parse(first.departure) - 24 * 60 * 60 * 1000).toISOString()
     : null;
   const items = [
-    { title: "Mock booking created", detail: timestampLabel(booking.bookedAt), complete: true },
+    { title: "Booking created", detail: timestampLabel(booking.bookedAt), complete: true },
     { title: "Online check-in opens", detail: checkInAt ? timestampLabel(checkInAt) : "24 hours before departure", complete: false },
     { title: "Departure", detail: first ? `${timestampLabel(first.departure)} · ${first.origin}` : "Awaiting schedule", complete: false },
     { title: "Arrival", detail: last ? `${timestampLabel(last.arrival)} · ${last.destination}` : "Awaiting schedule", complete: false }
@@ -218,6 +347,59 @@ function MockFlightActivity({ booking, segments }: { booking: MockBooking; segme
   );
 }
 
+function DepartureCountdown({
+  departure,
+  bookedAt
+}: {
+  departure: string;
+  bookedAt: string;
+}) {
+  const countdown = departureCountdown(departure, bookedAt);
+  const percent = Math.round(countdown.remainingFraction * 100);
+
+  return (
+    <div
+      className="departure-countdown"
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent}
+      aria-label={`${countdown.value} ${countdown.unit} until departure`}
+    >
+      <div className="departure-countdown-track">
+        <div className="departure-countdown-fill" style={{ width: `${percent}%` }} />
+      </div>
+      <span>{countdown.value} {countdown.unit} left</span>
+    </div>
+  );
+}
+
+function departureCountdown(departure: string, bookedAt: string, now = Date.now()) {
+  const departAt = Date.parse(departure);
+  const startAt = Date.parse(bookedAt);
+  const remainingMs = Math.max(0, departAt - now);
+  const windowMs = Math.max(departAt - startAt, remainingMs, 1);
+  const remainingFraction = Math.min(1, remainingMs / windowMs);
+  const totalMinutes = Math.floor(remainingMs / 60_000);
+  const totalHours = Math.floor(remainingMs / 3_600_000);
+  const totalDays = Math.floor(remainingMs / 86_400_000);
+
+  if (remainingMs <= 0) {
+    return { value: "0", unit: "now", remainingFraction: 0 };
+  }
+  if (totalDays >= 1) {
+    return { value: String(totalDays), unit: totalDays === 1 ? "day" : "days", remainingFraction };
+  }
+  if (totalHours >= 1) {
+    return { value: String(totalHours), unit: totalHours === 1 ? "hr" : "hrs", remainingFraction };
+  }
+  return {
+    value: String(Math.max(totalMinutes, 1)),
+    unit: totalMinutes === 1 ? "min" : "mins",
+    remainingFraction
+  };
+}
+
 function departureHeadline(segment: Segment | null): string {
   if (!segment) return "Schedule pending";
   return `Depart from ${segment.origin}`;
@@ -225,7 +407,7 @@ function departureHeadline(segment: Segment | null): string {
 
 function departureDetail(segment: Segment | null): string {
   if (!segment) return "Captain will surface timing and terminal updates here.";
-  return `${segment.airline} ${segment.flightNumber} · Arrive at the airport 3 hours early.`;
+  return `${segment.airline} ${segment.flightNumber}`;
 }
 
 function mockTerminal(airlineCode: string): string {
@@ -236,4 +418,10 @@ function mockTerminal(airlineCode: string): string {
 function mockGate(itineraryKey: string): string {
   const total = [...itineraryKey].reduce((sum, value) => sum + value.charCodeAt(0), 0);
   return `${String.fromCharCode(65 + total % 4)}${total % 28 + 1}`;
+}
+
+function initials(traveller: MockBookingTraveller): string {
+  const given = traveller.givenName.trim().charAt(0);
+  const family = traveller.familyName.trim().charAt(0);
+  return `${given}${family}`.toUpperCase() || "?";
 }
