@@ -8,6 +8,11 @@ const passengerNameSchema = z.string()
 
 const passengerTitleSchema = z.enum(["mr", "ms", "mrs", "miss", "dr"]);
 const passengerGenderSchema = z.enum(["m", "f"]);
+const countryCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/u, "Use a 2-letter country code");
+const passportNumberSchema = z.string()
+  .trim()
+  .toUpperCase()
+  .regex(/^[A-Z0-9]{5,20}$/u, "Passport number must be 5–20 letters or digits");
 
 const bornOnSchema = z.iso.date().refine((value) => {
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -25,12 +30,18 @@ export const passengerSchema = z.object({
   id: z.uuid(),
   userId: z.uuid(),
   givenName: passengerNameSchema,
+  middleName: passengerNameSchema.nullable(),
   familyName: passengerNameSchema,
   title: passengerTitleSchema.nullable(),
   gender: passengerGenderSchema.nullable(),
   bornOn: z.iso.date().nullable(),
   email: z.email().nullable(),
   phoneNumber: phoneNumberSchema.nullable(),
+  nationality: countryCodeSchema.nullable(),
+  countryOfResidence: countryCodeSchema.nullable(),
+  passportLast4: z.string().regex(/^[A-Z0-9]{4}$/u).nullable(),
+  passportIssuingCountry: countryCodeSchema.nullable(),
+  passportExpiresOn: z.iso.date().nullable(),
   isDefault: z.boolean(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime()
@@ -39,24 +50,36 @@ export type Passenger = z.infer<typeof passengerSchema>;
 
 export const createPassengerSchema = z.object({
   givenName: passengerNameSchema,
+  middleName: passengerNameSchema.nullable().optional(),
   familyName: passengerNameSchema,
   title: passengerTitleSchema.nullable().optional(),
   gender: passengerGenderSchema.nullable().optional(),
   bornOn: bornOnSchema.nullable().optional(),
   email: z.email().nullable().optional(),
   phoneNumber: phoneNumberSchema.nullable().optional(),
+  nationality: countryCodeSchema.nullable().optional(),
+  countryOfResidence: countryCodeSchema.nullable().optional(),
+  passportNumber: passportNumberSchema.nullable().optional(),
+  passportIssuingCountry: countryCodeSchema.nullable().optional(),
+  passportExpiresOn: z.iso.date().nullable().optional(),
   isDefault: z.boolean().optional()
 }).strict();
 export type CreatePassengerInput = z.infer<typeof createPassengerSchema>;
 
 export const updatePassengerSchema = z.object({
   givenName: passengerNameSchema.optional(),
+  middleName: passengerNameSchema.nullable().optional(),
   familyName: passengerNameSchema.optional(),
   title: passengerTitleSchema.nullable().optional(),
   gender: passengerGenderSchema.nullable().optional(),
   bornOn: bornOnSchema.nullable().optional(),
   email: z.email().nullable().optional(),
   phoneNumber: phoneNumberSchema.nullable().optional(),
+  nationality: countryCodeSchema.nullable().optional(),
+  countryOfResidence: countryCodeSchema.nullable().optional(),
+  passportNumber: passportNumberSchema.nullable().optional(),
+  passportIssuingCountry: countryCodeSchema.nullable().optional(),
+  passportExpiresOn: z.iso.date().nullable().optional(),
   isDefault: z.boolean().optional()
 }).strict().refine((value) => Object.keys(value).length > 0, {
   message: "At least one passenger field must be updated"
@@ -145,5 +168,24 @@ export function passengerReadyForBooking(passenger: Pick<
     && passenger.bornOn
     && passenger.email
     && passenger.phoneNumber
+  );
+}
+
+/** Passport data is offer-dependent, so it is tracked separately from core booking readiness. */
+export function passengerReadyForInternationalTravel(passenger: Pick<
+  Passenger,
+  | "nationality"
+  | "countryOfResidence"
+  | "passportLast4"
+  | "passportIssuingCountry"
+  | "passportExpiresOn"
+>): boolean {
+  return Boolean(
+    passenger.nationality
+    && passenger.countryOfResidence
+    && passenger.passportLast4
+    && passenger.passportIssuingCountry
+    && passenger.passportExpiresOn
+    && Date.parse(`${passenger.passportExpiresOn}T23:59:59.999Z`) > Date.now()
   );
 }
