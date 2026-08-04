@@ -8,6 +8,7 @@ import {
   TripVersionConflictError,
   createPassengerSchema,
   passengerReadyForBooking,
+  passengerReadyForInternationalTravel,
   reservePaymentClientKeySchema,
   savePaymentMethodSchema,
   tripActionSchema,
@@ -65,7 +66,9 @@ export default defineChannel({
     POST("/api/me/payments/client-key", authenticatedMutation(requireSession(createPaymentClientKey))),
     GET("/api/me/payments/cards", authenticated(requireSession(listPaymentCards))),
     POST("/api/me/payments/cards", authenticatedMutation(requireSession(savePaymentCard))),
+    POST("/api/me/payments/cards/:id/default", authenticatedMutation(requireSession(setDefaultPaymentCard))),
     DELETE("/api/me/payments/cards/:id", authenticatedMutation(requireSession(deletePaymentCard))),
+    GET("/api/me/invoices", authenticated(requireSession(listInvoices))),
     DELETE("/api/me/account", authenticatedMutation(requireSession(deleteAccount)))
   ]
 });
@@ -308,7 +311,8 @@ async function getTrip(
       activity,
       travellers: travellers.map((passenger) => ({
         ...passenger,
-        readyForBooking: passengerReadyForBooking(passenger)
+        readyForBooking: passengerReadyForBooking(passenger),
+        readyForInternationalTravel: passengerReadyForInternationalTravel(passenger)
       }))
     },
     { headers: noStore() }
@@ -391,7 +395,8 @@ async function setTripTravellers(
   return Response.json({
     passengers: passengers.map((passenger) => ({
       ...passenger,
-      readyForBooking: passengerReadyForBooking(passenger)
+      readyForBooking: passengerReadyForBooking(passenger),
+      readyForInternationalTravel: passengerReadyForInternationalTravel(passenger)
     }))
   }, { headers: noStore() });
 }
@@ -406,7 +411,8 @@ async function listPassengers(
   return Response.json({
     passengers: passengers.map((passenger) => ({
       ...passenger,
-      readyForBooking: passengerReadyForBooking(passenger)
+      readyForBooking: passengerReadyForBooking(passenger),
+      readyForInternationalTravel: passengerReadyForInternationalTravel(passenger)
     }))
   }, { headers: noStore() });
 }
@@ -420,7 +426,11 @@ async function createPassenger(
   const input = createPassengerSchema.parse(await requestJson(request));
   const passenger = await services.platformStore.createPassenger(userId, input, new Date());
   return Response.json({
-    passenger: { ...passenger, readyForBooking: passengerReadyForBooking(passenger) }
+    passenger: {
+      ...passenger,
+      readyForBooking: passengerReadyForBooking(passenger),
+      readyForInternationalTravel: passengerReadyForInternationalTravel(passenger)
+    }
   }, { status: 201, headers: noStore() });
 }
 
@@ -438,7 +448,11 @@ async function updatePassenger(
     new Date()
   );
   return Response.json({
-    passenger: { ...passenger, readyForBooking: passengerReadyForBooking(passenger) }
+    passenger: {
+      ...passenger,
+      readyForBooking: passengerReadyForBooking(passenger),
+      readyForInternationalTravel: passengerReadyForInternationalTravel(passenger)
+    }
   }, { headers: noStore() });
 }
 
@@ -464,7 +478,11 @@ async function setDefaultPassenger(
     new Date()
   );
   return Response.json({
-    passenger: { ...passenger, readyForBooking: passengerReadyForBooking(passenger) }
+    passenger: {
+      ...passenger,
+      readyForBooking: passengerReadyForBooking(passenger),
+      readyForInternationalTravel: passengerReadyForInternationalTravel(passenger)
+    }
   }, { headers: noStore() });
 }
 
@@ -568,6 +586,36 @@ async function deletePaymentCard(
   if (!method) return Response.json({ error: "not_found" }, { status: 404 });
   await services.platformStore.removePaymentMethod(userId, method.id, new Date());
   return Response.json({ deletion: "queued" }, { status: 202, headers: noStore() });
+}
+
+async function setDefaultPaymentCard(
+  _request: Request,
+  context: RouteContext,
+  userId: string
+): Promise<Response> {
+  const services = await getCaptainServices();
+  if (!services.env.paymentsEnabled) {
+    return Response.json({ error: "payments_disabled" }, { status: 503 });
+  }
+  const method = await services.platformStore.setDefaultPaymentMethod(
+    userId,
+    context.params.id!,
+    new Date()
+  );
+  return Response.json({
+    card: {
+      id: method.id,
+      brand: method.brand,
+      last4: method.last4,
+      cardholderName: method.cardholderName,
+      isDefault: method.isDefault
+    }
+  }, { headers: noStore() });
+}
+
+async function listInvoices(): Promise<Response> {
+  // Real invoices begin when order placement is enabled. Mock bookings never create charges.
+  return Response.json({ invoices: [] }, { headers: noStore() });
 }
 
 function duffelCardsClient(env: {

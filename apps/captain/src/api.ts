@@ -1,4 +1,4 @@
-import type { TravellerProfile, TripPayload, Passenger, PaymentMethod } from "./domain";
+import type { TravellerProfile, TripPayload, Passenger, PaymentMethod, Invoice } from "./domain";
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string, readonly body?: unknown) {
@@ -134,7 +134,18 @@ export async function listPassengers(): Promise<Passenger[]> {
 }
 
 export async function createPassenger(
-  input: Omit<Passenger, "id" | "userId" | "readyForBooking" | "createdAt" | "updatedAt" | "isDefault"> & {
+  input: Omit<
+    Passenger,
+    | "id"
+    | "userId"
+    | "readyForBooking"
+    | "readyForInternationalTravel"
+    | "passportLast4"
+    | "createdAt"
+    | "updatedAt"
+    | "isDefault"
+  > & {
+    passportNumber?: string | null;
     isDefault?: boolean;
   }
 ): Promise<Passenger> {
@@ -148,8 +159,20 @@ export async function updatePassenger(
   id: string,
   input: Partial<Pick<
     Passenger,
-    "givenName" | "familyName" | "title" | "gender" | "bornOn" | "email" | "phoneNumber" | "isDefault"
-  >>
+    | "givenName"
+    | "middleName"
+    | "familyName"
+    | "title"
+    | "gender"
+    | "bornOn"
+    | "email"
+    | "phoneNumber"
+    | "nationality"
+    | "countryOfResidence"
+    | "passportIssuingCountry"
+    | "passportExpiresOn"
+    | "isDefault"
+  >> & { passportNumber?: string | null }
 ): Promise<Passenger> {
   return (await api<{ passenger: Passenger }>(`/api/me/passengers/${id}`, {
     method: "PATCH",
@@ -210,6 +233,17 @@ export async function savePaymentMethod(input: {
 
 export async function removePaymentMethod(id: string): Promise<void> {
   await api(`/api/me/payments/cards/${id}`, { method: "DELETE", body: "{}" });
+}
+
+export async function setDefaultPaymentMethod(id: string): Promise<PaymentMethod> {
+  return (await api<{ card: PaymentMethod }>(`/api/me/payments/cards/${id}/default`, {
+    method: "POST",
+    body: "{}"
+  })).card;
+}
+
+export async function listInvoices(): Promise<Invoice[]> {
+  return (await api<{ invoices: Invoice[] }>("/api/me/invoices")).invoices;
 }
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {

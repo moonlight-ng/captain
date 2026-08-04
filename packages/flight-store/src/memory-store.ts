@@ -447,12 +447,18 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       id: randomUUID(),
       userId,
       givenName: input.givenName,
+      middleName: input.middleName ?? null,
       familyName: input.familyName,
       title: input.title ?? null,
       gender: input.gender ?? null,
       bornOn: input.bornOn ?? null,
       email: input.email ?? null,
       phoneNumber: input.phoneNumber ?? null,
+      nationality: input.nationality ?? null,
+      countryOfResidence: input.countryOfResidence ?? null,
+      passportLast4: input.passportNumber?.slice(-4) ?? null,
+      passportIssuingCountry: input.passportIssuingCountry ?? null,
+      passportExpiresOn: input.passportExpiresOn ?? null,
       isDefault: makeDefault,
       createdAt: timestamp,
       updatedAt: timestamp
@@ -480,12 +486,26 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const updated: Passenger = {
       ...current,
       ...(input.givenName !== undefined ? { givenName: input.givenName } : {}),
+      ...(input.middleName !== undefined ? { middleName: input.middleName } : {}),
       ...(input.familyName !== undefined ? { familyName: input.familyName } : {}),
       ...(input.title !== undefined ? { title: input.title } : {}),
       ...(input.gender !== undefined ? { gender: input.gender } : {}),
       ...(input.bornOn !== undefined ? { bornOn: input.bornOn } : {}),
       ...(input.email !== undefined ? { email: input.email } : {}),
       ...(input.phoneNumber !== undefined ? { phoneNumber: input.phoneNumber } : {}),
+      ...(input.nationality !== undefined ? { nationality: input.nationality } : {}),
+      ...(input.countryOfResidence !== undefined
+        ? { countryOfResidence: input.countryOfResidence }
+        : {}),
+      ...(input.passportNumber !== undefined
+        ? { passportLast4: input.passportNumber?.slice(-4) ?? null }
+        : {}),
+      ...(input.passportIssuingCountry !== undefined
+        ? { passportIssuingCountry: input.passportIssuingCountry }
+        : {}),
+      ...(input.passportExpiresOn !== undefined
+        ? { passportExpiresOn: input.passportExpiresOn }
+        : {}),
       ...(input.isDefault !== undefined ? { isDefault: input.isDefault } : {}),
       updatedAt: timestamp
     };
@@ -548,6 +568,26 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         return left.createdAt.localeCompare(right.createdAt);
       })
       .map(clone);
+  }
+
+  async setDefaultPaymentMethod(
+    userId: string,
+    paymentMethodId: string,
+    now: Date
+  ): Promise<PaymentMethod> {
+    const target = this.#paymentMethods.get(paymentMethodId);
+    if (!target || target.userId !== userId || target.status !== "active") {
+      throw new Error("Payment method not found");
+    }
+    for (const method of this.#paymentMethods.values()) {
+      if (method.userId !== userId || method.status !== "active") continue;
+      this.#paymentMethods.set(method.id, {
+        ...method,
+        isDefault: method.id === paymentMethodId,
+        updatedAt: now.toISOString()
+      });
+    }
+    return clone(this.#paymentMethods.get(paymentMethodId)!);
   }
 
   async getPaymentCardSetupIntent(
@@ -703,19 +743,9 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     if (claimedElsewhere) throw new PaymentSetupConflictError("card_unavailable");
 
     const timestamp = now.toISOString();
-    const retiring = [...this.#paymentMethods.values()].filter(
-      (method) => method.userId === userId && method.status === "active"
+    const hasDefault = [...this.#paymentMethods.values()].some(
+      (method) => method.userId === userId && method.status === "active" && method.isDefault
     );
-    for (const method of retiring) {
-      if (method.providerCardId === input.cardId) continue;
-      this.#paymentMethods.set(method.id, {
-        ...method,
-        status: "removed",
-        isDefault: false,
-        updatedAt: timestamp
-      });
-      this.#enqueueCardDeletion({ ...method, status: "removed", isDefault: false }, now);
-    }
 
     const existingActive = [...this.#paymentMethods.values()].find(
       (method) => method.userId === userId && method.providerCardId === input.cardId
@@ -728,7 +758,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         last4: input.last4,
         cardholderName: input.cardholderName,
         status: "active",
-        isDefault: true,
+        isDefault: existingActive.isDefault || !hasDefault,
         updatedAt: timestamp
       };
       this.#paymentMethods.set(existingActive.id, method);
@@ -744,7 +774,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         last4: input.last4,
         cardholderName: input.cardholderName,
         status: "active",
-        isDefault: true,
+        isDefault: !hasDefault,
         createdAt: timestamp,
         updatedAt: timestamp
       };
@@ -773,6 +803,18 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     };
     this.#paymentMethods.set(paymentMethodId, updated);
     this.#enqueueCardDeletion(updated, now);
+    if (method.isDefault) {
+      const replacement = [...this.#paymentMethods.values()]
+        .filter((candidate) => candidate.userId === userId && candidate.status === "active")
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt))[0];
+      if (replacement) {
+        this.#paymentMethods.set(replacement.id, {
+          ...replacement,
+          isDefault: true,
+          updatedAt: now.toISOString()
+        });
+      }
+    }
   }
 
   async claimCardDeletions(

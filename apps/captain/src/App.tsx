@@ -59,6 +59,7 @@ import {
 } from "./format";
 import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./components/icons";
 import { FilterSheet } from "./components/FilterSheet";
+import { TripTravellerPicker, travellerProfileHref } from "./components/TripTravellerPicker";
 import {
   createMockBooking,
   readMockBooking,
@@ -439,6 +440,7 @@ export function App() {
             travellers={tripData?.travellers ?? []}
             tripId={trip.id}
             paymentsEnabled={paymentsEnabled}
+            sessionCredential={credential === "session"}
             watching={focusWatching}
             refreshBusy={searchBusy}
             onBack={closeFlight}
@@ -451,6 +453,9 @@ export function App() {
               writeMockBooking(booking);
               setMockBooking(booking);
               closeFlight();
+            }}
+            onTravellersChange={(nextTravellers) => {
+              setTripData((current) => current ? { ...current, travellers: nextTravellers } : current);
             }}
             onSelectionChange={(itineraryKey, selected) => {
               setTripData((current) => {
@@ -745,17 +750,19 @@ function BookingCta({
     );
   }
 
-  const needsTraveller = !traveller?.readyForBooking;
+  const needsTraveller = !traveller?.readyForBooking || !traveller?.readyForInternationalTravel;
   const needsPayment = paymentsEnabled && payment === null;
   const setupHref = needsPayment && !needsTraveller
     ? profileHref("payment")
-    : tripHref(tripId, "settings");
+    : traveller
+      ? travellerProfileHref(tripId, traveller.id)
+      : tripHref(tripId, "settings");
 
   return (
     <div className="mock-booking-cta is-setup">
       <div>
         <strong>Complete profile</strong>
-        <p>Add a card and traveller</p>
+        <p>{needsTraveller ? "Add traveller details" : "Add a card"}</p>
       </div>
       <a className="primary-action" href={setupHref}>Complete settings</a>
     </div>
@@ -782,11 +789,13 @@ function WatchlistDetail({
   travellers,
   tripId,
   paymentsEnabled,
+  sessionCredential,
   watching,
   refreshBusy,
   onBack,
   onRefresh,
   onBook,
+  onTravellersChange,
   onSelectionChange,
   onRemoved,
   onError
@@ -799,11 +808,13 @@ function WatchlistDetail({
   travellers: Passenger[];
   tripId: string;
   paymentsEnabled: boolean;
+  sessionCredential: boolean;
   watching: boolean;
   refreshBusy: boolean;
   onBack: () => void;
   onRefresh: () => void;
   onBook: (offer: VerifiedOffer) => void;
+  onTravellersChange: (travellers: TripPayload["travellers"]) => void;
   onSelectionChange: (itineraryKey: string, selected: boolean) => void;
   onRemoved: (itineraryKey: string) => void;
   onError: (message: string) => void;
@@ -816,7 +827,7 @@ function WatchlistDetail({
     let cancelled = false;
     void listPaymentMethods()
       .then((methods) => {
-        if (!cancelled) setPayment(methods[0] ?? null);
+        if (!cancelled) setPayment(methods.find((method) => method.isDefault) ?? methods[0] ?? null);
       })
       .catch(() => {
         if (!cancelled) setPayment(null);
@@ -844,7 +855,11 @@ function WatchlistDetail({
   const comparison = peerPriceComparison(offer, offers);
   const traveller = travellers[0] ?? null;
   const paymentReady = !paymentsEnabled || (paymentLoaded && payment !== null);
-  const bookingReady = Boolean(traveller?.readyForBooking && paymentReady);
+  const bookingReady = Boolean(
+    traveller?.readyForBooking
+    && traveller.readyForInternationalTravel
+    && paymentReady
+  );
   const displayPayment = payment ?? (!paymentsEnabled ? MOCK_PAYMENT_METHOD : null);
 
   async function toggleWatchlist() {
@@ -913,6 +928,14 @@ function WatchlistDetail({
           onBook={onBook}
         />
       )}
+
+      <TripTravellerPicker
+        tripId={tripId}
+        assigned={travellers}
+        sessionCredential={sessionCredential}
+        onChanged={onTravellersChange}
+        onError={onError}
+      />
 
       {outbound.length > 0 && (
         <div className="watchlist-panel">

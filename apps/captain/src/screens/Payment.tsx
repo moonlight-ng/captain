@@ -3,10 +3,12 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import {
   ApiError,
   listPaymentMethods,
-  removePaymentMethod
+  removePaymentMethod,
+  setDefaultPaymentMethod
 } from "../api";
 import type { PaymentMethod } from "../domain";
 import { MOCK_PAYMENT_METHOD } from "../mock-payment";
+import { Invoices } from "./Invoices";
 
 const DuffelCardMount = lazy(() => import("../components/DuffelCardMount"));
 
@@ -14,7 +16,7 @@ export function Payment() {
   const [methods, setMethods] = useState<PaymentMethod[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
 
   async function reload() {
@@ -33,9 +35,8 @@ export function Payment() {
     void reload();
   }, []);
 
-  const primary = methods[0] ?? null;
-  const displayed = primary ?? MOCK_PAYMENT_METHOD;
-  const showingMock = primary === null;
+  const displayed = methods.length > 0 ? methods : [MOCK_PAYMENT_METHOD];
+  const showingMock = methods.length === 0;
 
   return (
     <>
@@ -44,39 +45,71 @@ export function Payment() {
 
       {!loading && !showForm && (
         <section className="settings-card">
-          <div className="read-only-field">
-            <strong>
-              {formatBrand(displayed.brand)} ···· {displayed.last4}
-            </strong>
-            <div>{displayed.cardholderName}{showingMock ? " · Mock" : ""}</div>
+          <div className="payment-card-list">
+            {displayed.map((method) => (
+              <article key={method.id} className="payment-method-row">
+                <div className="read-only-field">
+                  <strong>
+                    {formatBrand(method.brand)} ···· {method.last4}
+                    {!showingMock && method.isDefault ? " · Default" : ""}
+                    {showingMock ? " · Mock" : ""}
+                  </strong>
+                  <div>{method.cardholderName}</div>
+                </div>
+                {!showingMock && (
+                  <div className="entity-row" style={{ marginTop: 12 }}>
+                    {!method.isDefault && (
+                      <button
+                        type="button"
+                        className="quiet-link"
+                        disabled={busyId === method.id}
+                        onClick={() => void (async () => {
+                          setBusyId(method.id);
+                          setError("");
+                          try {
+                            await setDefaultPaymentMethod(method.id);
+                            await reload();
+                          } catch (cause) {
+                            setError(cause instanceof ApiError ? cause.message : "Could not update default.");
+                          } finally {
+                            setBusyId(null);
+                          }
+                        })()}
+                      >
+                        Make default
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="quiet-link"
+                      disabled={busyId === method.id}
+                      onClick={() => {
+                        if (!window.confirm(`Remove card ···· ${method.last4}?`)) return;
+                        void (async () => {
+                          setBusyId(method.id);
+                          setError("");
+                          try {
+                            await removePaymentMethod(method.id);
+                            await reload();
+                          } catch (cause) {
+                            setError(cause instanceof ApiError ? cause.message : "Could not remove card.");
+                          } finally {
+                            setBusyId(null);
+                          }
+                        })();
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+              </article>
+            ))}
           </div>
           <div className="entity-row" style={{ marginTop: 16 }}>
             <button type="button" className="quiet-link" onClick={() => setShowForm(true)}>
-              {showingMock ? "Add card" : "Replace"}
+              {showingMock ? "Add card" : "Add another"}
             </button>
-            {primary && (
-              <button
-                type="button"
-                className="quiet-link"
-                disabled={busy}
-                onClick={() => {
-                  if (!window.confirm("Remove the saved card?")) return;
-                  void (async () => {
-                    setBusy(true);
-                    try {
-                      await removePaymentMethod(primary.id);
-                      await reload();
-                    } catch (cause) {
-                      setError(cause instanceof ApiError ? cause.message : "Could not remove card.");
-                    } finally {
-                      setBusy(false);
-                    }
-                  })();
-                }}
-              >
-                Remove
-              </button>
-            )}
           </div>
         </section>
       )}
@@ -84,7 +117,7 @@ export function Payment() {
       {!loading && showForm && (
         <section className="settings-card">
           <div className="card-form-heading">
-            <h2>{primary ? "Replace card" : "Add card"}</h2>
+            <h2>{showingMock ? "Add card" : "Add another card"}</h2>
             <button type="button" className="quiet-link" onClick={() => setShowForm(false)}>
               Cancel
             </button>
@@ -101,11 +134,7 @@ export function Payment() {
         </section>
       )}
 
-      {!loading && !showForm && (
-        <section className="settings-card">
-          <p className="set-note">No invoices yet</p>
-        </section>
-      )}
+      {!loading && !showForm && <Invoices />}
     </>
   );
 }

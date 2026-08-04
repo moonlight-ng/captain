@@ -231,6 +231,11 @@ export interface CaptainPlatformStore {
   listTripPassengers(userId: string, tripId: string): Promise<Passenger[]>;
   setTripPassengers(userId: string, tripId: string, passengerIds: string[]): Promise<void>;
   listPaymentMethods(userId: string): Promise<PaymentMethod[]>;
+  setDefaultPaymentMethod(
+    userId: string,
+    paymentMethodId: string,
+    now: Date
+  ): Promise<PaymentMethod>;
   reservePaymentCardSetupIntent(
     userId: string,
     setupIntentId: string,

@@ -5,11 +5,12 @@ import { loadEnv } from "../services/app/env.js";
 describe("Captain public environment", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("requires only database and Telegram credentials in production", () => {
+  it("requires database, Telegram, and passenger encryption credentials in production", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("DATABASE_URL", "postgresql://captain.invalid/db");
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "telegram-token");
     vi.stubEnv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "telegram-webhook-secret");
+    vi.stubEnv("CAPTAIN_PII_ENCRYPTION_KEY", "passenger-document-key");
     vi.stubEnv("CAPTAIN_BETA_USER_LIMIT", undefined);
     vi.stubEnv("CAPTAIN_PUBLIC_BETA_ENABLED", undefined);
     expect(loadEnv()).toMatchObject({

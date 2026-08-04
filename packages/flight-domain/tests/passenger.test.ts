@@ -4,6 +4,7 @@ import {
   createCaptainAccessLink,
   createPassengerSchema,
   passengerReadyForBooking,
+  passengerReadyForInternationalTravel,
   passengerSchema,
   type Passenger
 } from "../src/index.js";
@@ -56,12 +57,18 @@ describe("passenger schemas", () => {
       id: "11111111-1111-4111-8111-111111111111",
       userId: "22222222-2222-4222-8222-222222222222",
       givenName: "Ada",
+      middleName: null,
       familyName: "Lovelace",
       title: null,
       gender: null,
       bornOn: null,
       email: null,
       phoneNumber: null,
+      nationality: null,
+      countryOfResidence: null,
+      passportLast4: null,
+      passportIssuingCountry: null,
+      passportExpiresOn: null,
       isDefault: true,
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z"
@@ -75,6 +82,46 @@ describe("passenger schemas", () => {
       email: "ada@example.com",
       phoneNumber: "+447700900123"
     })).toBe(true);
+  });
+
+  it("validates passport input and reports international readiness without exposing the number", () => {
+    expect(createPassengerSchema.safeParse({
+      givenName: "Ada",
+      familyName: "Lovelace",
+      passportNumber: "A12-345"
+    }).success).toBe(false);
+    expect(createPassengerSchema.safeParse({
+      givenName: "Ada",
+      familyName: "Lovelace",
+      passportNumber: "A1234567",
+      nationality: "GB",
+      countryOfResidence: "GB",
+      passportIssuingCountry: "GB",
+      passportExpiresOn: "2099-01-01"
+    }).success).toBe(true);
+
+    const passenger = passengerSchema.parse({
+      id: "11111111-1111-4111-8111-111111111111",
+      userId: "22222222-2222-4222-8222-222222222222",
+      givenName: "Ada",
+      middleName: null,
+      familyName: "Lovelace",
+      title: null,
+      gender: null,
+      bornOn: null,
+      email: null,
+      phoneNumber: null,
+      passportLast4: "4567",
+      nationality: "GB",
+      countryOfResidence: "GB",
+      passportIssuingCountry: "GB",
+      passportExpiresOn: "2099-01-01",
+      isDefault: true,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    });
+    expect(passengerReadyForInternationalTravel(passenger)).toBe(true);
+    expect(passenger).not.toHaveProperty("passportNumber");
   });
 
   it("keeps createCaptainAccessLink off session-only payment paths", () => {

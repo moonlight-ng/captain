@@ -4,6 +4,7 @@ export type CaptainEnv = {
   databaseUrl: string | null;
   telegramBotToken: string | null;
   telegramWebhookSecretToken: string | null;
+  piiEncryptionKey: string | null;
   aiModel: string;
   tripInterpreterModel: string;
   aiGatewayApiKey: string | null;
@@ -23,6 +24,7 @@ export function loadEnv(): CaptainEnv {
     databaseUrl: optional("DATABASE_URL"),
     telegramBotToken: optional("TELEGRAM_BOT_TOKEN"),
     telegramWebhookSecretToken: optional("TELEGRAM_WEBHOOK_SECRET_TOKEN"),
+    piiEncryptionKey: optional("CAPTAIN_PII_ENCRYPTION_KEY"),
     aiModel: process.env.AI_MODEL?.trim() || "openai/gpt-5.6-terra",
     tripInterpreterModel: process.env.TRIP_INTERPRETER_MODEL?.trim() || "openai/gpt-5.6-luna",
     aiGatewayApiKey: optional("AI_GATEWAY_API_KEY"),
@@ -42,7 +44,8 @@ export function loadEnv(): CaptainEnv {
     for (const [name, value] of [
       ["DATABASE_URL", env.databaseUrl],
       ["TELEGRAM_BOT_TOKEN", env.telegramBotToken],
-      ["TELEGRAM_WEBHOOK_SECRET_TOKEN", env.telegramWebhookSecretToken]
+      ["TELEGRAM_WEBHOOK_SECRET_TOKEN", env.telegramWebhookSecretToken],
+      ["CAPTAIN_PII_ENCRYPTION_KEY", env.piiEncryptionKey]
     ] as const) {
       if (!value) throw new Error(`Missing required production environment variable: ${name}`);
     }
