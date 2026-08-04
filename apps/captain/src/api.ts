@@ -15,12 +15,35 @@ export function initializeAccessToken(): boolean {
   return Boolean(accessToken);
 }
 
-export function accessHref(path: "/trip" | "/profile", tripId?: string): string {
-  const target = path === "/trip" && tripId
-    ? `/trip/${encodeURIComponent(tripId)}`
-    : `${path}${path === "/profile" && tripId
-      ? `?${new URLSearchParams({ trip: tripId }).toString()}`
-      : ""}`;
+export type ProfileTab = "preferences" | "travellers" | "payment";
+
+/**
+ * One flight inside a trip. Keyed by itinerary rather than offer id so the link
+ * survives the re-checks that mint fresh offer ids for the same flight.
+ */
+export function flightHref(tripId: string, itineraryKey: string, mode?: string): string {
+  const path = `/trip/${encodeURIComponent(tripId)}/flight/${encodeURIComponent(itineraryKey)}`;
+  return withAccess(mode ? `${path}?${new URLSearchParams({ mode }).toString()}` : path);
+}
+
+/** The home screen, where trips are curated. */
+export function homeHref(): string {
+  return withAccess("/");
+}
+
+/** The trip dashboard, or the settings for that one trip. */
+export function tripHref(tripId?: string, view: "trip" | "settings" = "trip"): string {
+  if (!tripId) return withAccess("/trip");
+  const path = `/trip/${encodeURIComponent(tripId)}`;
+  return withAccess(view === "settings" ? `${path}/settings` : path);
+}
+
+/** The account surface. It is never scoped to a trip. */
+export function profileHref(tab?: ProfileTab): string {
+  return withAccess(tab ? `/profile?${new URLSearchParams({ tab }).toString()}` : "/profile");
+}
+
+function withAccess(target: string): string {
   if (!accessToken) return target;
   return `${target}#${new URLSearchParams({ access: accessToken }).toString()}`;
 }

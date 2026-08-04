@@ -28,14 +28,23 @@ just because no further payment traffic arrives.
 Confirmed trip currency is immutable; changing the profile default affects
 only future trips.
 
+The web app is rooted at `/`, a home screen listing the traveller's trips. `/trip/:id` is the trip dashboard and
+`/trip/:id/settings` holds everything scoped to that one search — tracking controls,
+the trip brief, the traveller assigned to it, and its activity log. What that screen
+offers is driven by the trip's stage (`src/trip-stage.ts`); once a mock booking exists
+it drops tracking and the brief and shows the booking instead. `/profile` is the
+account surface and is never scoped to a trip: Preferences, Travellers, and
+Payment tabs (card + invoices), each holding re-usable information, selected by `?tab=`. Nothing
+inside a trip links to it — profile is entered from Telegram or from home.
+
 Trip and read-only profile dashboard links still use deterministic `#access` bearer
 tokens for backwards compatibility with live beta Telegram history; those
 tokens may only call an explicit allowlist of trip/profile routes. New
-Telegram profile links target `/profile`, where traveller details, saved
-cards, preferences, and trip controls live together. All passenger/payment/account
-mutations require a single-use login token in the URL **query string** (`/auth/link?t=…`).
-The old `/settings`, `/preferences`, `/travellers`, and `/payment` paths remain
-compatibility aliases.
+Telegram profile links target `/profile`, deep-linking a tab where it helps
+(`?tab=payment` from `/payment`). All passenger/payment/account mutations require a
+single-use login token in the URL **query string** (`/auth/link?t=…`). The old
+`/settings`, `/preferences`, `/travellers`, and `/payment` paths remain compatibility
+aliases and redirect to the profile tab each one used to mean.
 
 The booking transition is intentionally a prototype boundary. A mock booking is
 stored only in browser local storage and drives a post-booking flight activity

@@ -3,7 +3,7 @@ import type {
   Segment,
   TripPayload,
   VerifiedOffer
-} from "./domain";
+} from "./domain.js";
 
 export function outboundSegments(segments: Segment[]): Segment[] {
   if (segments.length <= 1) return segments;

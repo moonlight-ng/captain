@@ -2,18 +2,25 @@ import { useEffect, useMemo, useState, Fragment, type Dispatch, type SetStateAct
 
 import {
   ApiError,
-  accessHref,
   getProfile,
   getSession,
+  flightHref,
   getTrip,
+  homeHref,
   initializeAccessToken,
+  listPaymentMethods,
+  profileHref,
   setTripFlightSelection,
-  tripAction
+  tripAction,
+  tripHref,
+  type ProfileTab
 } from "./api";
 import {
   EMPTY_BROWSE_PREFERENCES,
   sortAndFilterOffers,
   type BrowsePreferences,
+  type Passenger,
+  type PaymentMethod,
   type RankingMode,
   type Segment,
   type TravellerProfile,
@@ -22,6 +29,7 @@ import {
   type Watch
 } from "./domain";
 import { airlineGroups } from "./airline-groups";
+import { MOCK_PAYMENT_METHOD } from "./mock-payment";
 import {
   activityLabel,
   airlineName,
@@ -58,8 +66,11 @@ import {
   writeMockBooking,
   type MockBooking
 } from "./mock-booking";
+import { isWatchSearching } from "./trip-stage";
 import { BookedFlight } from "./screens/BookedFlight";
-import { Preferences } from "./screens/Preferences";
+import { Home } from "./screens/Home";
+import { Profile } from "./screens/Profile";
+import { TripSettings } from "./screens/TripSettings";
 
 type Tab = "flights" | "airlines" | "browse";
 const tabLabels: Record<Tab, string> = {
@@ -68,24 +79,48 @@ const tabLabels: Record<Tab, string> = {
   browse: "All flights"
 };
 
-type Page = "trip" | "profile";
+type Page = "home" | "trip" | "trip-settings" | "profile";
+
+/** Paths already sent to Telegram, and the profile tab each one meant. */
+const profileAliasTabs: Record<string, ProfileTab | ""> = {
+  "/profile": "",
+  "/settings": "preferences",
+  "/preferences": "preferences",
+  "/travellers": "travellers",
+  "/payment": "payment"
+};
 
 function currentPage(): Page {
-  return ["/profile", "/settings", "/preferences", "/travellers", "/payment"].includes(
-    window.location.pathname
-  ) ? "profile" : "trip";
+  if (window.location.pathname in profileAliasTabs) return "profile";
+  if (window.location.pathname === "/") return "home";
+  return /^\/trip\/[^/]+\/settings\/?$/u.test(window.location.pathname)
+    ? "trip-settings"
+    : "trip";
 }
 
 function currentTripId(): string | undefined {
-  const match = /^\/trip\/([^/]+)\/?$/u.exec(window.location.pathname);
+  const match = /^\/trip\/([^/]+?)(?:\/settings|\/flight\/[^/]+)?\/?$/u.exec(window.location.pathname);
   if (match?.[1]) return decodeURIComponent(match[1]);
   return new URLSearchParams(window.location.search).get("trip") ?? undefined;
 }
 
 type WatchlistFocus = {
-  offerId: string;
+  itineraryKey: string;
   mode?: RankingMode;
 };
+
+const rankingModes: RankingMode[] = ["cheapest", "balanced", "fastest"];
+
+/** The focused flight lives in the URL, so it survives reload, share, and Back. */
+function currentFocus(): WatchlistFocus | null {
+  const match = /^\/trip\/[^/]+\/flight\/([^/]+)\/?$/u.exec(window.location.pathname);
+  if (!match?.[1]) return null;
+  const itineraryKey = decodeURIComponent(match[1]);
+  const mode = new URLSearchParams(window.location.search).get("mode");
+  return rankingModes.includes(mode as RankingMode)
+    ? { itineraryKey, mode: mode as RankingMode }
+    : { itineraryKey };
+}
 
 export function App() {
   const [profile, setProfile] = useState<TravellerProfile | null>(null);
@@ -100,7 +135,7 @@ export function App() {
   const [browsePreferences, setBrowsePreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
   const [filterOpen, setFilterOpen] = useState(false);
   const [draftPreferences, setDraftPreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
-  const [watchlistFocus, setWatchlistFocus] = useState<WatchlistFocus | null>(null);
+  const [watchlistFocus, setWatchlistFocus] = useState<WatchlistFocus | null>(currentFocus);
   const [dismissedItineraryKeys, setDismissedItineraryKeys] = useState<string[]>([]);
   const [watchedOfferCache, setWatchedOfferCache] = useState<Record<string, VerifiedOffer>>({});
   const [searchBusy, setSearchBusy] = useState(false);
@@ -129,7 +164,7 @@ export function App() {
         && window.location.pathname === "/trip"
         && new URLSearchParams(window.location.search).has("trip")
       ) {
-        window.history.replaceState(null, "", accessHref("/trip", nextTrip.trip.id));
+        window.history.replaceState(null, "", tripHref(nextTrip.trip.id));
       }
     } catch (cause) {
       setAuthenticated(false);
@@ -142,10 +177,20 @@ export function App() {
   }
 
   useEffect(() => {
-    if (["/settings", "/preferences", "/travellers", "/payment"].includes(window.location.pathname)) {
-      window.history.replaceState(null, "", `/profile${window.location.search}${window.location.hash}`);
+    const aliasTab = profileAliasTabs[window.location.pathname];
+    if (aliasTab) {
+      const url = new URL(window.location.href);
+      url.pathname = "/profile";
+      if (!url.searchParams.has("tab")) url.searchParams.set("tab", aliasTab);
+      window.history.replaceState(null, "", url.toString());
     }
     void load();
+  }, []);
+
+  useEffect(() => {
+    const sync = () => setWatchlistFocus(currentFocus());
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
   }, []);
 
   const trip = tripData?.trip ?? null;
@@ -234,17 +279,35 @@ export function App() {
   }
   if (page === "profile" && profile) {
     return (
-      <Preferences
+      <Profile
         profile={profile}
-        tripData={tripData}
         displayName={displayName}
-        trackingError={error}
         sessionCredential={credential === "session"}
         paymentsEnabled={paymentsEnabled}
         onSaved={setProfile}
+        onBack={() => { window.location.href = homeHref(); }}
+      />
+    );
+  }
+
+  if (page === "home") {
+    return <Home trips={tripData?.trips ?? []} displayName={displayName} />;
+  }
+
+  if (page === "trip-settings") {
+    return (
+      <TripSettings
+        tripData={tripData}
+        booking={mockBooking}
+        trackingError={error}
+        sessionCredential={credential === "session"}
         onTripChanged={load}
         onTripError={setError}
-        onBack={() => { window.location.href = accessHref("/trip", tripData?.trip?.id); }}
+        onBookingChange={(next) => {
+          setMockBooking(next);
+          writeMockBooking(next);
+        }}
+        onBack={() => { window.location.href = tripHref(trip?.id); }}
       />
     );
   }
@@ -296,28 +359,55 @@ export function App() {
     onSearch: () => { void searchFlights(); }
   };
 
+  function openFlight(offer: VerifiedOffer, mode?: RankingMode) {
+    if (!trip) return;
+    setError("");
+    window.history.pushState(
+      { captainFlight: true },
+      "",
+      flightHref(trip.id, offer.itineraryKey, mode)
+    );
+    setWatchlistFocus(mode
+      ? { itineraryKey: offer.itineraryKey, mode }
+      : { itineraryKey: offer.itineraryKey });
+  }
+
+  function closeFlight() {
+    // Step back when we opened the flight ourselves; a direct link has nothing behind it.
+    if ((window.history.state as { captainFlight?: boolean } | null)?.captainFlight) {
+      window.history.back();
+      return;
+    }
+    if (trip) window.history.replaceState(null, "", tripHref(trip.id));
+    setWatchlistFocus(null);
+  }
+
   const focusOffer = watchlistFocus
-    ? offers.find((item) => item.id === watchlistFocus.offerId)
-      ?? watchedOffers.find((item) => item.id === watchlistFocus.offerId)
+    ? offers.find((item) => item.itineraryKey === watchlistFocus.itineraryKey)
+      ?? watchedOffers.find((item) => item.itineraryKey === watchlistFocus.itineraryKey)
+      ?? watchedOfferCache[watchlistFocus.itineraryKey]
       ?? null
     : null;
   const focusWatching = Boolean(
-    focusOffer
-    && personSelectionKeys.includes(focusOffer.itineraryKey)
+    watchlistFocus && personSelectionKeys.includes(watchlistFocus.itineraryKey)
   );
 
   return (
     <main className="shell">
-      <header className="topbar">
-        <a className="brand" href={accessHref("/trip", trip?.id)} aria-label="Captain home">
-          <span className="brand-mark">C</span>
-          <span>Captain</span>
-        </a>
-        <div className="top-actions">
-          <span className="name">{mockBooking ? "Mock booking" : agentRunningLabel(tripData?.watch, trip)}</span>
-          <a className="quiet-link" href={accessHref("/profile", trip?.id)}>Profile</a>
-        </div>
-      </header>
+      {!watchlistFocus && (
+        <header className="topbar">
+          <a className="brand" href={homeHref()} aria-label="Captain home">
+            <span className="brand-mark">C</span>
+            <span>Captain</span>
+          </a>
+          <div className="top-actions">
+            {/* Profile is reached from Telegram, not from inside a trip. */}
+            {trip && (
+              <a className="quiet-link" href={tripHref(trip.id, "settings")}>Settings</a>
+            )}
+          </div>
+        </header>
+      )}
 
       {!trip ? (
         <section className="empty-hero">
@@ -346,14 +436,21 @@ export function App() {
             offers={offers}
             watch={tripData?.watch ?? null}
             activity={tripData?.activity ?? []}
+            travellers={tripData?.travellers ?? []}
             tripId={trip.id}
+            paymentsEnabled={paymentsEnabled}
             watching={focusWatching}
-            onBack={() => setWatchlistFocus(null)}
+            refreshBusy={searchBusy}
+            onBack={closeFlight}
+            onRefresh={() => {
+              if (watch?.status === "completed") void trackPrices();
+              else void searchFlights();
+            }}
             onBook={(offer) => {
               const booking = createMockBooking(trip.id, offer);
               writeMockBooking(booking);
               setMockBooking(booking);
-              setWatchlistFocus(null);
+              closeFlight();
             }}
             onSelectionChange={(itineraryKey, selected) => {
               setTripData((current) => {
@@ -395,7 +492,7 @@ export function App() {
               setDismissedItineraryKeys((current) =>
                 current.includes(itineraryKey) ? current : [...current, itineraryKey]
               );
-              setWatchlistFocus(null);
+              closeFlight();
             }}
             onError={setError}
           />
@@ -424,16 +521,6 @@ export function App() {
           )}
           {error && <div className="notice">{error}</div>}
 
-          {watch && (
-            <TrackingRunCard
-              watch={watch}
-              offers={offers}
-              recommendation={tripData?.recommendation ?? null}
-              busy={searchBusy}
-              onTrack={() => { void trackPrices(); }}
-            />
-          )}
-
           <nav className="tabs" aria-label="Trip results">
             {(["flights", "airlines", "browse"] as Tab[]).map((item) => (
               <button
@@ -455,10 +542,7 @@ export function App() {
                 profile={profile!}
                 dismissedItineraryKeys={dismissedItineraryKeys}
                 emptySearch={emptySearch}
-                onOpen={(offer, mode) => {
-                  setError("");
-                  setWatchlistFocus(mode ? { offerId: offer.id, mode } : { offerId: offer.id });
-                }}
+                onOpen={openFlight}
               />
             )}
             {tab === "airlines" && (
@@ -494,10 +578,7 @@ export function App() {
                   setBrowsePreferences(EMPTY_BROWSE_PREFERENCES);
                   setDraftPreferences(EMPTY_BROWSE_PREFERENCES);
                 }}
-                onOpen={(offer) => {
-                  setError("");
-                  setWatchlistFocus({ offerId: offer.id });
-                }}
+                onOpen={(offer) => openFlight(offer)}
               />
             )}
           </section>
@@ -507,100 +588,6 @@ export function App() {
   );
 }
 
-function TrackingRunCard({
-  watch,
-  offers,
-  recommendation,
-  busy,
-  onTrack
-}: {
-  watch: Watch;
-  offers: VerifiedOffer[];
-  recommendation: TripPayload["recommendation"];
-  busy: boolean;
-  onTrack: () => void;
-}) {
-  const best = offers.find((offer) => offer.id === recommendation?.offerId)
-    ?? offers.find((offer) => offer.itineraryKey === recommendation?.itineraryKey)
-    ?? offers[0]
-    ?? null;
-
-  if (watch.status === "completed") {
-    return (
-      <section className="tracking-run-card complete" aria-label="Tracking run summary">
-        <div className="tracking-run-icon" aria-hidden="true">✓</div>
-        <div className="tracking-run-copy">
-          <p className="eyebrow">Prices stale</p>
-          <h2>Three-day watch finished</h2>
-          <p>
-            Captain checked {watch.checksCompleted || "the route"}
-            {watch.checksCompleted ? ` time${watch.checksCompleted === 1 ? "" : "s"}` : ""} and stopped as planned.
-            {best
-              ? " No further checks are scheduled. The last strongest option is below. Choose Track to check a fresh price before booking."
-              : recommendation?.summary
-                ? ` ${recommendation.summary}`
-                : " No verified fare was available at the end of this run."}
-          </p>
-        </div>
-        {best && (
-          <div className="tracking-best">
-            <span>Last strongest option</span>
-            <strong>{money(best)}</strong>
-            <small>{airlineName(best.primaryAirlineCode, [best])} · {duration(best)} · {stops(best)}</small>
-          </div>
-        )}
-        <div className="tracking-run-actions">
-          <button className="primary-action" disabled={busy} onClick={onTrack}>
-            {busy ? "Starting…" : "Track"}
-          </button>
-          <small>Starts a new three-day check.</small>
-        </div>
-      </section>
-    );
-  }
-
-  const started = Date.parse(watch.runStartedAt);
-  const ends = Date.parse(watch.runEndsAt);
-  const span = Math.max(1, ends - started);
-  const progress = Math.min(100, Math.max(2, ((Date.now() - started) / span) * 100));
-  const paused = watch.status === "paused";
-  return (
-    <section className={`tracking-run-card${paused ? " paused" : ""}`} aria-label="Tracking run progress">
-      <div className="tracking-run-copy">
-        <p className="eyebrow">{paused ? "Tracking paused" : "Tracking now"}</p>
-        <h2>Three-day price watch</h2>
-        <p>
-          {paused
-            ? "This run is paused. Resume it from Profile when you’re ready."
-            : `Checking every six hours until ${runEndLabel(watch.runEndsAt)}. Captain will stop automatically and send a summary.`}
-        </p>
-      </div>
-      <div className="tracking-progress" aria-label={`${Math.round(progress)}% complete`}>
-        <span style={{ width: `${progress}%` }} />
-      </div>
-      <dl className="tracking-run-facts">
-        <div><dt>Checks complete</dt><dd>{watch.checksCompleted}</dd></div>
-        <div><dt>Next check</dt><dd>{watch.nextCheckAt ? scheduleTime(watch.nextCheckAt) : "Finishing"}</dd></div>
-        <div><dt>Ends</dt><dd>{runEndLabel(watch.runEndsAt)}</dd></div>
-      </dl>
-    </section>
-  );
-}
-
-function runEndLabel(value: string): string {
-  const date = new Date(value);
-  const today = new Date();
-  const day = date.toDateString() === today.toDateString()
-    ? "today"
-    : date.toDateString() === new Date(today.getTime() + 86_400_000).toDateString()
-      ? "tomorrow"
-      : new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(date);
-  return `${day} at ${new Intl.DateTimeFormat(undefined, {
-    hour: "numeric",
-    minute: "2-digit"
-  }).format(date)}`;
-}
-
 type EmptySearchProps = {
   needsManualSearch: boolean;
   searching: boolean;
@@ -608,19 +595,6 @@ type EmptySearchProps = {
   busy: boolean;
   onSearch: () => void;
 };
-
-function isWatchSearching(
-  watch: TripPayload["watch"] | null | undefined,
-  trip: TripPayload["trip"] | null
-): boolean {
-  if (!trip || trip.status === "paused" || !watch || watch.status !== "active") return false;
-  if (!watch.lastCheckAt) return true;
-  if (watch.lastManualRefreshAt && Date.parse(watch.lastManualRefreshAt) > Date.parse(watch.lastCheckAt)) {
-    return true;
-  }
-  if (watch.nextCheckAt && Date.parse(watch.nextCheckAt) <= Date.now() + 60_000) return true;
-  return false;
-}
 
 function FlightsTab({
   offers,
@@ -737,15 +711,81 @@ function RecommendationCard({
   );
 }
 
+function BookingCta({
+  offer,
+  ready,
+  traveller,
+  payment,
+  tripId,
+  paymentsEnabled,
+  onBook
+}: {
+  offer: VerifiedOffer;
+  ready: boolean;
+  traveller: Passenger | null;
+  payment: PaymentMethod | null;
+  tripId: string;
+  paymentsEnabled: boolean;
+  onBook: (offer: VerifiedOffer) => void;
+}) {
+  if (ready && traveller && payment) {
+    return (
+      <div className="mock-booking-cta is-ready">
+        <div className="booking-cta-traveller">
+          <strong>{passengerDisplayName(traveller)}</strong>
+          <p className="booking-cta-payment">
+            {formatCardBrand(payment.brand)} ···· {payment.last4}
+            {!paymentsEnabled || payment.id === MOCK_PAYMENT_METHOD.id ? " · Mock" : ""}
+          </p>
+        </div>
+        <button type="button" className="primary-action" onClick={() => onBook(offer)}>
+          Book flight
+        </button>
+      </div>
+    );
+  }
+
+  const needsTraveller = !traveller?.readyForBooking;
+  const needsPayment = paymentsEnabled && payment === null;
+  const setupHref = needsPayment && !needsTraveller
+    ? profileHref("payment")
+    : tripHref(tripId, "settings");
+
+  return (
+    <div className="mock-booking-cta is-setup">
+      <div>
+        <strong>Complete profile</strong>
+        <p>Add a card and traveller</p>
+      </div>
+      <a className="primary-action" href={setupHref}>Complete settings</a>
+    </div>
+  );
+}
+
+function passengerDisplayName(passenger: Passenger): string {
+  const title = passenger.title
+    ? `${passenger.title.charAt(0).toUpperCase()}${passenger.title.slice(1)}`
+    : "";
+  return [title, passenger.givenName, passenger.familyName].filter(Boolean).join(" ");
+}
+
+function formatCardBrand(brand: string): string {
+  return brand.replace(/_/gu, " ").replace(/\b\w/gu, (char) => char.toUpperCase());
+}
+
 function WatchlistDetail({
   offer,
   mode,
   offers,
   watch,
   activity,
+  travellers,
   tripId,
+  paymentsEnabled,
   watching,
+  refreshBusy,
   onBack,
+  onRefresh,
   onBook,
   onSelectionChange,
   onRemoved,
@@ -756,15 +796,37 @@ function WatchlistDetail({
   offers: VerifiedOffer[];
   watch: Watch | null;
   activity: TripPayload["activity"];
+  travellers: Passenger[];
   tripId: string;
+  paymentsEnabled: boolean;
   watching: boolean;
+  refreshBusy: boolean;
   onBack: () => void;
+  onRefresh: () => void;
   onBook: (offer: VerifiedOffer) => void;
   onSelectionChange: (itineraryKey: string, selected: boolean) => void;
   onRemoved: (itineraryKey: string) => void;
   onError: (message: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [payment, setPayment] = useState<PaymentMethod | null>(null);
+  const [paymentLoaded, setPaymentLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listPaymentMethods()
+      .then((methods) => {
+        if (!cancelled) setPayment(methods[0] ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setPayment(null);
+      })
+      .finally(() => {
+        if (!cancelled) setPaymentLoaded(true);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   if (!offer) {
     return (
       <section className="watchlist-detail">
@@ -780,6 +842,10 @@ function WatchlistDetail({
 
   const outbound = outboundSegments(offer.snapshot.segments ?? []);
   const comparison = peerPriceComparison(offer, offers);
+  const traveller = travellers[0] ?? null;
+  const paymentReady = !paymentsEnabled || (paymentLoaded && payment !== null);
+  const bookingReady = Boolean(traveller?.readyForBooking && paymentReady);
+  const displayPayment = payment ?? (!paymentsEnabled ? MOCK_PAYMENT_METHOD : null);
 
   async function toggleWatchlist() {
     setBusy(true);
@@ -814,7 +880,17 @@ function WatchlistDetail({
       </header>
 
       <div className="watchlist-detail-summary">
-        <strong className="price">{money(offer)}</strong>
+        <div className="watchlist-summary-top">
+          <strong className="price">{money(offer)}</strong>
+          <button
+            type="button"
+            className="summary-refresh"
+            disabled={refreshBusy}
+            onClick={onRefresh}
+          >
+            {refreshBusy ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
         <p className="watchlist-airline">
           {mode ? `${label(mode)} · ` : ""}
           {airlineName(offer.primaryAirlineCode, [offer])}
@@ -826,25 +902,16 @@ function WatchlistDetail({
         </div>
       </div>
 
-      {watch?.status === "completed" ? (
-        <div className="mock-booking-cta stale-price-notice">
-          <div>
-            <span className="pill">Prices stale</span>
-            <strong>Track before booking</strong>
-            <p>Return to the trip summary and choose Track to check a fresh price.</p>
-          </div>
-        </div>
-      ) : (
-        <div className="mock-booking-cta">
-          <div>
-            <span className="pill mock-pill">Prototype</span>
-            <strong>Preview booking this flight</strong>
-            <p>No provider call, reservation, or card charge will be made.</p>
-          </div>
-          <button type="button" className="primary-action" onClick={() => onBook(offer)}>
-            Book flight · mock
-          </button>
-        </div>
+      {(!paymentsEnabled || paymentLoaded) && (
+        <BookingCta
+          offer={offer}
+          ready={bookingReady}
+          traveller={traveller}
+          payment={displayPayment}
+          tripId={tripId}
+          paymentsEnabled={paymentsEnabled}
+          onBook={onBook}
+        />
       )}
 
       {outbound.length > 0 && (
@@ -1165,21 +1232,6 @@ function OfferRow({
   );
 }
 
-
-function agentRunningLabel(
-  watch: TripPayload["watch"] | null | undefined,
-  trip: TripPayload["trip"] | null
-): string {
-  if (!trip) return "";
-  if (trip.status === "paused" || watch?.status === "paused") return "Paused";
-  if (watch?.status === "completed") return "Prices stale";
-  if (watch?.lastCheckAt) return `Checked ${relativeTime(watch.lastCheckAt)}`;
-  if (watch?.nextCheckAt) {
-    const next = scheduleTime(watch.nextCheckAt);
-    return next === "Due now" ? "Checking soon" : `Next check ${next.toLowerCase()}`;
-  }
-  return "Tracking";
-}
 
 function CenteredState({ title, detail }: { title: string; detail: string }) {
   return <main className="centered"><span className="brand-mark">C</span><h1>{title}</h1><p>{detail}</p></main>;

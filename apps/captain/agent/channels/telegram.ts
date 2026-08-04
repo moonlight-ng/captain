@@ -188,7 +188,7 @@ export default telegramChannel({
         ctx,
         CAPTAIN_PAYMENT_INTRO,
         "Open profile",
-        await services.auth.createLoginLink(user.id, "/profile")
+        await services.auth.createLoginLink(user.id, "/profile", { tab: "payment" })
       );
       return null;
     }
@@ -882,7 +882,7 @@ async function completeOnboarding(
     ctx,
     "Preferences set. Tell me where and roughly when you want to fly. I can track up to three trips at a time.",
     "Edit preferences",
-    await services.auth.createLoginLink(userId, "/profile")
+    await services.auth.createLoginLink(userId, "/profile", { tab: "preferences" })
   );
 }
 
@@ -1130,7 +1130,7 @@ async function maybePostTravellerSetup(
     telegram,
     CAPTAIN_TRAVELLER_SETUP_PROMPT,
     "Add traveller details",
-    await services.auth.createLoginLink(userId, "/profile")
+    await services.auth.createLoginLink(userId, "/profile", { tab: "travellers" })
   );
 }
 

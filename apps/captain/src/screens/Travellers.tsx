@@ -17,19 +17,7 @@ import {
   toPassengerPayload
 } from "../components/PassengerForm";
 
-export function Travellers({
-  displayName,
-  paymentsEnabled,
-  onBack,
-  onChanged,
-  embedded = false
-}: {
-  displayName: string;
-  paymentsEnabled: boolean;
-  onBack?: () => void;
-  onChanged?: (passengers: Passenger[]) => void;
-  embedded?: boolean;
-}) {
+export function Travellers({ displayName }: { displayName: string }) {
   const [passengers, setPassengers] = useState<Passenger[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -41,9 +29,7 @@ export function Travellers({
     setLoading(true);
     setError("");
     try {
-      const next = await listPassengers();
-      setPassengers(next);
-      onChanged?.(next);
+      setPassengers(await listPassengers());
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not load travellers.");
     } finally {
@@ -61,14 +47,8 @@ export function Travellers({
     familyName: nameParts.slice(1).join(" ")
   };
 
-  const content = (
+  return (
     <>
-      <section className="settings-card" id="traveller-details">
-        <p className="eyebrow">Traveller details</p>
-        <h1>Who’s flying</h1>
-        <p>Names are saved securely for booking. Date of birth and gender are optional until you book.</p>
-      </section>
-
       {loading && <p className="settings-card">Loading travellers…</p>}
       {error && <p className="settings-card form-error" role="alert">{error}</p>}
 
@@ -81,7 +61,7 @@ export function Travellers({
           <summary>
             <span>
               <strong>{passenger.givenName} {passenger.familyName}</strong>
-              {passenger.isDefault ? " · Default" : ""}
+              {passenger.isDefault && <small>Default</small>}
             </span>
             <em>{readinessLabel(passenger)}</em>
           </summary>
@@ -107,9 +87,18 @@ export function Travellers({
                 }}
               />
             ) : (
-              <div className="settings-list">
-                <div className="entity-row">
-                  <span>{passenger.email || "No email"} · {passenger.phoneNumber || "No phone"}</span>
+              <>
+                <dl className="settings-list">
+                  <div>
+                    <dt>Email</dt>
+                    <dd>{passenger.email || "None"}</dd>
+                  </div>
+                  <div>
+                    <dt>Phone</dt>
+                    <dd>{passenger.phoneNumber || "None"}</dd>
+                  </div>
+                </dl>
+                <div className="entity-row" style={{ marginTop: 16 }}>
                   <div>
                     {!passenger.isDefault && (
                       <button
@@ -160,7 +149,7 @@ export function Travellers({
                     </button>
                   </div>
                 </div>
-              </div>
+              </>
             )}
           </div>
         </details>
@@ -200,28 +189,6 @@ export function Travellers({
         </div>
       </details>
 
-      {paymentsEnabled && !embedded && (
-        <p className="settings-card">
-          Next, add a card in your <a className="quiet-link" href="/profile#payment">profile</a>.
-        </p>
-      )}
     </>
-  );
-
-  if (embedded) return content;
-
-  return (
-    <main className="shell settings-shell">
-      <header className="topbar">
-        <a className="brand" href="/profile" aria-label="Captain profile">
-          <span className="brand-mark">C</span>
-          <span>Captain</span>
-        </a>
-        <div className="top-actions">
-          {onBack && <button type="button" className="quiet-link" onClick={onBack}>Back</button>}
-        </div>
-      </header>
-      {content}
-    </main>
   );
 }

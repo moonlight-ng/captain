@@ -13,9 +13,17 @@ export default defineConfig({
     watch: {
       // Native FSEvents can miss edits in this environment; polling keeps HMR alive.
       usePolling: true,
-      interval: 300
+      interval: 300,
+      // Eve writes nested repo snapshots under .eve; watching them floods Vite with
+      // full reloads and clears the TS cache mid-edit.
+      ignored: ["**/.eve/**", "**/node_modules/**"]
     },
     proxy: {
+      // /auth/link exchanges one-time login tokens for the session cookie.
+      "/auth": {
+        target: apiProxyTarget,
+        changeOrigin: true
+      },
       "/api": {
         target: apiProxyTarget,
         changeOrigin: true,
