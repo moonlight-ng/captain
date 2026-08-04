@@ -16,7 +16,7 @@ Each Telegram traveller has one `TravellerProfile` (preferences) and up to three
 active or paused trips. Passenger identity lives in `captain.passengers` and is
 assigned to trips via `captain.trip_passengers`. Tokenised cards (Duffel card
 IDs only — never PAN, CVC, or expiry) live in `captain.payment_methods` behind
-`CAPTAIN_PAYMENTS_ENABLED` (default off). Captain keeps at most one active card
+`CAPTAIN_PAYMENTS_ENABLED` (enabled in production). Captain keeps at most one active card
 per user, and a Duffel token backs at most one active card across all users;
 retired cards are deleted remotely through a leased Postgres queue processed by
 the flight worker. A deletion retries for roughly four days, then parks in a
@@ -28,11 +28,21 @@ just because no further payment traffic arrives.
 Confirmed trip currency is immutable; changing the profile default affects
 only future trips.
 
-Trip and preferences dashboard links still use deterministic `#access` bearer
+Trip and read-only profile dashboard links still use deterministic `#access` bearer
 tokens for backwards compatibility with live beta Telegram history; those
 tokens may only call an explicit allowlist of trip/profile routes. New
-surfaces (`/travellers`, `/payment`) and all passenger/payment/account mutations
-require a single-use login token in the URL **query string** (`/auth/link?t=…`).
+Telegram profile links target `/profile`, where traveller details, saved
+cards, preferences, and trip controls live together. All passenger/payment/account
+mutations require a single-use login token in the URL **query string** (`/auth/link?t=…`).
+The old `/settings`, `/preferences`, `/travellers`, and `/payment` paths remain
+compatibility aliases.
+
+The booking transition is intentionally a prototype boundary. A mock booking is
+stored only in browser local storage and drives a post-booking flight activity
+screen with simulated seat, baggage, and cancellation actions. It never invokes
+Duffel Orders, an airline booking endpoint, or a payment charge. The default
+mock card is display-only; a traveller may separately save a real tokenised card
+through Duffel Components for future production booking work.
 Tokens expire after 15 minutes and exchange for a hashed, revocable, HttpOnly,
 SameSite=Lax session cookie lasting 30 days. The authenticated API exposes the
 current profile, selected trip, passengers, and (when enabled) payment methods.

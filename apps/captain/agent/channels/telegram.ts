@@ -68,13 +68,13 @@ export const CAPTAIN_NEW_USER_GREETING =
   "Hi, I'm Captain! I can help you prepare for a flight by tracking suitable options and reporting price changes.";
 export const CAPTAIN_PREFERENCES_INTRO = "Let's start with your preferences";
 export const CAPTAIN_TRAVELLER_SETUP_PROMPT =
-  "Save your traveller details so Captain is ready when booking opens.";
+  "Save your traveller details and card so Captain is ready when booking opens.";
 export const CAPTAIN_PROFILES_INTRO =
-  "Manage traveller names on Captain’s secure page.";
+  "Manage traveller details, preferences, and your saved card in your Captain profile.";
 export const CAPTAIN_PAYMENT_UNAVAILABLE =
   "Card setup isn’t available yet. Captain will let you know when it opens.";
 export const CAPTAIN_PAYMENT_INTRO =
-  "Add or replace your saved card on Captain’s secure payment page.";
+  "Add or replace your saved card in your Captain profile.";
 export const CAPTAIN_SIGNOUT_CONFIRMATION =
   "Signed out of Captain on the web. Open a fresh link from Telegram to sign in again.";
 
@@ -149,7 +149,7 @@ export default telegramChannel({
           ctx,
           welcome,
           "Edit preferences",
-          services.auth.createAccessLink(user.id, "/preferences")
+          await services.auth.createLoginLink(user.id, "/profile")
         );
       }
       return null;
@@ -158,13 +158,13 @@ export default telegramChannel({
       await handleOnboardingText(ctx, user.id, profile, content);
       return null;
     }
-    if (content === "/preferences") {
+    if (content === "/profile" || content === "/settings" || content === "/preferences") {
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       await postWithLink(
         ctx,
-        "Your preferences control how Captain ranks all tracked trips and future trips.",
-        "Edit preferences",
-        services.auth.createAccessLink(user.id, "/preferences")
+        "Manage your traveller details, saved card, flight preferences, and notifications in one place.",
+        "Open profile",
+        await services.auth.createLoginLink(user.id, "/profile")
       );
       return null;
     }
@@ -184,8 +184,8 @@ export default telegramChannel({
       await postWithLink(
         ctx,
         CAPTAIN_PROFILES_INTRO,
-        "Open travellers",
-        await services.auth.createLoginLink(user.id, "/travellers")
+        "Open profile",
+        await services.auth.createLoginLink(user.id, "/profile", { section: "profiles" })
       );
       return null;
     }
@@ -198,8 +198,8 @@ export default telegramChannel({
       await postWithLink(
         ctx,
         CAPTAIN_PAYMENT_INTRO,
-        "Open payment",
-        await services.auth.createLoginLink(user.id, "/payment")
+        "Open profile",
+        await services.auth.createLoginLink(user.id, "/profile", { section: "payment" })
       );
       return null;
     }
@@ -295,13 +295,13 @@ export default telegramChannel({
       }
     } catch (error) {
       if (error instanceof TripLimitError) {
-        const message = "You’re already tracking three trips. Open Agent settings and stop tracking one before creating another.";
+        const message = "You’re already tracking three trips. Open Profile and stop tracking one before creating another.";
         await services.platformStore.appendMessage(user.id, "assistant", message, new Date());
         await postWithLink(
           ctx,
           message,
-          "Agent settings",
-          services.auth.createAccessLink(user.id, "/preferences")
+          "Open profile",
+          await services.auth.createLoginLink(user.id, "/profile")
         );
         return null;
       }
@@ -438,8 +438,8 @@ export default telegramChannel({
         await postWithLink(
           ctx,
           "You’re already tracking three trips. Stop tracking one before creating another.",
-          "Agent settings",
-          services.auth.createAccessLink(user.id, "/preferences")
+          "Open profile",
+          await services.auth.createLoginLink(user.id, "/profile")
         );
         return;
       }
@@ -834,7 +834,7 @@ async function handleTrackingCallback(
     const route = trip.title.replace(/\s+to\s+/giu, " → ");
     const message = action.action === "keep"
       ? `Got it — I’ll keep watching ${route}.`
-      : `Okay — I paused ${route}. You can resume it from Agent settings.`;
+      : `Okay — I paused ${route}. You can resume it from Profile.`;
     await ctx.telegram.answerCallbackQuery({
       callbackQueryId: query.id,
       text: action.action === "keep" ? "Tracking continues." : "Tracking paused."
@@ -893,7 +893,7 @@ async function completeOnboarding(
     ctx,
     "Preferences set. Tell me where and roughly when you want to fly. I can track up to three trips at a time.",
     "Edit preferences",
-    services.auth.createAccessLink(userId, "/preferences")
+    await services.auth.createLoginLink(userId, "/profile", { section: "profiles" })
   );
 }
 
@@ -1141,7 +1141,7 @@ async function maybePostTravellerSetup(
     telegram,
     CAPTAIN_TRAVELLER_SETUP_PROMPT,
     "Add traveller details",
-    await services.auth.createLoginLink(userId, "/travellers")
+    await services.auth.createLoginLink(userId, "/profile", { section: "profiles" })
   );
 }
 

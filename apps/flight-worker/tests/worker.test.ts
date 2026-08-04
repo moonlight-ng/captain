@@ -126,6 +126,11 @@ describe("flight worker orchestration", () => {
     const user = await store.ensureTelegramUser({
       telegramUserId: 1, telegramChatId: 1, username: null, firstName: "Ada", lastName: null
     }, new Date("2026-08-01T12:00:00Z"));
+    // Provider completion uses the wall clock, so keep this delivery assertion
+    // deterministic when the suite runs during the profile's default quiet hours.
+    await store.updateProfile(user.id, {
+      quietHoursEnabled: false
+    }, new Date("2026-08-01T12:00:00Z"));
     const input: CreateTripInput = {
       title: "Berlin", cadenceHours: 6,
       brief: {

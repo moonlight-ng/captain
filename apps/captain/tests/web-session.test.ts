@@ -24,23 +24,23 @@ describe("Captain web auth", () => {
     return { store, auth, userId: user.id };
   }
 
-  it("keeps reusable design links for trip and preferences", async () => {
+  it("keeps reusable design links for trip and profile", async () => {
     const { auth, userId: id } = await setup();
-    const link = auth.createAccessLink(id, "/preferences");
-    expect(new URL(link).pathname).toBe("/preferences");
+    const link = auth.createAccessLink(id, "/profile");
+    expect(new URL(link).pathname).toBe("/profile");
     const token = new URLSearchParams(new URL(link).hash.slice(1)).get("access")!;
     await expect(auth.resolve(new Request("https://captain.example/api/auth/session", {
       headers: { authorization: `Bearer ${token}` }
     }))).resolves.toEqual({ userId: id, credential: "legacy-bearer" });
-    expect(auth.createAccessLink(id, "/preferences")).toBe(link);
+    expect(auth.createAccessLink(id, "/profile")).toBe(link);
   });
 
   it("exchanges a login token for a session cookie and rejects reuse", async () => {
     const { auth, userId: id } = await setup();
-    const link = await auth.createLoginLink(id, "/travellers");
+    const link = await auth.createLoginLink(id, "/profile");
     const raw = new URL(link).searchParams.get("t")!;
     const first = await auth.exchangeLoginToken(raw);
-    expect(first).toMatchObject({ userId: id, redirectPath: "/travellers" });
+    expect(first).toMatchObject({ userId: id, redirectPath: "/profile" });
     await expect(auth.exchangeLoginToken(raw)).resolves.toBeNull();
 
     const cookieRequest = new Request("https://captain.example/api/auth/session", {
@@ -54,7 +54,7 @@ describe("Captain web auth", () => {
 
   it("rejects expired login tokens", async () => {
     const { auth, store, userId: id } = await setup();
-    const link = await auth.createLoginLink(id, "/payment");
+    const link = await auth.createLoginLink(id, "/profile");
     const raw = new URL(link).searchParams.get("t")!;
     const past = new Date("2020-01-01T00:00:00Z");
     // Force-expire by consuming against a late clock relative to mint time is
@@ -64,7 +64,7 @@ describe("Captain web auth", () => {
     await store.createLoginToken(
       id,
       createHash("sha256").update(expiredRaw).digest("hex"),
-      "/payment",
+      "/profile",
       past,
       past
     );
@@ -75,7 +75,7 @@ describe("Captain web auth", () => {
 
   it("prefers the session cookie over a legacy bearer token", async () => {
     const { auth, userId: id } = await setup();
-    const other = await auth.createLoginLink(id, "/travellers");
+    const other = await auth.createLoginLink(id, "/profile");
     const session = await auth.exchangeLoginToken(new URL(other).searchParams.get("t")!);
     const bearer = new URLSearchParams(
       new URL(auth.createAccessLink(id, "/trip")).hash.slice(1)
@@ -95,7 +95,7 @@ describe("Captain web auth", () => {
 
   it("invalidates sessions on sign-out while legacy bearer still resolves", async () => {
     const { auth, userId: id } = await setup();
-    const link = await auth.createLoginLink(id, "/travellers");
+    const link = await auth.createLoginLink(id, "/profile");
     const session = await auth.exchangeLoginToken(new URL(link).searchParams.get("t")!);
     await auth.signOut(id);
     await expect(auth.resolve(new Request("https://captain.example/api/auth/session", {

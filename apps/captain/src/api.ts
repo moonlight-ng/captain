@@ -15,7 +15,7 @@ export function initializeAccessToken(): boolean {
   return Boolean(accessToken);
 }
 
-export function accessHref(path: "/trip" | "/preferences", tripId?: string): string {
+export function accessHref(path: "/trip" | "/profile", tripId?: string): string {
   const search = tripId ? `?${new URLSearchParams({ trip: tripId }).toString()}` : "";
   if (!accessToken) return `${path}${search}`;
   return `${path}${search}#${new URLSearchParams({ access: accessToken }).toString()}`;

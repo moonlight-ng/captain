@@ -28,10 +28,10 @@ describe("Telegram profile onboarding", () => {
 
   it("exports fixed handoff copy for travellers, payment, and sign-out", () => {
     expect(CAPTAIN_TRAVELLER_SETUP_PROMPT).toBe(
-      "Save your traveller details so Captain is ready when booking opens."
+      "Save your traveller details and card so Captain is ready when booking opens."
     );
     expect(CAPTAIN_PROFILES_INTRO).toBe(
-      "Manage traveller names on Captain’s secure page."
+      "Manage traveller details, preferences, and your saved card in your Captain profile."
     );
     expect(CAPTAIN_PAYMENT_UNAVAILABLE).toBe(
       "Card setup isn’t available yet. Captain will let you know when it opens."
@@ -41,9 +41,12 @@ describe("Telegram profile onboarding", () => {
     );
   });
 
-  it("treats /travellers as an alias of /profiles in the command surface", () => {
+  it("keeps legacy profile and preference commands as profile aliases", () => {
     expect(["/profiles", "/travellers"]).toContain("/travellers");
     expect(["/profiles", "/travellers"]).toContain("/profiles");
+    expect(["/settings", "/preferences"]).toContain("/settings");
+    expect(["/settings", "/preferences"]).toContain("/preferences");
+    expect(["/profile", "/settings", "/preferences"]).toContain("/profile");
   });
 
   it("parses currency, ranking, and preferred/avoided airlines deterministically", () => {

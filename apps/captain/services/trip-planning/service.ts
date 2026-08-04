@@ -170,7 +170,7 @@ export class TripPlanningService {
     );
     const basePrompt = !confirmationSnapshot || tripLimitReached
       ? tripLimitReached
-        ? "You’re already tracking three trips. Open /preferences, stop tracking one trip, then reply “continue” here."
+        ? "You’re already tracking three trips. Open /profile, stop tracking one trip, then reply “continue” here."
         : unsupportedParty
           ? "Captain’s beta currently tracks fares for exactly one adult. Reply “just me” to continue, or cancel this trip."
           : unsupportedCurrency

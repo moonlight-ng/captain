@@ -26,6 +26,8 @@ import {
 } from "../format";
 import { AirlineSearchSelect } from "../components/AirlineSearchSelect";
 import { readinessLabel } from "../components/PassengerForm";
+import { Payment } from "./Payment";
+import { Travellers } from "./Travellers";
 
 export function Preferences({
   profile,
@@ -33,6 +35,7 @@ export function Preferences({
   displayName,
   trackingError,
   sessionCredential,
+  paymentsEnabled,
   onSaved,
   onTripChanged,
   onTripError,
@@ -44,6 +47,7 @@ export function Preferences({
   trackingError: string;
   /** Traveller controls need a revocable cookie session, not a legacy bearer. */
   sessionCredential: boolean;
+  paymentsEnabled: boolean;
   onSaved: (profile: TravellerProfile) => void;
   onTripChanged: () => Promise<void>;
   onTripError: (value: string) => void;
@@ -94,6 +98,19 @@ export function Preferences({
   useEffect(() => {
     setAssignedTravellers(tripData?.travellers ?? []);
   }, [tripData?.travellers]);
+
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("section")
+      ?? window.location.hash.slice(1);
+    const target = requested === "payment" ? "payment"
+      : requested === "profiles" ? "traveller-profiles"
+        : null;
+    if (!target) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(target)?.scrollIntoView({ block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [paymentsEnabled, sessionCredential]);
 
   const airportCodes = (value: string) => [...new Set(
     value.toUpperCase().match(/[A-Z]{3}/gu) ?? []
@@ -162,10 +179,19 @@ export function Preferences({
         <span className="name">{displayName}</span>
       </header>
       <section className="settings-intro">
-        <h1>{trip ? routeLabel(trip) : "Captain"}</h1>
+        <h1>Profile</h1>
         <p>{trip
-          ? dateRangeLabel(trip.brief.departureWindow.start, trip.brief.departureWindow.end)
-          : "Trip tracking has stopped. Choose another trip from Telegram."}</p>
+          ? `${routeLabel(trip)} · ${dateRangeLabel(trip.brief.departureWindow.start, trip.brief.departureWindow.end)}`
+          : tripStopped
+            ? "Trip tracking has stopped. Choose another trip from Telegram."
+            : "Manage your traveller profile, saved card, preferences, and notifications."}</p>
+      </section>
+      <section className="mock-preview-banner" role="note" aria-label="Prototype notice">
+        <span>Prototype</span>
+        <div>
+          <strong>Booking and flight-management actions are simulated.</strong>
+          <p>Your traveller details and any real card you add are saved securely; mock bookings never charge it.</p>
+        </div>
       </section>
       {trip && tripData && (
         <details className="settings-card settings-disclosure" open>
@@ -365,6 +391,31 @@ export function Preferences({
           </div>
         </details>
       )}
+      {sessionCredential ? (
+        <>
+          <Travellers
+            displayName={displayName}
+            paymentsEnabled={false}
+            onChanged={setAvailablePassengers}
+            embedded
+          />
+          {paymentsEnabled ? (
+            <Payment embedded />
+          ) : (
+            <section className="settings-card" id="payment">
+              <p className="eyebrow">Payment</p>
+              <h1>Card setup unavailable</h1>
+              <p>Captain will let you know when saved cards are available.</p>
+            </section>
+          )}
+        </>
+      ) : (
+        <section className="settings-card" id="traveller-profiles">
+          <p className="eyebrow">Traveller &amp; payment</p>
+          <h1>Secure setup</h1>
+          <p>Open /profile in Captain on Telegram to manage traveller profiles and saved cards.</p>
+        </section>
+      )}
       {trip && sessionCredential && (
         <details className="settings-card settings-disclosure" open>
           <summary>
@@ -381,7 +432,7 @@ export function Preferences({
             {availablePassengers.length === 0 ? (
               <p>
                 No travellers saved yet.{" "}
-                <a className="quiet-link" href="/travellers">Set up on Travellers</a>.
+                <a className="quiet-link" href="#traveller-profiles">Set up a traveller profile</a>.
               </p>
             ) : assignedTravellers[0] && !changingTraveller ? (
               <>
@@ -401,7 +452,7 @@ export function Preferences({
                   >
                     Change
                   </button>
-                  <a className="quiet-link" href="/travellers">Edit on Travellers</a>
+                  <a className="quiet-link" href="#traveller-profiles">Edit profile</a>
                 </div>
               </>
             ) : (
