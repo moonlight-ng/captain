@@ -62,7 +62,6 @@ export function Preferences({
   const [digestHour, setDigestHour] = useState(profile.digestHourLocal);
   const [priceRiseAlerts, setPriceRiseAlerts] = useState(profile.priceRiseAlertsEnabled);
   const [betterOptionAlerts, setBetterOptionAlerts] = useState(profile.betterOptionAlertsEnabled);
-  const [trackingCheckins, setTrackingCheckins] = useState(profile.trackingCheckinsEnabled);
   const [maxAlerts, setMaxAlerts] = useState<1 | 2>(profile.maxAlertsPerDay);
   const [quietHoursEnabled, setQuietHoursEnabled] = useState(profile.quietHoursEnabled);
   const [quietStart, setQuietStart] = useState(profile.quietHoursStart);
@@ -135,7 +134,7 @@ export function Preferences({
         digestHourLocal: digestHour,
         priceRiseAlertsEnabled: priceRiseAlerts,
         betterOptionAlertsEnabled: betterOptionAlerts,
-        trackingCheckinsEnabled: trackingCheckins,
+        trackingCheckinsEnabled: profile.trackingCheckinsEnabled,
         maxAlertsPerDay: maxAlerts,
         quietHoursEnabled,
         quietHoursStart: quietStart,
@@ -203,12 +202,14 @@ export function Preferences({
             <dl className="settings-list">
               <div><dt>Last check</dt><dd>{watch?.lastCheckAt ? relativeTime(watch.lastCheckAt) : "Not checked yet"}</dd></div>
               <div>
-                <dt>{watch?.status === "scheduled" ? "Tracking starts" : "Next check"}</dt>
-                <dd>{watch?.nextCheckAt ? scheduleTime(watch.nextCheckAt) : "Not scheduled"}</dd>
+                <dt>{watch?.status === "completed" ? "Run ended" : "Next check"}</dt>
+                <dd>{watch?.status === "completed" && watch.completedAt
+                  ? relativeTime(watch.completedAt)
+                  : watch?.nextCheckAt ? scheduleTime(watch.nextCheckAt) : "Not scheduled"}</dd>
               </div>
               <div><dt>Flights</dt><dd>{tripData.offers.length}</dd></div>
             </dl>
-            <p>Captain checks more often as departure approaches. You can also refresh manually anytime.</p>
+            <p>Captain tracks for three days, checks every six hours, then stops and marks the captured prices stale.</p>
             {trackingError && <p className="form-error" role="alert">{trackingError}</p>}
             <TripControls
               data={tripData}
@@ -557,16 +558,6 @@ export function Preferences({
                 onChange={(event) => setBetterOptionAlerts(event.target.checked)}
               />
             </label>
-            <label className="switch-setting">
-              <span><strong>Tracking check-ins</strong><small>Ask after seven quiet days before pausing.</small></span>
-              <input
-                type="checkbox"
-                role="switch"
-                disabled={notificationMode === "off"}
-                checked={trackingCheckins}
-                onChange={(event) => setTrackingCheckins(event.target.checked)}
-              />
-            </label>
             <label>
               Immediate alert limit
               <select
@@ -720,7 +711,9 @@ function TripControls({
 }) {
   const [busy, setBusy] = useState(false);
   const trip = data.trip!;
-  async function act(type: "pause" | "resume" | "refresh" | "cancel") {
+  async function act(
+    type: "pause" | "resume" | "refresh" | "track" | "cancel"
+  ) {
     setBusy(true);
     onError("");
     try {
@@ -735,6 +728,24 @@ function TripControls({
     } finally {
       setBusy(false);
     }
+  }
+  if (data.watch?.status === "completed") {
+    return (
+      <div className="trip-controls">
+        <button className="primary" disabled={busy} onClick={() => void act("track")}>
+          Track
+        </button>
+        <button
+          className="danger"
+          disabled={busy}
+          onClick={() => {
+            if (window.confirm(`Stop tracking ${routeLabel(trip)}?`)) void act("cancel");
+          }}
+        >
+          Stop
+        </button>
+      </div>
+    );
   }
   return (
     <div className="trip-controls">
@@ -762,6 +773,7 @@ function trackingStateLabel(
   trip: NonNullable<TripPayload["trip"]>
 ): string {
   if (trip.status === "paused" || watch?.status === "paused") return "Paused";
+  if (watch?.status === "completed") return "Prices stale";
   if (watch?.status === "scheduled" && watch.trackingStartsAt) {
     return `Scheduled — starts ${dateLabel(watch.trackingStartsAt.slice(0, 10))}`;
   }

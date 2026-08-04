@@ -88,6 +88,12 @@ export type Trip = {
 
 export type Watch = {
   status: "active" | "scheduled" | "paused" | "completed";
+  cadenceHours: number;
+  trackingDurationHours: 72;
+  runStartedAt: string;
+  runEndsAt: string;
+  completedAt: string | null;
+  checksCompleted: number;
   nextCheckAt: string | null;
   lastCheckAt: string | null;
   lastManualRefreshAt: string | null;

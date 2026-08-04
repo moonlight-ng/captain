@@ -64,7 +64,7 @@ import {
   INACTIVITY_CHECKIN_MS,
   retainSearchOffers,
   TRACKING_SEARCH_SPEC_LIMIT,
-  trackingStartsAt
+  trackingRunEndsAt
 } from "./watch-policy.js";
 
 const SETUP_INTENT_TTL_MS = 30 * 60_000;
@@ -1053,8 +1053,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const active = [...this.#trips.values()].filter((trip) => trip.userId === userId && isActiveTripStatus(trip.status));
     if (active.length >= MAX_ACTIVE_TRIPS_PER_USER) throw new TripLimitError();
     const timestamp = now.toISOString();
-    const startsAt = trackingStartsAt(input.brief.departureWindow.start);
-    const futureTracking = startsAt.getTime() > now.getTime();
+    const runEndsAt = trackingRunEndsAt(now);
     const trip: Trip = {
       id: randomUUID(), userId, title: input.title, status: "tracking", version: 1,
       brief: clone(input.brief), archivedAt: null, archiveReason: null,
@@ -1062,10 +1061,15 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     };
     const watch: Watch = {
       id: randomUUID(), tripId: trip.id, status: "active", cadenceHours: input.cadenceHours,
+      trackingDurationHours: input.trackingDurationHours,
+      runStartedAt: timestamp,
+      runEndsAt: runEndsAt.toISOString(),
+      completedAt: null,
+      checksCompleted: 0,
       nextCheckAt: timestamp, lastCheckAt: null, lastManualRefreshAt: null,
-      trackingStartsAt: futureTracking ? startsAt.toISOString() : null,
+      trackingStartsAt: null,
       baselineCompletedAt: null,
-      activatedAt: futureTracking ? null : timestamp,
+      activatedAt: timestamp,
       lastUserActivityAt: timestamp,
       checkInSentAt: null,
       autoPauseAt: null,
@@ -1112,16 +1116,20 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     this.#recommendations.delete(tripId);
     const watch = [...this.#watches.values()].find((candidate) => candidate.tripId === tripId);
     if (watch) {
-      const startsAt = trackingStartsAt(input.brief.departureWindow.start);
-      const futureTracking = startsAt.getTime() > now.getTime();
+      const durationHours = 72 as const;
       this.#setSpecs(watch.id, specs);
       this.#watches.set(watch.id, {
         ...watch,
         status: "active",
+        trackingDurationHours: durationHours,
+        runStartedAt: now.toISOString(),
+        runEndsAt: trackingRunEndsAt(now).toISOString(),
+        completedAt: null,
+        checksCompleted: 0,
         nextCheckAt: now.toISOString(),
-        trackingStartsAt: futureTracking ? startsAt.toISOString() : null,
+        trackingStartsAt: null,
         baselineCompletedAt: null,
-        activatedAt: futureTracking ? null : now.toISOString(),
+        activatedAt: now.toISOString(),
         lastUserActivityAt: now.toISOString(),
         checkInSentAt: null,
         autoPauseAt: null,
@@ -1292,30 +1300,36 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const watch = [...this.#watches.values()].find((item) => item.tripId === tripId);
     let status = trip.status;
     if (action.type === "pause") status = "paused";
-    if (action.type === "resume" || action.type === "refresh") status = "tracking";
+    if (["resume", "refresh", "track"].includes(action.type)) status = "tracking";
     if (action.type === "cancel") status = "cancelled";
     if (action.type === "complete") status = "completed";
     const updated = { ...trip, status, version: trip.version + 1, updatedAt: now.toISOString() };
     this.#trips.set(tripId, updated);
     if (watch) {
-      const futureScheduled = Boolean(
-        watch.trackingStartsAt
-        && Date.parse(watch.trackingStartsAt) > now.getTime()
-        && watch.baselineCompletedAt
-      );
       const watchStatus = status === "paused"
         ? "paused"
         : ["cancelled", "completed"].includes(status)
           ? "completed"
-          : action.type === "resume" && futureScheduled
-            ? "scheduled"
-            : "active";
+          : "active";
+      const durationHours = 72 as const;
       this.#watches.set(watch.id, {
         ...watch, status: watchStatus,
-        ...(action.type === "refresh"
+        ...(action.type === "track"
+          ? {
+              trackingDurationHours: durationHours,
+              runStartedAt: now.toISOString(),
+              runEndsAt: trackingRunEndsAt(now).toISOString(),
+              completedAt: null,
+              checksCompleted: 0,
+              nextCheckAt: now.toISOString(),
+              activatedAt: now.toISOString(),
+              delayedAt: null,
+              delayReason: null
+            }
+          : action.type === "refresh"
           ? { nextCheckAt: now.toISOString() }
           : action.type === "resume"
-            ? { nextCheckAt: futureScheduled ? watch.trackingStartsAt : now.toISOString() }
+            ? { nextCheckAt: now.toISOString() }
             : {}),
         ...(action.type === "refresh" ? { lastManualRefreshAt: now.toISOString() } : {}),
         lastUserActivityAt: now.toISOString(),
@@ -1464,6 +1478,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         && watch.nextCheckAt
         && Date.parse(watch.nextCheckAt) <= nowMs
       ) return true;
+      if (watch.status === "active" && Date.parse(watch.runEndsAt) <= nowMs) return true;
       if (
         watch.status === "scheduled"
         && watch.trackingStartsAt
@@ -1518,10 +1533,57 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     let activated = 0;
     let checkInsQueued = 0;
     let autoPaused = 0;
+    let completed = 0;
     for (const [watchId, watch] of this.#watches) {
       const trip = this.#trips.get(watch.tripId);
       if (!trip) continue;
       const profile = this.#profiles.get(trip.userId) ?? await this.ensureProfile(trip.userId, now);
+      const runEnded = watch.status === "active" && Date.parse(watch.runEndsAt) <= now.getTime();
+      const watchSpecIds = this.#watchSpecs.get(watch.id) ?? new Set<string>();
+      const hasPendingCheck = [...this.#runs.values()].some((run) =>
+        watchSpecIds.has(run.searchSpecId) && ["queued", "running", "deferred"].includes(run.status)
+      );
+      if (runEnded && !hasPendingCheck) {
+        const timestamp = now.toISOString();
+        this.#watches.set(watchId, {
+          ...watch,
+          status: "completed",
+          nextCheckAt: null,
+          completedAt: timestamp,
+          checkInSentAt: null,
+          autoPauseAt: null,
+          updatedAt: timestamp
+        });
+        this.#trips.set(trip.id, {
+          ...trip,
+          status: "recommended",
+          version: trip.version + 1,
+          updatedAt: timestamp
+        });
+        const recommendation = this.#recommendations.get(trip.id);
+        this.#recordTripActivity(trip.id, "tracking_completed", {
+          durationHours: watch.trackingDurationHours,
+          checksCompleted: watch.checksCompleted,
+          recommendationSummary: recommendation?.summary ?? null
+        }, now);
+        if (profile.notificationMode !== "off") {
+          this.#enqueueSimpleNotification(
+            trip,
+            "tracking_summary",
+            `${trip.id}:tracking_summary:${watch.runStartedAt}`,
+            {
+              tripTitle: trip.title,
+              durationHours: watch.trackingDurationHours,
+              checksCompleted: watch.checksCompleted,
+              summary: recommendation?.summary ?? "The latest verified options are ready to review."
+            },
+            now
+          );
+        }
+        completed += 1;
+        continue;
+      }
+      if (runEnded) continue;
       if (
         watch.status === "scheduled"
         && watch.trackingStartsAt
@@ -1609,7 +1671,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         )) checkInsQueued += 1;
       }
     }
-    return { activated, checkInsQueued, autoPaused };
+    return { activated, checkInsQueued, autoPaused, completed };
   }
 
   async finalizeFarFutureBaseline(searchSpecId: string, now: Date): Promise<void> {
@@ -1685,7 +1747,12 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
 
   async scheduleDueSearchRuns(now: Date, freshnessMs: number, limit: number): Promise<number> {
     const due = [...this.#watches.values()]
-      .filter((watch) => watch.status === "active" && watch.nextCheckAt !== null && watch.nextCheckAt <= now.toISOString())
+      .filter((watch) =>
+        watch.status === "active"
+        && watch.nextCheckAt !== null
+        && watch.nextCheckAt <= now.toISOString()
+        && watch.runEndsAt > now.toISOString()
+      )
       .slice(0, limit);
     const scheduled = new Set<string>();
     for (const watch of due) {
@@ -1717,10 +1784,13 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       const trip = this.#trips.get(watch.tripId);
       this.#watches.set(watch.id, {
         ...watch,
-        nextCheckAt: new Date(now.getTime() + adaptiveWatchIntervalMs(
+        nextCheckAt: new Date(Math.min(
+          Date.parse(watch.runEndsAt),
+          now.getTime() + adaptiveWatchIntervalMs(
           watch.cadenceHours,
           trip?.brief.departureWindow.start ?? now.toISOString().slice(0, 10),
           now
+          )
         )).toISOString(),
         updatedAt: now.toISOString()
       });
@@ -1759,6 +1829,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         this.#watches.set(watch.id, {
           ...watch,
           lastCheckAt: now.toISOString(),
+          checksCompleted: watch.checksCompleted + 1,
           delayedAt: now.toISOString(),
           delayReason: "No fares were found in the latest check.",
           updatedAt: now.toISOString()
@@ -1792,6 +1863,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       this.#watches.set(watch.id, {
         ...watch,
         lastCheckAt: now.toISOString(),
+        checksCompleted: watch.checksCompleted + 1,
         delayedAt: null,
         delayReason: null,
         updatedAt: now.toISOString()

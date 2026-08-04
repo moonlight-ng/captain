@@ -134,6 +134,7 @@ export class FlightWorker {
         tracking_activated: maintenance.activated,
         tracking_checkins_queued: maintenance.checkInsQueued,
         tracking_auto_paused: maintenance.autoPaused,
+        tracking_runs_completed: maintenance.completed,
         digests_queued: digestsQueued
       });
       return { scheduled, processed, notified, cardsDeleted };
@@ -387,7 +388,7 @@ export class FlightWorker {
       this.#telegramBotToken
     );
     const url = new URL(accessLink);
-    url.searchParams.set("trip", tripId);
+    url.pathname = `/trip/${encodeURIComponent(tripId)}`;
     return url.toString();
   }
 }
@@ -439,6 +440,15 @@ export function notificationText(notification: CaptainNotification): string {
   }
   if (notification.kind === "tracking_paused") {
     return `I paused tracking for ${route} because I didn’t hear back.\nYour trip is saved whenever you want to resume.`;
+  }
+  if (notification.kind === "tracking_summary") {
+    const checksCompleted = numericField(notification.payload, "checksCompleted");
+    const summary = stringField(notification.payload, "summary")
+      || "The latest verified options are ready to review.";
+    const checks = checksCompleted > 0
+      ? ` I checked ${checksCompleted} time${checksCompleted === 1 ? "" : "s"}.`
+      : "";
+    return `Your three-day price watch for ${route} is complete.${checks}\n${summary}\nThese prices are now stale. Open the trip and choose Track.`;
   }
   if (notification.kind === "price_rise") {
     const current = offerSnapshot(notification.payload.current);

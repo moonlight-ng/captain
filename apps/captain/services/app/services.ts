@@ -54,7 +54,7 @@ export async function createCaptainServices(): Promise<CaptainServices> {
       apiKey: env.aiGatewayApiKey,
       dashboardUrlForTrip: (userId, tripId) => {
         const url = new URL(auth.createAccessLink(userId, "/trip"));
-        url.searchParams.set("trip", tripId);
+        url.pathname = `/trip/${encodeURIComponent(tripId)}`;
         return url.toString();
       }
     })

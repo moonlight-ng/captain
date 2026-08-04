@@ -145,7 +145,7 @@ export function describeCaptainPlatformStore(
         expiresAt: "2026-08-01T12:30:00Z", observedAt: "2026-08-01T12:00:01Z",
         snapshot: { route: "LHR → BER", airlineCodes: ["BA"], stops: 0, durationSeconds: 7_200, segments: [] }
       }], new Date("2026-08-01T12:00:01Z"));
-      expect(await store.evaluateTripsForSearchSpec(run.searchSpecId, new Date("2026-08-01T12:00:02Z"))).toBe(1);
+      expect(await store.evaluateTripsForSearchSpec(run.searchSpecId, new Date("2026-08-01T12:00:02Z"))).toBe(0);
       const trip = (await store.listTrips(ada.id))[0]!;
       const [offer] = await store.listTripOffers(ada.id, trip.id, new Date("2026-08-01T12:00:03Z"));
       await store.setTripFlightSelection(
@@ -170,8 +170,7 @@ export function describeCaptainPlatformStore(
         })
       ]);
       const notifications = await store.listPendingNotifications(new Date("2026-08-01T12:00:03Z"), 10);
-      expect(notifications).toHaveLength(1);
-      expect(notifications[0]).toMatchObject({ kind: "initial_results", telegramChatId: 1 });
+      expect(notifications).toHaveLength(0);
     });
 
     it("recovers an expired lease without duplicating a live claim", async () => {
@@ -205,15 +204,15 @@ export function describeCaptainPlatformStore(
       expect(created.trip.status).toBe("recommended");
       expect(await store.scheduleDueSearchRuns(new Date("2026-08-01T12:05:00Z"), 900_000, 100)).toBe(0);
       const notifications = await store.listPendingNotifications(new Date("2026-08-01T12:05:01Z"), 10);
-      expect(notifications.some((notification) => notification.userId === grace.id)).toBe(true);
+      expect(notifications.some((notification) => notification.userId === grace.id)).toBe(false);
     });
 
-    it("runs one baseline, then schedules a distant watch for T−30", async () => {
+    it("keeps the same bounded run regardless of how far away departure is", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
       const input: CreateTripInput = {
         ...tripInput,
-        cadenceHours: 3,
+        cadenceHours: 6,
         brief: {
           ...tripInput.brief,
           departureWindow: { start: "2026-09-10", end: "2026-09-19" }
@@ -227,17 +226,14 @@ export function describeCaptainPlatformStore(
       );
 
       expect(await store.scheduleDueSearchRuns(new Date("2026-08-01T12:00:00Z"), 900_000, 100)).toBe(1);
-      await store.finalizeFarFutureBaseline(
-        buildSearchSpecs(input.brief, false)[0]!.id,
-        new Date("2026-08-01T12:01:00Z")
-      );
       expect(await store.getWatch(ada.id, created.trip.id)).toMatchObject({
-        status: "scheduled",
-        trackingStartsAt: "2026-08-11T00:00:00.000Z",
-        nextCheckAt: "2026-08-11T00:00:00.000Z",
-        baselineCompletedAt: "2026-08-01T12:01:00.000Z"
+        status: "active",
+        trackingDurationHours: 72,
+        trackingStartsAt: null,
+        nextCheckAt: "2026-08-01T18:00:00.000Z",
+        runEndsAt: "2026-08-04T12:00:00.000Z"
       });
-      expect(await store.scheduleDueSearchRuns(new Date("2026-08-05T12:00:00Z"), 0, 100)).toBe(0);
+      expect(await store.scheduleDueSearchRuns(new Date("2026-08-01T17:00:00Z"), 0, 100)).toBe(0);
     });
 
     it("replaces current results, keeps every compact offer, and preserves price-drop context", async () => {
@@ -349,7 +345,7 @@ export function describeCaptainPlatformStore(
       const ada = await user(store, 1);
       const input: CreateTripInput = {
         ...tripInput,
-        cadenceHours: 3,
+        cadenceHours: 6,
         brief: {
           ...tripInput.brief,
           tripType: "one_way",
@@ -362,7 +358,7 @@ export function describeCaptainPlatformStore(
       const changes: number[] = [];
 
       for (const [index, price] of [100, 90, 80, 70].entries()) {
-        const now = new Date(Date.parse("2026-08-01T12:00:00Z") + index * 3 * 3_600_000);
+        const now = new Date(Date.parse("2026-08-01T12:00:00Z") + index * 6 * 3_600_000);
         await store.scheduleDueSearchRuns(now, 900_000, 100);
         const run = (await store.claimSearchRuns("worker-1", now, 180_000, 1))[0]!;
         await store.completeSearchRun("worker-1", run.id, `orq_${index}`, [{
@@ -394,7 +390,7 @@ export function describeCaptainPlatformStore(
       )).toHaveLength(1);
     });
 
-    it("treats T−30 as active and only schedules trips beyond the boundary", async () => {
+    it("starts every new trip with a fixed three-day run", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
       const now = new Date("2026-08-01T00:00:00Z");
@@ -414,63 +410,48 @@ export function describeCaptainPlatformStore(
         now
       );
 
-      expect(active.watch).toMatchObject({ status: "active", trackingStartsAt: null });
+      expect(active.watch).toMatchObject({
+        status: "active",
+        trackingStartsAt: null,
+        trackingDurationHours: 72,
+        runEndsAt: "2026-08-04T00:00:00.000Z"
+      });
       expect(future.watch).toMatchObject({
         status: "active",
-        trackingStartsAt: "2026-08-02T00:00:00.000Z",
-        baselineCompletedAt: null
+        trackingStartsAt: null,
+        trackingDurationHours: 72,
+        runEndsAt: "2026-08-04T00:00:00.000Z"
       });
     });
 
-    it("recalculates scheduled state immediately after a date edit or manual refresh", async () => {
+    it("starts a fresh three-day run after a completed run", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
       const now = new Date("2026-08-01T12:00:00Z");
       const distant = inputFor("Berlin", "BER", "2026-09-10");
       const specs = buildSearchSpecs(distant.brief, false);
       const created = await store.createTrip(ada.id, distant, specs, now);
-      await store.finalizeFarFutureBaseline(specs[0]!.id, new Date("2026-08-01T12:05:00Z"));
-
-      expect(await store.getWatch(ada.id, created.trip.id)).toMatchObject({
-        status: "scheduled",
-        nextCheckAt: "2026-08-11T00:00:00.000Z"
-      });
-      const refreshed = await store.applyTripAction(
+      await store.maintainTracking(new Date("2026-08-04T12:00:00Z"));
+      const completed = (await store.getTrip(ada.id, created.trip.id))!;
+      const restarted = await store.applyTripAction(
         ada.id,
         created.trip.id,
-        { type: "refresh", expectedVersion: created.trip.version },
-        new Date("2026-08-02T12:00:00Z")
+        { type: "track", expectedVersion: completed.version },
+        new Date("2026-08-04T12:00:00Z")
       );
+      expect(restarted.status).toBe("tracking");
       expect(await store.getWatch(ada.id, created.trip.id)).toMatchObject({
         status: "active",
-        nextCheckAt: "2026-08-02T12:00:00.000Z"
-      });
-      await store.finalizeFarFutureBaseline(specs[0]!.id, new Date("2026-08-02T12:05:00Z"));
-      expect(await store.getWatch(ada.id, created.trip.id)).toMatchObject({
-        status: "scheduled",
-        nextCheckAt: "2026-08-11T00:00:00.000Z"
-      });
-
-      const nearBrief = {
-        ...distant.brief,
-        departureWindow: { start: "2026-08-20", end: "2026-08-20" }
-      };
-      await store.updateTripBrief(
-        ada.id,
-        created.trip.id,
-        { expectedVersion: refreshed.version, brief: nearBrief },
-        buildSearchSpecs(nearBrief, false),
-        new Date("2026-08-02T13:00:00Z")
-      );
-      expect(await store.getWatch(ada.id, created.trip.id)).toMatchObject({
-        status: "active",
-        trackingStartsAt: null,
-        baselineCompletedAt: null,
-        nextCheckAt: "2026-08-02T13:00:00.000Z"
+        trackingDurationHours: 72,
+        runStartedAt: "2026-08-04T12:00:00.000Z",
+        runEndsAt: "2026-08-07T12:00:00.000Z",
+        completedAt: null,
+        checksCompleted: 0,
+        nextCheckAt: "2026-08-04T12:00:00.000Z"
       });
     });
 
-    it("activates a scheduled watch once, replacing that day's digest", async () => {
+    it("completes a run once and queues its decision summary", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
       await store.updateProfile(ada.id, {
@@ -485,27 +466,27 @@ export function describeCaptainPlatformStore(
         specs,
         new Date("2026-08-01T12:00:00Z")
       );
-      await store.finalizeFarFutureBaseline(specs[0]!.id, new Date("2026-08-01T12:05:00Z"));
-
-      await expect(store.maintainTracking(new Date("2026-08-11T09:00:00Z"))).resolves.toEqual({
-        activated: 1,
-        checkInsQueued: 0,
-        autoPaused: 0
-      });
-      expect(await store.getWatch(ada.id, created.trip.id)).toMatchObject({
-        status: "active",
-        activatedAt: "2026-08-11T09:00:00.000Z",
-        nextCheckAt: "2026-08-11T09:00:00.000Z"
-      });
-      expect(await store.enqueueDueDigests(new Date("2026-08-11T09:01:00Z"))).toBe(0);
-      expect(await store.listPendingNotifications(
-        new Date("2026-08-11T09:01:00Z"),
-        10
-      )).toEqual([expect.objectContaining({ kind: "tracking_activation" })]);
-      await expect(store.maintainTracking(new Date("2026-08-11T09:02:00Z"))).resolves.toEqual({
+      await expect(store.maintainTracking(new Date("2026-08-04T12:00:00Z"))).resolves.toEqual({
         activated: 0,
         checkInsQueued: 0,
-        autoPaused: 0
+        autoPaused: 0,
+        completed: 1
+      });
+      expect(await store.getWatch(ada.id, created.trip.id)).toMatchObject({
+        status: "completed",
+        completedAt: "2026-08-04T12:00:00.000Z",
+        nextCheckAt: null
+      });
+      expect(await store.getTrip(ada.id, created.trip.id)).toMatchObject({ status: "recommended" });
+      expect(await store.listPendingNotifications(
+        new Date("2026-08-04T12:00:01Z"),
+        10
+      )).toEqual([expect.objectContaining({ kind: "tracking_summary" })]);
+      await expect(store.maintainTracking(new Date("2026-08-04T12:02:00Z"))).resolves.toEqual({
+        activated: 0,
+        checkInsQueued: 0,
+        autoPaused: 0,
+        completed: 0
       });
     });
 
@@ -559,7 +540,10 @@ export function describeCaptainPlatformStore(
         digestHourLocal: 9,
         quietHoursEnabled: false
       }, new Date("2026-08-01T00:00:00Z"));
-      const input = inputFor("Berlin", "BER", "2026-08-20");
+      const input = {
+        ...inputFor("Berlin", "BER", "2026-08-20"),
+        trackingDurationHours: 72 as const
+      };
       const specs = buildSearchSpecs(input.brief, false);
       await store.createTrip(ada.id, input, specs, new Date("2026-08-01T00:00:00Z"));
       await runSearch(store, specs[0]!.id, new Date("2026-08-01T00:00:00Z"), "BA982|LHR|BER", 200, "BER");
@@ -589,7 +573,7 @@ export function describeCaptainPlatformStore(
       ))?.snapshot.pendingDigestChange).toBeUndefined();
     });
 
-    it("checks in after seven inactive days and pauses once after another 48 hours", async () => {
+    it("finishes before the former seven-day inactivity check-in", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
       await store.updateProfile(ada.id, {
@@ -606,32 +590,32 @@ export function describeCaptainPlatformStore(
 
       await expect(store.maintainTracking(new Date("2026-08-08T12:00:01Z"))).resolves.toEqual({
         activated: 0,
-        checkInsQueued: 1,
-        autoPaused: 0
+        checkInsQueued: 0,
+        autoPaused: 0,
+        completed: 1
       });
       expect(await store.getWatch(ada.id, created.trip.id)).toMatchObject({
-        checkInSentAt: "2026-08-08T12:00:01.000Z",
-        autoPauseAt: "2026-08-10T12:00:01.000Z"
+        status: "completed",
+        checkInSentAt: null,
+        autoPauseAt: null
       });
       await expect(store.maintainTracking(new Date("2026-08-10T12:00:01Z"))).resolves.toEqual({
         activated: 0,
         checkInsQueued: 0,
-        autoPaused: 1
+        autoPaused: 0,
+        completed: 0
       });
-      expect(await store.getWatch(ada.id, created.trip.id)).toMatchObject({ status: "paused" });
-      expect(await store.getTrip(ada.id, created.trip.id)).toMatchObject({ status: "paused" });
+      expect(await store.getTrip(ada.id, created.trip.id)).toMatchObject({ status: "recommended" });
       const pending = await store.listPendingNotifications(
         new Date("2026-08-10T12:00:02Z"),
         10
       );
-      expect(pending.map((notification) => notification.kind)).toEqual([
-        "tracking_checkin",
-        "tracking_paused"
-      ]);
+      expect(pending.map((notification) => notification.kind)).toEqual(["tracking_summary"]);
       await expect(store.maintainTracking(new Date("2026-08-10T13:00:00Z"))).resolves.toEqual({
         activated: 0,
         checkInsQueued: 0,
-        autoPaused: 0
+        autoPaused: 0,
+        completed: 0
       });
     });
 
@@ -644,7 +628,10 @@ export function describeCaptainPlatformStore(
         betterOptionAlertsEnabled: false,
         quietHoursEnabled: false
       }, new Date("2026-08-01T00:00:00Z"));
-      const input = inputFor("Berlin", "BER", "2026-08-20");
+      const input = {
+        ...inputFor("Berlin", "BER", "2026-08-20"),
+        trackingDurationHours: 72 as const
+      };
       const specs = buildSearchSpecs(input.brief, false);
       await store.createTrip(ada.id, input, specs, new Date("2026-08-01T00:00:00Z"));
       const changes = [];
@@ -666,7 +653,7 @@ export function describeCaptainPlatformStore(
       expect(pending.filter((notification) => notification.kind === "price_rise")).toHaveLength(2);
     });
 
-    it("starts the 48-hour inactivity grace period when a quiet-hours check-in is deliverable", async () => {
+    it("delivers a completed-run summary after quiet hours", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
       const input = inputFor("Berlin", "BER", "2026-08-20");
@@ -677,25 +664,19 @@ export function describeCaptainPlatformStore(
         new Date("2026-08-01T23:00:00Z")
       );
 
-      await store.maintainTracking(new Date("2026-08-08T23:00:01Z"));
+      await store.maintainTracking(new Date("2026-08-04T23:00:01Z"));
       expect(await store.getWatch(ada.id, created.trip.id)).toMatchObject({
-        checkInSentAt: "2026-08-08T23:00:01.000Z",
-        autoPauseAt: "2026-08-11T07:00:01.000Z"
+        status: "completed",
+        completedAt: "2026-08-04T23:00:01.000Z"
       });
       expect(await store.listPendingNotifications(
-        new Date("2026-08-09T06:59:59Z"),
+        new Date("2026-08-05T06:59:59Z"),
         10
       )).toHaveLength(0);
-
-      await store.markTripActivity(ada.id, created.trip.id, new Date("2026-08-09T06:30:00Z"));
       expect(await store.listPendingNotifications(
-        new Date("2026-08-09T07:00:00Z"),
+        new Date("2026-08-05T07:00:01Z"),
         10
-      )).toHaveLength(0);
-      expect(await store.getWatch(ada.id, created.trip.id)).toMatchObject({
-        checkInSentAt: null,
-        autoPauseAt: null
-      });
+      )).toEqual([expect.objectContaining({ kind: "tracking_summary" })]);
     });
 
     it("reduces the former five-message sequence to two useful Trip updates", async () => {
@@ -1243,6 +1224,7 @@ export function describeCaptainPlatformStore(
 const tripInput: CreateTripInput = {
   title: "London to Berlin",
   cadenceHours: 6,
+  trackingDurationHours: 72,
   brief: {
     originAirports: ["LHR"], destinationAirports: ["BER"], tripType: "one_way",
     departureWindow: { start: "2026-09-10", end: "2026-09-10" }, stayNights: null,

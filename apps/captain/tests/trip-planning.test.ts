@@ -668,7 +668,8 @@ describe("Captain trip planning", () => {
         tripType: "one_way",
         stayNights: null
       }),
-      cadenceHours: 6
+      cadenceHours: 6,
+      trackingDurationHours: 72
     });
     const ready = await planning.prepare(
       user.id,
@@ -758,7 +759,8 @@ describe("Captain trip planning", () => {
         departureWindow: { start: "2025-08-01", end: "2025-08-01" },
         currency: "NGN"
       }),
-      cadenceHours: 6
+      cadenceHours: 6,
+      trackingDurationHours: 72
     });
     const london = await trips.create(user.id, {
       title: "London",
@@ -768,7 +770,8 @@ describe("Captain trip planning", () => {
         departureWindow: { start: "2025-09-01", end: "2025-09-01" },
         currency: "USD"
       }),
-      cadenceHours: 6
+      cadenceHours: 6,
+      trackingDurationHours: 72
     });
 
     const message = await planning.activeTripsLocation(user.id);

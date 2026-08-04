@@ -5,7 +5,7 @@ import {
   adaptiveWatchIntervalMs,
   MAX_RETAINED_OFFERS_PER_SEARCH,
   retainSearchOffers,
-  trackingStartsAt
+  trackingRunEndsAt
 } from "../src/watch-policy.js";
 
 describe("efficient watch policy", () => {
@@ -30,16 +30,17 @@ describe("efficient watch policy", () => {
       .toBe(5);
   });
 
-  it("uses six-hour active checks until the final seven days, then three-hour checks", () => {
+  it("uses predictable six-hour checks throughout a bounded run", () => {
     const now = new Date("2026-08-01T00:00:00Z");
     expect(adaptiveWatchIntervalMs(1, "2026-08-20", now)).toBe(6 * 3_600_000);
     expect(adaptiveWatchIntervalMs(1, "2026-08-09", now)).toBe(6 * 3_600_000);
-    expect(adaptiveWatchIntervalMs(1, "2026-08-05", now)).toBe(3 * 3_600_000);
-    expect(adaptiveWatchIntervalMs(12, "2026-08-05", now)).toBe(3 * 3_600_000);
+    expect(adaptiveWatchIntervalMs(1, "2026-08-05", now)).toBe(6 * 3_600_000);
+    expect(adaptiveWatchIntervalMs(12, "2026-08-05", now)).toBe(6 * 3_600_000);
   });
 
-  it("starts scheduled tracking exactly 30 days before departure", () => {
-    expect(trackingStartsAt("2026-09-30").toISOString()).toBe("2026-08-31T00:00:00.000Z");
+  it("ends the fixed run at its three-day boundary", () => {
+    const start = new Date("2026-08-01T12:00:00Z");
+    expect(trackingRunEndsAt(start).toISOString()).toBe("2026-08-04T12:00:00.000Z");
   });
 });
 

@@ -132,7 +132,7 @@ describe("flight worker orchestration", () => {
       quietHoursEnabled: false
     }, new Date("2026-08-01T12:00:00Z"));
     const input: CreateTripInput = {
-      title: "Berlin", cadenceHours: 6,
+      title: "Berlin", cadenceHours: 6, trackingDurationHours: 72,
       brief: {
         originAirports: ["LHR"], destinationAirports: ["BER"], tripType: "one_way",
         departureWindow: { start: "2026-09-10", end: "2026-09-10" }, stayNights: null,
@@ -188,34 +188,17 @@ describe("flight worker orchestration", () => {
       { status: 200, headers: { "content-type": "application/json" } }
     )));
     const result = await worker.tick(new Date("2026-08-01T12:00:00Z"));
-    expect(result).toEqual({ scheduled: 1, processed: 1, notified: 1, cardsDeleted: 0 });
+    expect(result).toEqual({ scheduled: 1, processed: 1, notified: 0, cardsDeleted: 0 });
     expect(search).toHaveBeenCalledTimes(1);
-    const sent = await store.getNotificationByTelegramMessage(user.id, 42);
-    expect(sent).toMatchObject({
-      telegramMessageId: 42,
-      payload: {
-        snapshot: {
-          current: {
-            provider: "flysoar_mcp",
-            evidence: [{ url: "https://ba.com/flight" }]
-          }
+    const trip = (await store.listTrips(user.id))[0]!;
+    expect(await store.getRecommendation(user.id, trip.id)).toMatchObject({
+      snapshot: {
+        current: {
+          provider: "flysoar_mcp",
+          evidence: [{ url: "https://ba.com/flight" }]
         }
       }
     });
-    const request = vi.mocked(fetch).mock.calls[0]?.[1];
-    const telegramPayload = JSON.parse(String(request?.body)) as {
-      text: string;
-      reply_markup: { inline_keyboard: Array<Array<{ text: string; url: string }>> };
-    };
-    expect(telegramPayload.text).toContain(
-      "I checked Berlin for 10 Sept. Best match right now is British Airways at £99.00"
-    );
-    expect(telegramPayload.text).toContain(
-      "I’ll start regular tracking on 11 Aug, 30 days before departure."
-    );
-    expect(telegramPayload.reply_markup.inline_keyboard[0]?.[0]?.text).toBe("Open trip");
-    expect(telegramPayload.reply_markup.inline_keyboard[0]?.[0]?.url)
-      .toMatch(/^https:\/\/captain\.example\.com\/trip\?trip=[0-9a-f-]{36}#access=/u);
     vi.unstubAllGlobals();
   });
 
@@ -244,30 +227,26 @@ describe("flight worker orchestration", () => {
     })).toContain("£10.00 less");
   });
 
-  it("uses warm, concise activation and inactivity messages", () => {
+  it("uses a concise completed-run decision summary", () => {
     expect(notificationText({
       id: "notification",
       userId: "user",
       tripId: "trip",
       telegramChatId: 1,
-      kind: "tracking_activation",
+      kind: "tracking_summary",
       attempts: 0,
       telegramMessageId: null,
-      payload: { tripTitle: "Lagos to Abuja" }
+      payload: {
+        tripTitle: "Lagos to Abuja",
+        durationHours: 72,
+        checksCompleted: 12,
+        summary: "British Airways is the best current option."
+      }
     })).toBe(
-      "I’m starting regular tracking for Lagos → Abuja now.\n"
-      + "I’ll keep an eye on prices and better options."
+      "Your three-day price watch for Lagos → Abuja is complete. I checked 12 times.\n"
+      + "British Airways is the best current option.\n"
+      + "These prices are now stale. Open the trip and choose Track."
     );
-    expect(notificationText({
-      id: "notification-2",
-      userId: "user",
-      tripId: "trip",
-      telegramChatId: 1,
-      kind: "tracking_checkin",
-      attempts: 0,
-      telegramMessageId: null,
-      payload: { tripTitle: "Lagos to Abuja", departureDate: "2026-09-10" }
-    })).toContain("Are you still planning Lagos → Abuja on 10 Sept?");
   });
 
   it("combines useful Trip facts into one compact digest", () => {
@@ -351,6 +330,7 @@ describe("flight worker orchestration", () => {
     const input: CreateTripInput = {
       title: "Lagos to Abuja",
       cadenceHours: 6,
+      trackingDurationHours: 72,
       brief: {
         originAirports: ["LOS"],
         destinationAirports: ["ABV"],
@@ -405,7 +385,7 @@ describe("flight worker orchestration", () => {
     expect(await store.getNotificationByTelegramMessage(user.id, 77)).toBeNull();
     const createdTrip = (await store.listTrips(user.id))[0]!;
     expect(await store.getWatch(user.id, createdTrip.id)).toMatchObject({
-      status: "scheduled",
+      status: "active",
       delayReason: "No fares were found in the latest check."
     });
 

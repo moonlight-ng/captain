@@ -63,9 +63,9 @@ import { Preferences } from "./screens/Preferences";
 
 type Tab = "flights" | "airlines" | "browse";
 const tabLabels: Record<Tab, string> = {
-  flights: "Watchlist",
+  flights: "Top picks",
   airlines: "Airlines",
-  browse: "Flights"
+  browse: "All flights"
 };
 
 type Page = "trip" | "profile";
@@ -74,6 +74,12 @@ function currentPage(): Page {
   return ["/profile", "/settings", "/preferences", "/travellers", "/payment"].includes(
     window.location.pathname
   ) ? "profile" : "trip";
+}
+
+function currentTripId(): string | undefined {
+  const match = /^\/trip\/([^/]+)\/?$/u.exec(window.location.pathname);
+  if (match?.[1]) return decodeURIComponent(match[1]);
+  return new URLSearchParams(window.location.search).get("trip") ?? undefined;
 }
 
 type WatchlistFocus = {
@@ -111,13 +117,20 @@ export function App() {
       setPaymentsEnabled(session.paymentsEnabled);
       setCredential(session.credential);
       setAuthenticated(true);
-      const requestedTripId = new URLSearchParams(window.location.search).get("trip") ?? undefined;
+      const requestedTripId = currentTripId();
       const [nextProfile, nextTrip] = await Promise.all([
         getProfile(),
         getTrip(requestedTripId)
       ]);
       setProfile(nextProfile);
       setTripData(nextTrip);
+      if (
+        nextTrip.trip
+        && window.location.pathname === "/trip"
+        && new URLSearchParams(window.location.search).has("trip")
+      ) {
+        window.history.replaceState(null, "", accessHref("/trip", nextTrip.trip.id));
+      }
     } catch (cause) {
       setAuthenticated(false);
       if (!(cause instanceof ApiError && cause.status === 401)) {
@@ -144,7 +157,7 @@ export function App() {
   }, [trip?.id]);
 
   useEffect(() => {
-    if (!searching || !trip) return;
+    if ((!searching && watch?.status !== "active") || !trip) return;
     let cancelled = false;
     const tripId = trip.id;
     const tick = async () => {
@@ -162,12 +175,12 @@ export function App() {
         /* keep current trip data while the search runs */
       }
     };
-    const id = window.setInterval(() => { void tick(); }, 4000);
+    const id = window.setInterval(() => { void tick(); }, searching ? 4000 : 60_000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [searching, trip?.id]);
+  }, [searching, trip?.id, watch?.status]);
 
   const personSelectionKeys = useMemo(
     () => [...new Set(
@@ -260,9 +273,25 @@ export function App() {
     }
   }
 
+  async function trackPrices() {
+    if (!trip) return;
+    setSearchBusy(true);
+    setError("");
+    try {
+      await tripAction("track", trip.id, trip.version);
+      const next = await getTrip(trip.id);
+      setTripData(next);
+    } catch {
+      setError("That tracking run didn’t start. Try again.");
+    } finally {
+      setSearchBusy(false);
+    }
+  }
+
   const emptySearch = {
     needsManualSearch,
     searching,
+    completed: watch?.status === "completed",
     busy: searchBusy,
     onSearch: () => { void searchFlights(); }
   };
@@ -383,7 +412,7 @@ export function App() {
             </div>
           </section>
 
-          {tripData?.watch?.delayReason && (
+          {tripData?.watch?.delayReason && tripData.watch.status !== "completed" && (
             <div className="notice notice-delay">
               <strong>Tracking update.</strong> {tripData.watch.delayReason}{" "}
               {offers.length > 0
@@ -394,6 +423,16 @@ export function App() {
             </div>
           )}
           {error && <div className="notice">{error}</div>}
+
+          {watch && (
+            <TrackingRunCard
+              watch={watch}
+              offers={offers}
+              recommendation={tripData?.recommendation ?? null}
+              busy={searchBusy}
+              onTrack={() => { void trackPrices(); }}
+            />
+          )}
 
           <nav className="tabs" aria-label="Trip results">
             {(["flights", "airlines", "browse"] as Tab[]).map((item) => (
@@ -468,9 +507,104 @@ export function App() {
   );
 }
 
+function TrackingRunCard({
+  watch,
+  offers,
+  recommendation,
+  busy,
+  onTrack
+}: {
+  watch: Watch;
+  offers: VerifiedOffer[];
+  recommendation: TripPayload["recommendation"];
+  busy: boolean;
+  onTrack: () => void;
+}) {
+  const best = offers.find((offer) => offer.id === recommendation?.offerId)
+    ?? offers.find((offer) => offer.itineraryKey === recommendation?.itineraryKey)
+    ?? offers[0]
+    ?? null;
+
+  if (watch.status === "completed") {
+    return (
+      <section className="tracking-run-card complete" aria-label="Tracking run summary">
+        <div className="tracking-run-icon" aria-hidden="true">✓</div>
+        <div className="tracking-run-copy">
+          <p className="eyebrow">Prices stale</p>
+          <h2>Three-day watch finished</h2>
+          <p>
+            Captain checked {watch.checksCompleted || "the route"}
+            {watch.checksCompleted ? ` time${watch.checksCompleted === 1 ? "" : "s"}` : ""} and stopped as planned.
+            {best
+              ? " No further checks are scheduled. The last strongest option is below. Choose Track to check a fresh price before booking."
+              : recommendation?.summary
+                ? ` ${recommendation.summary}`
+                : " No verified fare was available at the end of this run."}
+          </p>
+        </div>
+        {best && (
+          <div className="tracking-best">
+            <span>Last strongest option</span>
+            <strong>{money(best)}</strong>
+            <small>{airlineName(best.primaryAirlineCode, [best])} · {duration(best)} · {stops(best)}</small>
+          </div>
+        )}
+        <div className="tracking-run-actions">
+          <button className="primary-action" disabled={busy} onClick={onTrack}>
+            {busy ? "Starting…" : "Track"}
+          </button>
+          <small>Starts a new three-day check.</small>
+        </div>
+      </section>
+    );
+  }
+
+  const started = Date.parse(watch.runStartedAt);
+  const ends = Date.parse(watch.runEndsAt);
+  const span = Math.max(1, ends - started);
+  const progress = Math.min(100, Math.max(2, ((Date.now() - started) / span) * 100));
+  const paused = watch.status === "paused";
+  return (
+    <section className={`tracking-run-card${paused ? " paused" : ""}`} aria-label="Tracking run progress">
+      <div className="tracking-run-copy">
+        <p className="eyebrow">{paused ? "Tracking paused" : "Tracking now"}</p>
+        <h2>Three-day price watch</h2>
+        <p>
+          {paused
+            ? "This run is paused. Resume it from Profile when you’re ready."
+            : `Checking every six hours until ${runEndLabel(watch.runEndsAt)}. Captain will stop automatically and send a summary.`}
+        </p>
+      </div>
+      <div className="tracking-progress" aria-label={`${Math.round(progress)}% complete`}>
+        <span style={{ width: `${progress}%` }} />
+      </div>
+      <dl className="tracking-run-facts">
+        <div><dt>Checks complete</dt><dd>{watch.checksCompleted}</dd></div>
+        <div><dt>Next check</dt><dd>{watch.nextCheckAt ? scheduleTime(watch.nextCheckAt) : "Finishing"}</dd></div>
+        <div><dt>Ends</dt><dd>{runEndLabel(watch.runEndsAt)}</dd></div>
+      </dl>
+    </section>
+  );
+}
+
+function runEndLabel(value: string): string {
+  const date = new Date(value);
+  const today = new Date();
+  const day = date.toDateString() === today.toDateString()
+    ? "today"
+    : date.toDateString() === new Date(today.getTime() + 86_400_000).toDateString()
+      ? "tomorrow"
+      : new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(date);
+  return `${day} at ${new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(date)}`;
+}
+
 type EmptySearchProps = {
   needsManualSearch: boolean;
   searching: boolean;
+  completed: boolean;
   busy: boolean;
   onSearch: () => void;
 };
@@ -692,16 +826,26 @@ function WatchlistDetail({
         </div>
       </div>
 
-      <div className="mock-booking-cta">
-        <div>
-          <span className="pill mock-pill">Prototype</span>
-          <strong>Preview booking this flight</strong>
-          <p>No provider call, reservation, or card charge will be made.</p>
+      {watch?.status === "completed" ? (
+        <div className="mock-booking-cta stale-price-notice">
+          <div>
+            <span className="pill">Prices stale</span>
+            <strong>Track before booking</strong>
+            <p>Return to the trip summary and choose Track to check a fresh price.</p>
+          </div>
         </div>
-        <button type="button" className="primary-action" onClick={() => onBook(offer)}>
-          Book flight · mock
-        </button>
-      </div>
+      ) : (
+        <div className="mock-booking-cta">
+          <div>
+            <span className="pill mock-pill">Prototype</span>
+            <strong>Preview booking this flight</strong>
+            <p>No provider call, reservation, or card charge will be made.</p>
+          </div>
+          <button type="button" className="primary-action" onClick={() => onBook(offer)}>
+            Book flight · mock
+          </button>
+        </div>
+      )}
 
       {outbound.length > 0 && (
         <div className="watchlist-panel">
@@ -1028,10 +1172,8 @@ function agentRunningLabel(
 ): string {
   if (!trip) return "";
   if (trip.status === "paused" || watch?.status === "paused") return "Paused";
+  if (watch?.status === "completed") return "Prices stale";
   if (watch?.lastCheckAt) return `Checked ${relativeTime(watch.lastCheckAt)}`;
-  if (watch?.status === "scheduled" && watch.trackingStartsAt) {
-    return `Scheduled · starts ${dateLabel(watch.trackingStartsAt.slice(0, 10))}`;
-  }
   if (watch?.nextCheckAt) {
     const next = scheduleTime(watch.nextCheckAt);
     return next === "Due now" ? "Checking soon" : `Next check ${next.toLowerCase()}`;
@@ -1043,7 +1185,7 @@ function CenteredState({ title, detail }: { title: string; detail: string }) {
   return <main className="centered"><span className="brand-mark">C</span><h1>{title}</h1><p>{detail}</p></main>;
 }
 
-function ResultsEmpty({ needsManualSearch, searching, busy, onSearch }: EmptySearchProps) {
+function ResultsEmpty({ needsManualSearch, searching, completed, busy, onSearch }: EmptySearchProps) {
   if (searching) {
     return (
       <div className="results-empty searching">
@@ -1057,7 +1199,9 @@ function ResultsEmpty({ needsManualSearch, searching, busy, onSearch }: EmptySea
     <div className="results-empty">
       <span aria-hidden="true"><FlightIcon /></span>
       <h2>No flights found</h2>
-      {needsManualSearch ? (
+      {completed ? (
+        <p>No verified price was available when the watch finished. Choose Track from the summary to check again.</p>
+      ) : needsManualSearch ? (
         <>
           <p>Regular tracking starts closer to departure. Search now to check current options.</p>
           <button className="primary" disabled={busy} onClick={onSearch}>
@@ -1065,7 +1209,7 @@ function ResultsEmpty({ needsManualSearch, searching, busy, onSearch }: EmptySea
           </button>
         </>
       ) : (
-        <p>Captain will keep watching and notify you in Telegram when new options come up.</p>
+        <p>This tracking run will stop automatically and Captain will send a summary when it finishes.</p>
       )}
     </div>
   );

@@ -4,8 +4,8 @@ import type { FlightSearchProviderId } from "./provider.js";
 
 export const MAX_ACTIVE_TRIPS_PER_USER = 3;
 export const MAX_SEARCH_COMBINATIONS = 1;
-export const DEFAULT_CADENCE_HOURS = 3;
-export const MINIMUM_CADENCE_HOURS = 3;
+export const TRACKING_CADENCE_HOURS = 6;
+export const DEFAULT_TRACKING_DURATION_HOURS = 72;
 
 const iataCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/);
 const airlineCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,3}$/);
@@ -97,12 +97,14 @@ export type TripStatus = z.infer<typeof tripStatusSchema>;
 export const createTripSchema = z.object({
   title: z.string().trim().min(1).max(120),
   brief: tripBriefSchema,
-  cadenceHours: z.number().int().min(MINIMUM_CADENCE_HOURS).max(24).default(DEFAULT_CADENCE_HOURS)
+  cadenceHours: z.literal(TRACKING_CADENCE_HOURS).default(TRACKING_CADENCE_HOURS),
+  trackingDurationHours: z.literal(DEFAULT_TRACKING_DURATION_HOURS)
+    .default(DEFAULT_TRACKING_DURATION_HOURS)
 }).strict();
 export type CreateTripInput = z.infer<typeof createTripSchema>;
 
 export const tripActionSchema = z.object({
-  type: z.enum(["pause", "resume", "refresh", "cancel", "complete"]),
+  type: z.enum(["pause", "resume", "refresh", "track", "cancel", "complete"]),
   expectedVersion: z.number().int().positive()
 }).strict();
 export type TripAction = z.infer<typeof tripActionSchema>;
@@ -131,6 +133,11 @@ export type Watch = {
   tripId: string;
   status: "active" | "scheduled" | "paused" | "completed";
   cadenceHours: number;
+  trackingDurationHours: 72;
+  runStartedAt: string;
+  runEndsAt: string;
+  completedAt: string | null;
+  checksCompleted: number;
   nextCheckAt: string | null;
   lastCheckAt: string | null;
   lastManualRefreshAt: string | null;
