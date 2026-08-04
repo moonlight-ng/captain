@@ -1518,14 +1518,43 @@ a.offer-row:active { transform: scale(.99); }
 }
 .booking-traveller-row .traveller-card-main { gap: 4px; }
 .booking-traveller-row .traveller-card-main small { color: var(--quiet); font-size: 10px; }
-.mock-activity-list { margin: 0; padding: 0; list-style: none; }
+.mock-activity-list {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mock-activity-list::before {
+  position: absolute;
+  top: 7px;
+  bottom: 42px;
+  left: 5px;
+  width: 1px;
+  background: var(--line-strong);
+  content: "";
+}
 .mock-activity-list li { position: relative; display: grid; grid-template-columns: 12px 1fr; gap: 12px; min-height: 54px; }
-.mock-activity-list li:not(:last-child)::after { position: absolute; top: 15px; bottom: 0; left: 5px; width: 1px; background: var(--line-strong); content: ""; }
 .mock-activity-list i { position: relative; z-index: 1; width: 11px; height: 11px; margin-top: 2px; border: 2px solid rgba(255, 255, 255, .25); border-radius: 50%; background: #11141a; }
 .mock-activity-list li.complete i { border-color: var(--green); background: var(--green); box-shadow: 0 0 0 4px rgba(167, 196, 154, .08); }
 .mock-activity-list span { display: flex; flex-direction: column; gap: 4px; }
 .mock-activity-list strong { font-size: var(--type-body); font-weight: 610; }
 .mock-activity-list small { color: var(--quiet); font-size: 10px; }
+.mock-activity-more {
+  grid-template-columns: 12px;
+  align-content: center;
+  justify-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 2px 0;
+}
+.mock-activity-more i {
+  width: 4px;
+  height: 4px;
+  margin: 0;
+  border: 0;
+  background: rgba(255, 255, 255, .28);
+  box-shadow: none;
+}
 .booking-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .booking-actions button,
 .mock-action-panel button {

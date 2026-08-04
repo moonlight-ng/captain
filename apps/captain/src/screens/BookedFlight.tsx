@@ -330,18 +330,40 @@ function MockFlightActivity({ booking, segments }: { booking: MockBooking; segme
     ? new Date(Date.parse(first.departure) - 24 * 60 * 60 * 1000).toISOString()
     : null;
   const items = [
-    { title: "Booking created", detail: timestampLabel(booking.bookedAt), complete: true },
-    { title: "Online check-in opens", detail: checkInAt ? timestampLabel(checkInAt) : "24 hours before departure", complete: false },
-    { title: "Departure", detail: first ? `${timestampLabel(first.departure)} · ${first.origin}` : "Awaiting schedule", complete: false },
-    { title: "Arrival", detail: last ? `${timestampLabel(last.arrival)} · ${last.destination}` : "Awaiting schedule", complete: false }
+    { kind: "step" as const, title: "Booking created", detail: timestampLabel(booking.bookedAt), complete: true },
+    {
+      kind: "step" as const,
+      title: "Online check-in opens",
+      detail: checkInAt ? timestampLabel(checkInAt) : "24 hours before departure",
+      complete: false
+    },
+    { kind: "more" as const },
+    {
+      kind: "step" as const,
+      title: "Departure",
+      detail: first ? `${timestampLabel(first.departure)} · ${first.origin}` : "Awaiting schedule",
+      complete: false
+    },
+    {
+      kind: "step" as const,
+      title: "Arrival",
+      detail: last ? `${timestampLabel(last.arrival)} · ${last.destination}` : "Awaiting schedule",
+      complete: false
+    }
   ];
   return (
     <ol className="mock-activity-list">
       {items.map((item) => (
-        <li className={item.complete ? "complete" : ""} key={item.title}>
-          <i aria-hidden="true" />
-          <span><strong>{item.title}</strong><small>{item.detail}</small></span>
-        </li>
+        item.kind === "more" ? (
+          <li className="mock-activity-more" aria-hidden="true" key="more">
+            <i /><i /><i />
+          </li>
+        ) : (
+          <li className={item.complete ? "complete" : ""} key={item.title}>
+            <i aria-hidden="true" />
+            <span><strong>{item.title}</strong><small>{item.detail}</small></span>
+          </li>
+        )
       ))}
     </ol>
   );
