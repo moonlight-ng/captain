@@ -63,8 +63,8 @@ export function Travellers({
 
   const content = (
     <>
-      <section className="settings-card" id="traveller-profiles">
-        <p className="eyebrow">Traveller profiles</p>
+      <section className="settings-card" id="traveller-details">
+        <p className="eyebrow">Traveller details</p>
         <h1>Who’s flying</h1>
         <p>Names are saved securely for booking. Date of birth and gender are optional until you book.</p>
       </section>

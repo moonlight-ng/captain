@@ -67,10 +67,9 @@ const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. 
 export const CAPTAIN_NEW_USER_GREETING =
   "Hi, I'm Captain! I can help you prepare for a flight by tracking suitable options and reporting price changes.";
 export const CAPTAIN_PREFERENCES_INTRO = "Let's start with your preferences";
+export const CAPTAIN_PROFILE_COMMAND = "/profile";
 export const CAPTAIN_TRAVELLER_SETUP_PROMPT =
   "Save your traveller details and card so Captain is ready when booking opens.";
-export const CAPTAIN_PROFILES_INTRO =
-  "Manage traveller details, preferences, and your saved card in your Captain profile.";
 export const CAPTAIN_PAYMENT_UNAVAILABLE =
   "Card setup isn’t available yet. Captain will let you know when it opens.";
 export const CAPTAIN_PAYMENT_INTRO =
@@ -158,7 +157,7 @@ export default telegramChannel({
       await handleOnboardingText(ctx, user.id, profile, content);
       return null;
     }
-    if (content === "/profile" || content === "/settings" || content === "/preferences") {
+    if (content === CAPTAIN_PROFILE_COMMAND || content === "/settings" || content === "/preferences") {
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       await postWithLink(
         ctx,
@@ -179,16 +178,6 @@ export default telegramChannel({
       await postTelegramDashboardMessage(ctx, response);
       return null;
     }
-    if (content === "/profiles" || content === "/travellers") {
-      await services.platformStore.appendMessage(user.id, "user", content, new Date());
-      await postWithLink(
-        ctx,
-        CAPTAIN_PROFILES_INTRO,
-        "Open profile",
-        await services.auth.createLoginLink(user.id, "/profile", { section: "profiles" })
-      );
-      return null;
-    }
     if (content === "/payment") {
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       if (!services.env.paymentsEnabled) {
@@ -199,7 +188,7 @@ export default telegramChannel({
         ctx,
         CAPTAIN_PAYMENT_INTRO,
         "Open profile",
-        await services.auth.createLoginLink(user.id, "/profile", { section: "payment" })
+        await services.auth.createLoginLink(user.id, "/profile")
       );
       return null;
     }
@@ -893,7 +882,7 @@ async function completeOnboarding(
     ctx,
     "Preferences set. Tell me where and roughly when you want to fly. I can track up to three trips at a time.",
     "Edit preferences",
-    await services.auth.createLoginLink(userId, "/profile", { section: "profiles" })
+    await services.auth.createLoginLink(userId, "/profile")
   );
 }
 
@@ -1141,7 +1130,7 @@ async function maybePostTravellerSetup(
     telegram,
     CAPTAIN_TRAVELLER_SETUP_PROMPT,
     "Add traveller details",
-    await services.auth.createLoginLink(userId, "/profile", { section: "profiles" })
+    await services.auth.createLoginLink(userId, "/profile")
   );
 }
 

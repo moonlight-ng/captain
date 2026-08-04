@@ -7,7 +7,7 @@ import {
   CAPTAIN_NEW_USER_GREETING,
   CAPTAIN_PAYMENT_UNAVAILABLE,
   CAPTAIN_PREFERENCES_INTRO,
-  CAPTAIN_PROFILES_INTRO,
+  CAPTAIN_PROFILE_COMMAND,
   CAPTAIN_SIGNOUT_CONFIRMATION,
   CAPTAIN_TRAVELLER_SETUP_PROMPT,
   explainNotification,
@@ -30,9 +30,6 @@ describe("Telegram profile onboarding", () => {
     expect(CAPTAIN_TRAVELLER_SETUP_PROMPT).toBe(
       "Save your traveller details and card so Captain is ready when booking opens."
     );
-    expect(CAPTAIN_PROFILES_INTRO).toBe(
-      "Manage traveller details, preferences, and your saved card in your Captain profile."
-    );
     expect(CAPTAIN_PAYMENT_UNAVAILABLE).toBe(
       "Card setup isn’t available yet. Captain will let you know when it opens."
     );
@@ -41,12 +38,8 @@ describe("Telegram profile onboarding", () => {
     );
   });
 
-  it("keeps legacy profile and preference commands as profile aliases", () => {
-    expect(["/profiles", "/travellers"]).toContain("/travellers");
-    expect(["/profiles", "/travellers"]).toContain("/profiles");
-    expect(["/settings", "/preferences"]).toContain("/settings");
-    expect(["/settings", "/preferences"]).toContain("/preferences");
-    expect(["/profile", "/settings", "/preferences"]).toContain("/profile");
+  it("uses profile as the single user-facing account command", () => {
+    expect(CAPTAIN_PROFILE_COMMAND).toBe("/profile");
   });
 
   it("parses currency, ranking, and preferred/avoided airlines deterministically", () => {
