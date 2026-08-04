@@ -104,26 +104,29 @@ function truncateErrorDetail(detail: string | null | undefined): string | null {
 
 export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
   readonly #sql: Sql;
+  readonly #piiEncryptionKey: string;
   readonly #clientKeyIssues = new Map<string, {
     setupIntentId: string;
     work: Promise<{ setupIntentId: string; clientKey: string }>;
   }>();
 
-  private constructor(sql: Sql) {
+  private constructor(sql: Sql, piiEncryptionKey: string) {
     this.#sql = sql;
+    this.#piiEncryptionKey = piiEncryptionKey;
   }
 
   static connect(
     databaseUrl: string,
     max = 4,
-    idleTimeoutSeconds = 600
+    idleTimeoutSeconds = 600,
+    piiEncryptionKey = "captain-local-passenger-documents"
   ): PostgresCaptainPlatformStore {
     return new PostgresCaptainPlatformStore(postgres(databaseUrl, {
       max,
       idle_timeout: idleTimeoutSeconds,
       connect_timeout: 15,
       transform: { undefined: null }
-    }));
+    }), piiEncryptionKey);
   }
 
   async ensureTelegramUser(input: TelegramUserInput, now: Date): Promise<CaptainUser> {
@@ -456,12 +459,20 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       const id = randomUUID();
       const rows = await tx<PassengerRow[]>`
         insert into captain.passengers (
-          id, user_id, given_name, family_name, title, gender, born_on,
-          email, phone_number, is_default, created_at, updated_at
+          id, user_id, given_name, middle_name, family_name, title, gender, born_on,
+          email, phone_number, nationality, country_of_residence,
+          passport_number_encrypted, passport_last4, passport_issuing_country,
+          passport_expires_on, is_default, created_at, updated_at
         ) values (
-          ${id}, ${userId}, ${input.givenName}, ${input.familyName},
+          ${id}, ${userId}, ${input.givenName}, ${input.middleName ?? null}, ${input.familyName},
           ${input.title ?? null}, ${input.gender ?? null}, ${input.bornOn ?? null},
-          ${input.email ?? null}, ${input.phoneNumber ?? null}, ${makeDefault},
+          ${input.email ?? null}, ${input.phoneNumber ?? null},
+          ${input.nationality ?? null}, ${input.countryOfResidence ?? null},
+          case when ${input.passportNumber ?? null}::text is null then null
+            else pgp_sym_encrypt(${input.passportNumber ?? null}, ${this.#piiEncryptionKey}, 'cipher-algo=aes256') end,
+          ${input.passportNumber?.slice(-4) ?? null},
+          ${input.passportIssuingCountry ?? null}, ${input.passportExpiresOn ?? null},
+          ${makeDefault},
           ${now}, ${now}
         )
         returning *
@@ -486,6 +497,10 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       const rows = await tx<PassengerRow[]>`
         update captain.passengers set
           given_name = coalesce(${input.givenName ?? null}, given_name),
+          middle_name = case
+            when ${input.middleName !== undefined} then ${input.middleName ?? null}
+            else middle_name
+          end,
           family_name = coalesce(${input.familyName ?? null}, family_name),
           title = case when ${input.title !== undefined} then ${input.title ?? null} else title end,
           gender = case when ${input.gender !== undefined} then ${input.gender ?? null} else gender end,
@@ -494,6 +509,32 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           phone_number = case
             when ${input.phoneNumber !== undefined} then ${input.phoneNumber ?? null}
             else phone_number
+          end,
+          nationality = case
+            when ${input.nationality !== undefined} then ${input.nationality ?? null}
+            else nationality
+          end,
+          country_of_residence = case
+            when ${input.countryOfResidence !== undefined} then ${input.countryOfResidence ?? null}
+            else country_of_residence
+          end,
+          passport_number_encrypted = case
+            when ${input.passportNumber !== undefined} then
+              case when ${input.passportNumber ?? null}::text is null then null
+                else pgp_sym_encrypt(${input.passportNumber ?? null}, ${this.#piiEncryptionKey}, 'cipher-algo=aes256') end
+            else passport_number_encrypted
+          end,
+          passport_last4 = case
+            when ${input.passportNumber !== undefined} then ${input.passportNumber?.slice(-4) ?? null}
+            else passport_last4
+          end,
+          passport_issuing_country = case
+            when ${input.passportIssuingCountry !== undefined} then ${input.passportIssuingCountry ?? null}
+            else passport_issuing_country
+          end,
+          passport_expires_on = case
+            when ${input.passportExpiresOn !== undefined} then ${input.passportExpiresOn ?? null}
+            else passport_expires_on
           end,
           is_default = coalesce(${input.isDefault ?? null}, is_default),
           updated_at = ${now}
@@ -574,6 +615,34 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       order by is_default desc, created_at asc
     `;
     return rows.map(mapPaymentMethod);
+  }
+
+  async setDefaultPaymentMethod(
+    userId: string,
+    paymentMethodId: string,
+    now: Date
+  ): Promise<PaymentMethod> {
+    return this.#sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${`${userId}:payment_methods`}))`;
+      const target = await tx<PaymentMethodRow[]>`
+        select * from captain.payment_methods
+        where id = ${paymentMethodId} and user_id = ${userId} and status = 'active'
+        for update
+      `;
+      if (!target[0]) throw new Error("Payment method not found");
+      await tx`
+        update captain.payment_methods
+        set is_default = false, updated_at = ${now}
+        where user_id = ${userId} and status = 'active' and is_default
+      `;
+      const rows = await tx<PaymentMethodRow[]>`
+        update captain.payment_methods
+        set is_default = true, updated_at = ${now}
+        where id = ${paymentMethodId} and user_id = ${userId} and status = 'active'
+        returning *
+      `;
+      return mapPaymentMethod(rows[0]!);
+    });
   }
 
   async reservePaymentCardSetupIntent(
@@ -884,22 +953,6 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       `;
       if (claimedElsewhere[0]) throw new PaymentSetupConflictError("card_unavailable");
 
-      const retiring = await tx<PaymentMethodRow[]>`
-        select * from captain.payment_methods
-        where user_id = ${userId}
-          and status = 'active'
-          and provider_card_id <> ${input.cardId}
-        for update
-      `;
-      for (const method of retiring) {
-        await tx`
-          update captain.payment_methods
-          set status = 'removed', is_default = false, updated_at = ${now}
-          where id = ${method.id}
-        `;
-        await enqueueCardDeletion(tx, method, now);
-      }
-
       // Any row for this card is necessarily active: the removed case threw above.
       const existingForCard = await tx<PaymentMethodRow[]>`
         select * from captain.payment_methods
@@ -914,7 +967,6 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
             last4 = ${input.last4},
             cardholder_name = ${input.cardholderName},
             status = 'active',
-            is_default = true,
             updated_at = ${now}
           where id = ${existingForCard[0].id}
           returning *
@@ -933,7 +985,12 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
             cardholder_name, status, is_default, created_at, updated_at
           ) values (
             ${randomUUID()}, ${userId}, 'duffel', ${input.cardId}, ${input.brand},
-            ${input.last4}, ${input.cardholderName}, 'active', true, ${now}, ${now}
+            ${input.last4}, ${input.cardholderName}, 'active',
+            not exists (
+              select 1 from captain.payment_methods
+              where user_id = ${userId} and status = 'active' and is_default
+            ),
+            ${now}, ${now}
           )
           returning *
         `;
@@ -957,6 +1014,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
 
   async removePaymentMethod(userId: string, paymentMethodId: string, now: Date): Promise<void> {
     await this.#sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${`${userId}:payment_methods`}))`;
       const rows = await tx<PaymentMethodRow[]>`
         update captain.payment_methods
         set status = 'removed', is_default = false, updated_at = ${now}
@@ -966,6 +1024,17 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       const method = rows[0];
       if (!method) return;
       await enqueueCardDeletion(tx, method, now);
+      if (method.is_default) {
+        await tx`
+          update captain.payment_methods set is_default = true, updated_at = ${now}
+          where id = (
+            select id from captain.payment_methods
+            where user_id = ${userId} and status = 'active'
+            order by created_at asc
+            limit 1
+          )
+        `;
+      }
     });
   }
 
@@ -3208,12 +3277,18 @@ type PassengerRow = {
   id: string;
   user_id: string;
   given_name: string;
+  middle_name: string | null;
   family_name: string;
   title: Passenger["title"];
   gender: Passenger["gender"];
   born_on: string | Date | null;
   email: string | null;
   phone_number: string | null;
+  nationality: string | null;
+  country_of_residence: string | null;
+  passport_last4: string | null;
+  passport_issuing_country: string | null;
+  passport_expires_on: string | Date | null;
   is_default: boolean;
   created_at: Date;
   updated_at: Date;
@@ -3387,6 +3462,7 @@ function mapPassenger(row: PassengerRow): Passenger {
     id: row.id,
     userId: row.user_id,
     givenName: row.given_name,
+    middleName: row.middle_name,
     familyName: row.family_name,
     title: row.title,
     gender: row.gender,
@@ -3395,6 +3471,15 @@ function mapPassenger(row: PassengerRow): Passenger {
       : null,
     email: row.email,
     phoneNumber: row.phone_number,
+    nationality: row.nationality,
+    countryOfResidence: row.country_of_residence,
+    passportLast4: row.passport_last4,
+    passportIssuingCountry: row.passport_issuing_country,
+    passportExpiresOn: row.passport_expires_on
+      ? (row.passport_expires_on instanceof Date
+          ? row.passport_expires_on.toISOString().slice(0, 10)
+          : String(row.passport_expires_on).slice(0, 10))
+      : null,
     isDefault: row.is_default,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at)

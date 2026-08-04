@@ -34,7 +34,12 @@ export async function createCaptainServices(): Promise<CaptainServices> {
   process.env.CAPTAIN_BETA_USER_LIMIT = String(env.betaUserLimit);
   process.env.CAPTAIN_PUBLIC_BETA_ENABLED = String(env.publicBetaEnabled);
   const platformStore: CaptainPlatformStore = env.databaseUrl
-    ? PostgresCaptainPlatformStore.connect(env.databaseUrl, 4)
+    ? PostgresCaptainPlatformStore.connect(
+        env.databaseUrl,
+        4,
+        600,
+        env.piiEncryptionKey ?? "captain-local-passenger-documents"
+      )
     : new MemoryCaptainPlatformStore();
   const auth = new CaptainWebAuth({
     publicUrl: env.publicUrl,

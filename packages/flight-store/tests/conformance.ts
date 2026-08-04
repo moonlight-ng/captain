@@ -818,7 +818,7 @@ export function describeCaptainPlatformStore(
       await expect(store.getTrip(ada.id, created.trip.id)).resolves.toMatchObject({ version });
     });
 
-    it("reserves, finalizes, replaces, and removes payment methods", async () => {
+    it("reserves, finalizes, switches defaults, and removes multiple payment methods", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
       const now = new Date("2026-08-01T12:00:00Z");
@@ -845,7 +845,17 @@ export function describeCaptainPlatformStore(
         cardholderName: "Ada Lovelace"
       }, now);
       await expect(store.listPaymentMethods(ada.id)).resolves.toEqual([
-        expect.objectContaining({ id: methodB.id, last4: "4444", status: "active" })
+        expect.objectContaining({ id: methodA.id, last4: "4242", status: "active", isDefault: true }),
+        expect.objectContaining({ id: methodB.id, last4: "4444", status: "active", isDefault: false })
+      ]);
+
+      await expect(store.setDefaultPaymentMethod(ada.id, methodB.id, now)).resolves.toMatchObject({
+        id: methodB.id,
+        isDefault: true
+      });
+      await expect(store.listPaymentMethods(ada.id)).resolves.toEqual([
+        expect.objectContaining({ id: methodB.id, isDefault: true }),
+        expect.objectContaining({ id: methodA.id, isDefault: false })
       ]);
 
       await expect(store.finalizePaymentMethod(ada.id, {
@@ -857,8 +867,9 @@ export function describeCaptainPlatformStore(
       }, now)).resolves.toMatchObject({ id: methodB.id });
 
       await store.removePaymentMethod(ada.id, methodB.id, now);
-      await expect(store.listPaymentMethods(ada.id)).resolves.toEqual([]);
-      void methodA;
+      await expect(store.listPaymentMethods(ada.id)).resolves.toEqual([
+        expect.objectContaining({ id: methodA.id, isDefault: true })
+      ]);
     });
 
     it("treats setup intent reservation as idempotent and rejects remount collisions", async () => {

@@ -51,6 +51,7 @@ import {
 } from "./format";
 import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./components/icons";
 import { FilterSheet } from "./components/FilterSheet";
+import { TripTravellerPicker, travellerProfileHref } from "./components/TripTravellerPicker";
 import {
   createMockBooking,
   readMockBooking,
@@ -59,7 +60,7 @@ import {
   type MockBooking
 } from "./mock-booking";
 import { BookedFlight } from "./screens/BookedFlight";
-import { Preferences } from "./screens/Preferences";
+import { Profile } from "./screens/Profile";
 
 type Tab = "flights" | "airlines" | "browse";
 const tabLabels: Record<Tab, string> = {
@@ -221,16 +222,10 @@ export function App() {
   }
   if (page === "profile" && profile) {
     return (
-      <Preferences
-        profile={profile}
-        tripData={tripData}
+      <Profile
         displayName={displayName}
-        trackingError={error}
         sessionCredential={credential === "session"}
         paymentsEnabled={paymentsEnabled}
-        onSaved={setProfile}
-        onTripChanged={load}
-        onTripError={setError}
         onBack={() => { window.location.href = accessHref("/trip", tripData?.trip?.id); }}
       />
     );
@@ -318,6 +313,8 @@ export function App() {
             watch={tripData?.watch ?? null}
             activity={tripData?.activity ?? []}
             tripId={trip.id}
+            travellers={tripData?.travellers ?? []}
+            sessionCredential={credential === "session"}
             watching={focusWatching}
             onBack={() => setWatchlistFocus(null)}
             onBook={(offer) => {
@@ -325,6 +322,9 @@ export function App() {
               writeMockBooking(booking);
               setMockBooking(booking);
               setWatchlistFocus(null);
+            }}
+            onTravellersChange={(travellers) => {
+              setTripData((current) => current ? { ...current, travellers } : current);
             }}
             onSelectionChange={(itineraryKey, selected) => {
               setTripData((current) => {
@@ -610,9 +610,12 @@ function WatchlistDetail({
   watch,
   activity,
   tripId,
+  travellers,
+  sessionCredential,
   watching,
   onBack,
   onBook,
+  onTravellersChange,
   onSelectionChange,
   onRemoved,
   onError
@@ -623,9 +626,12 @@ function WatchlistDetail({
   watch: Watch | null;
   activity: TripPayload["activity"];
   tripId: string;
+  travellers: TripPayload["travellers"];
+  sessionCredential: boolean;
   watching: boolean;
   onBack: () => void;
   onBook: (offer: VerifiedOffer) => void;
+  onTravellersChange: (travellers: TripPayload["travellers"]) => void;
   onSelectionChange: (itineraryKey: string, selected: boolean) => void;
   onRemoved: (itineraryKey: string) => void;
   onError: (message: string) => void;
@@ -698,10 +704,29 @@ function WatchlistDetail({
           <strong>Preview booking this flight</strong>
           <p>No provider call, reservation, or card charge will be made.</p>
         </div>
-        <button type="button" className="primary-action" onClick={() => onBook(offer)}>
+        <button
+          type="button"
+          className="primary-action"
+          onClick={() => {
+            const traveller = travellers[0];
+            if (!traveller || !traveller.readyForBooking || !traveller.readyForInternationalTravel) {
+              window.location.href = travellerProfileHref(tripId, traveller?.id);
+              return;
+            }
+            onBook(offer);
+          }}
+        >
           Book flight · mock
         </button>
       </div>
+
+      <TripTravellerPicker
+        tripId={tripId}
+        assigned={travellers}
+        sessionCredential={sessionCredential}
+        onChanged={onTravellersChange}
+        onError={onError}
+      />
 
       {outbound.length > 0 && (
         <div className="watchlist-panel">

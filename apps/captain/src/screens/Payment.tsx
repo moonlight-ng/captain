@@ -3,24 +3,19 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import {
   ApiError,
   listPaymentMethods,
-  removePaymentMethod
+  removePaymentMethod,
+  setDefaultPaymentMethod
 } from "../api";
 import type { PaymentMethod } from "../domain";
 import { MOCK_PAYMENT_METHOD } from "../mock-payment";
 
 const DuffelCardMount = lazy(() => import("../components/DuffelCardMount"));
 
-export function Payment({
-  onBack,
-  embedded = false
-}: {
-  onBack?: () => void;
-  embedded?: boolean;
-}) {
+export function Payment() {
   const [methods, setMethods] = useState<PaymentMethod[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
 
   async function reload() {
@@ -39,79 +34,97 @@ export function Payment({
     void reload();
   }, []);
 
-  const primary = methods[0] ?? null;
-  const displayed = primary ?? MOCK_PAYMENT_METHOD;
-  const showingMock = primary === null;
+  const displayed = methods.length > 0 ? methods : [MOCK_PAYMENT_METHOD];
+  const showingMock = methods.length === 0;
 
-  const content = (
-    <>
-      <section className="settings-card" id="payment">
-        <p className="eyebrow">Payment</p>
-        <h1>Payment card</h1>
-        <p>
-          Captain stores a tokenised card ID with Duffel — never the full number or CVC.
-          The sample card below is mock; you can replace it with your real card securely.
-        </p>
-      </section>
+  return (
+    <section className="payment-tab-view">
+      <div className="profile-section-heading">
+        <div>
+          <p className="eyebrow">Payment</p>
+          <h1>Saved cards</h1>
+          <p>Card numbers and CVCs stay inside Duffel’s secure card form. Captain stores tokenised references only.</p>
+        </div>
+        <button type="button" className="profile-add-button" onClick={() => setShowForm(true)}>
+          Add card
+        </button>
+      </div>
 
-      {loading && <p className="settings-card">Loading…</p>}
-      {error && <p className="settings-card form-error" role="alert">{error}</p>}
+      {loading && <section className="profile-empty-state"><p>Loading cards…</p></section>}
+      {error && <p className="profile-empty-state form-error" role="alert">{error}</p>}
 
-      {!loading && !showForm && (
-        <section className="settings-card">
-          <div className="card-status-row">
-            <span className={`pill${showingMock ? " mock-pill" : ""}`}>
-              {showingMock ? "Mock card" : "Saved securely"}
-            </span>
-          </div>
-          <div className="read-only-field">
-            <strong>
-              {formatBrand(displayed.brand)} ···· {displayed.last4}
-            </strong>
-            <div>{displayed.cardholderName}</div>
-          </div>
-          {showingMock && (
-            <p className="set-note">
-              Display only. This sample card is never stored, charged, or sent to Duffel.
-            </p>
-          )}
-          <div className="entity-row" style={{ marginTop: 16 }}>
-            <button type="button" className="quiet-link" onClick={() => setShowForm(true)}>
-              {showingMock ? "Add real card" : "Replace"}
-            </button>
-            {primary && (
-              <button
-                type="button"
-                className="quiet-link"
-                disabled={busy}
-                onClick={() => {
-                  if (!window.confirm("Remove the saved card?")) return;
-                  void (async () => {
-                    setBusy(true);
-                    try {
-                      await removePaymentMethod(primary.id);
-                      await reload();
-                    } catch (cause) {
-                      setError(cause instanceof ApiError ? cause.message : "Could not remove card.");
-                    } finally {
-                      setBusy(false);
-                    }
-                  })();
-                }}
-              >
-                Remove
-              </button>
-            )}
-          </div>
-        </section>
+      {!loading && (
+        <div className="payment-card-list">
+          {displayed.map((method) => (
+            <article className={`payment-method-card${method.isDefault ? " default" : ""}`} key={method.id}>
+              <div className="payment-card-brand-row">
+                <span className="payment-card-brand">{formatBrand(method.brand)}</span>
+                <span className={`pill${showingMock ? " mock-pill" : ""}`}>
+                  {showingMock ? "Mock default" : method.isDefault ? "Default" : "Saved"}
+                </span>
+              </div>
+              <strong className="payment-card-number">•••• •••• •••• {method.last4}</strong>
+              <span className="payment-card-holder">{method.cardholderName}</span>
+              {showingMock ? (
+                <p className="set-note">Display only. It cannot be charged and is never sent to Duffel.</p>
+              ) : (
+                <div className="payment-card-actions">
+                  {!method.isDefault && (
+                    <button
+                      type="button"
+                      className="quiet-link"
+                      disabled={busyId === method.id}
+                      onClick={() => void (async () => {
+                        setBusyId(method.id);
+                        setError("");
+                        try {
+                          await setDefaultPaymentMethod(method.id);
+                          await reload();
+                        } catch (cause) {
+                          setError(cause instanceof ApiError ? cause.message : "Could not update the default card.");
+                        } finally {
+                          setBusyId(null);
+                        }
+                      })()}
+                    >
+                      Make default
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="quiet-link danger-link"
+                    disabled={busyId === method.id}
+                    onClick={() => {
+                      if (!window.confirm(`Remove the ${formatBrand(method.brand)} ending ${method.last4}?`)) return;
+                      void (async () => {
+                        setBusyId(method.id);
+                        setError("");
+                        try {
+                          await removePaymentMethod(method.id);
+                          await reload();
+                        } catch (cause) {
+                          setError(cause instanceof ApiError ? cause.message : "Could not remove card.");
+                        } finally {
+                          setBusyId(null);
+                        }
+                      })();
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              )}
+            </article>
+          ))}
+        </div>
       )}
 
       {!loading && showForm && (
-        <section className="settings-card">
+        <section className="profile-form-panel">
           <div className="card-form-heading">
             <div>
               <p className="eyebrow">Secure card</p>
-              <h2>{primary ? "Replace saved card" : "Add your card"}</h2>
+              <h2>Add another card</h2>
             </div>
             <button type="button" className="quiet-link" onClick={() => setShowForm(false)}>
               Cancel
@@ -128,24 +141,7 @@ export function Payment({
           </Suspense>
         </section>
       )}
-    </>
-  );
-
-  if (embedded) return content;
-
-  return (
-    <main className="shell settings-shell">
-      <header className="topbar">
-        <a className="brand" href="/profile" aria-label="Captain profile">
-          <span className="brand-mark">C</span>
-          <span>Captain</span>
-        </a>
-        <div className="top-actions">
-          {onBack && <button type="button" className="quiet-link" onClick={onBack}>Back</button>}
-        </div>
-      </header>
-      {content}
-    </main>
+    </section>
   );
 }
 
