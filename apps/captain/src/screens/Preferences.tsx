@@ -103,7 +103,7 @@ export function Preferences({
     const requested = new URLSearchParams(window.location.search).get("section")
       ?? window.location.hash.slice(1);
     const target = requested === "payment" ? "payment"
-      : requested === "profiles" ? "traveller-profiles"
+      : ["profiles", "travellers"].includes(requested) ? "traveller-details"
         : null;
     if (!target) return;
     const frame = window.requestAnimationFrame(() => {
@@ -410,10 +410,10 @@ export function Preferences({
           )}
         </>
       ) : (
-        <section className="settings-card" id="traveller-profiles">
+        <section className="settings-card" id="traveller-details">
           <p className="eyebrow">Traveller &amp; payment</p>
           <h1>Secure setup</h1>
-          <p>Open /profile in Captain on Telegram to manage traveller profiles and saved cards.</p>
+          <p>Open /profile in Captain on Telegram to manage traveller details and saved cards.</p>
         </section>
       )}
       {trip && sessionCredential && (
@@ -432,7 +432,7 @@ export function Preferences({
             {availablePassengers.length === 0 ? (
               <p>
                 No travellers saved yet.{" "}
-                <a className="quiet-link" href="#traveller-profiles">Set up a traveller profile</a>.
+                <a className="quiet-link" href="#traveller-details">Add traveller details</a>.
               </p>
             ) : assignedTravellers[0] && !changingTraveller ? (
               <>
@@ -452,7 +452,7 @@ export function Preferences({
                   >
                     Change
                   </button>
-                  <a className="quiet-link" href="#traveller-profiles">Edit profile</a>
+                  <a className="quiet-link" href="#traveller-details">Edit traveller details</a>
                 </div>
               </>
             ) : (
