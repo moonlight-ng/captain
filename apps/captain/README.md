@@ -14,12 +14,13 @@ Traveller names and cards are collected only on Captain’s secure web pages.
   currency stays fixed; Duffel and Flysoar USD/GBP results are normalized into it.
 - The dashboard has **Flights**, **Airlines**, and **Browse** views. It only
   displays verified provider offers and never describes the set as exhaustive.
-- `/trip` and `/preferences` still use deterministic `#access` bearer links for
-  trip and preference APIs. Passengers, payment, trip-traveller assignment, and
-  account deletion require a revocable HttpOnly session cookie (via single-use
-  login tokens). Card vault routes stay behind `CAPTAIN_PAYMENTS_ENABLED`
-  (default `false`) until Duffel approves cards; enabling payments also requires
-  `DATABASE_URL` and `DUFFEL_ACCESS_TOKEN` (memory mode refuses to start).
+- `/settings` is the single web destination for traveller profiles, saved cards,
+  flight preferences, notifications, and trip controls. `/preferences`,
+  `/travellers`, and `/payment` are compatibility aliases. Passenger, payment,
+  trip-traveller assignment, and account deletion mutations require a revocable
+  HttpOnly session cookie (via single-use login tokens). Production enables the
+  card vault with `CAPTAIN_PAYMENTS_ENABLED=true`; it also requires `DATABASE_URL`
+  and `DUFFEL_ACCESS_TOKEN` (memory mode refuses to start).
 - Archived trips and their evidence are retained for 90 days. `/delete_account`
   queues remote Duffel card deletions, then removes the traveller, trip,
   sessions, passengers, payment methods, and retained evidence.

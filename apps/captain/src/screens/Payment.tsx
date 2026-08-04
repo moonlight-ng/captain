@@ -9,7 +9,13 @@ import type { PaymentMethod } from "../domain";
 
 const DuffelCardMount = lazy(() => import("../components/DuffelCardMount"));
 
-export function Payment({ onBack }: { onBack: () => void }) {
+export function Payment({
+  onBack,
+  embedded = false
+}: {
+  onBack?: () => void;
+  embedded?: boolean;
+}) {
   const [methods, setMethods] = useState<PaymentMethod[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -34,19 +40,9 @@ export function Payment({ onBack }: { onBack: () => void }) {
 
   const primary = methods[0] ?? null;
 
-  return (
-    <main className="shell settings-shell">
-      <header className="topbar">
-        <a className="brand" href="/payment" aria-label="Captain payment">
-          <span className="brand-mark">C</span>
-          <span>Captain</span>
-        </a>
-        <div className="top-actions">
-          <button type="button" className="quiet-link" onClick={onBack}>Back</button>
-        </div>
-      </header>
-
-      <section className="settings-card">
+  const content = (
+    <>
+      <section className="settings-card" id="payment">
         <p className="eyebrow">Payment</p>
         <h1>Saved card</h1>
         <p>
@@ -108,6 +104,23 @@ export function Payment({ onBack }: { onBack: () => void }) {
           </Suspense>
         </section>
       )}
+    </>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <main className="shell settings-shell">
+      <header className="topbar">
+        <a className="brand" href="/settings" aria-label="Captain settings">
+          <span className="brand-mark">C</span>
+          <span>Captain</span>
+        </a>
+        <div className="top-actions">
+          {onBack && <button type="button" className="quiet-link" onClick={onBack}>Back</button>}
+        </div>
+      </header>
+      {content}
     </main>
   );
 }

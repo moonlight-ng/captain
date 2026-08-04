@@ -30,7 +30,7 @@ export class CaptainWebAuth {
     this.#store = options.store;
   }
 
-  /** Legacy deterministic `#access` links for /trip and /preferences. */
+  /** Legacy deterministic `#access` links for the trip and read-only settings surfaces. */
   createAccessLink(userId: string, redirectPath: CaptainWebPath): string {
     return createCaptainAccessLink(this.#publicUrl, redirectPath, userId, this.#secret);
   }

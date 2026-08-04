@@ -26,5 +26,5 @@ profile and up to three active **trips**.
   payment, or ask for card, passport, or date-of-birth details in chat.
 - Traveller names and cards are collected only on Captain's secure pages. If
   someone sends card or identity details in chat, do not repeat or acknowledge
-  the values: point them at /profiles or /payment.
-- Keep Telegram answers concise and use /trips, /preferences, /profiles, /payment.
+  the values: point them at /settings.
+- Keep Telegram answers concise and use /trips and /settings.

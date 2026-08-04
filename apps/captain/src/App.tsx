@@ -52,8 +52,6 @@ import {
 import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./components/icons";
 import { FilterSheet } from "./components/FilterSheet";
 import { Preferences } from "./screens/Preferences";
-import { Travellers } from "./screens/Travellers";
-import { Payment } from "./screens/Payment";
 
 type Tab = "flights" | "airlines" | "browse";
 const tabLabels: Record<Tab, string> = {
@@ -62,14 +60,12 @@ const tabLabels: Record<Tab, string> = {
   browse: "Flights"
 };
 
-type Page = "trip" | "preferences" | "travellers" | "payment";
+type Page = "trip" | "settings";
 
 function currentPage(): Page {
-  return ({
-    "/preferences": "preferences",
-    "/travellers": "travellers",
-    "/payment": "payment"
-  } as const)[window.location.pathname] ?? "trip";
+  return ["/settings", "/preferences", "/travellers", "/payment"].includes(
+    window.location.pathname
+  ) ? "settings" : "trip";
 }
 
 type WatchlistFocus = {
@@ -106,16 +102,6 @@ export function App() {
       setPaymentsEnabled(session.paymentsEnabled);
       setCredential(session.credential);
       setAuthenticated(true);
-      if (page === "travellers" || page === "payment") {
-        if (session.credential !== "session") {
-          setProfile(null);
-          setTripData(null);
-          return;
-        }
-        setProfile(await getProfile());
-        setTripData(null);
-        return;
-      }
       const requestedTripId = new URLSearchParams(window.location.search).get("trip") ?? undefined;
       const [nextProfile, nextTrip] = await Promise.all([
         getProfile(),
@@ -134,6 +120,9 @@ export function App() {
   }
 
   useEffect(() => {
+    if (["/preferences", "/travellers", "/payment"].includes(window.location.pathname)) {
+      window.history.replaceState(null, "", `/settings${window.location.search}${window.location.hash}`);
+    }
     void load();
   }, []);
 
@@ -217,47 +206,7 @@ export function App() {
       />
     );
   }
-  if (page === "travellers") {
-    if (credential !== "session") {
-      return (
-        <CenteredState
-          title="Open travellers from Telegram"
-          detail="Use /profiles in Captain on Telegram for a secure session link."
-        />
-      );
-    }
-    return (
-      <Travellers
-        displayName={displayName}
-        paymentsEnabled={paymentsEnabled}
-        onBack={() => { window.location.href = accessHref("/trip", tripData?.trip?.id); }}
-      />
-    );
-  }
-  if (page === "payment") {
-    if (credential !== "session") {
-      return (
-        <CenteredState
-          title="Open payment from Telegram"
-          detail="Use /payment in Captain on Telegram for a secure session link."
-        />
-      );
-    }
-    if (!paymentsEnabled) {
-      return (
-        <CenteredState
-          title="Payments coming soon"
-          detail="Card setup opens once Captain’s payment provider approves card storage."
-        />
-      );
-    }
-    return (
-      <Payment
-        onBack={() => { window.location.href = "/travellers"; }}
-      />
-    );
-  }
-  if (page === "preferences" && profile) {
+  if (page === "settings" && profile) {
     return (
       <Preferences
         profile={profile}
@@ -265,6 +214,7 @@ export function App() {
         displayName={displayName}
         trackingError={error}
         sessionCredential={credential === "session"}
+        paymentsEnabled={paymentsEnabled}
         onSaved={setProfile}
         onTripChanged={load}
         onTripError={setError}
@@ -323,7 +273,7 @@ export function App() {
         </a>
         <div className="top-actions">
           <span className="name">{agentRunningLabel(tripData?.watch, trip)}</span>
-          <a className="quiet-link" href={accessHref("/preferences", trip?.id)}>Settings</a>
+          <a className="quiet-link" href={accessHref("/settings", trip?.id)}>Settings</a>
         </div>
       </header>
 

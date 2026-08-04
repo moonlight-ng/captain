@@ -20,11 +20,15 @@ import {
 export function Travellers({
   displayName,
   paymentsEnabled,
-  onBack
+  onBack,
+  onChanged,
+  embedded = false
 }: {
   displayName: string;
   paymentsEnabled: boolean;
-  onBack: () => void;
+  onBack?: () => void;
+  onChanged?: (passengers: Passenger[]) => void;
+  embedded?: boolean;
 }) {
   const [passengers, setPassengers] = useState<Passenger[]>([]);
   const [loading, setLoading] = useState(true);
@@ -37,7 +41,9 @@ export function Travellers({
     setLoading(true);
     setError("");
     try {
-      setPassengers(await listPassengers());
+      const next = await listPassengers();
+      setPassengers(next);
+      onChanged?.(next);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not load travellers.");
     } finally {
@@ -55,20 +61,10 @@ export function Travellers({
     familyName: nameParts.slice(1).join(" ")
   };
 
-  return (
-    <main className="shell settings-shell">
-      <header className="topbar">
-        <a className="brand" href="/travellers" aria-label="Captain travellers">
-          <span className="brand-mark">C</span>
-          <span>Captain</span>
-        </a>
-        <div className="top-actions">
-          <button type="button" className="quiet-link" onClick={onBack}>Back</button>
-        </div>
-      </header>
-
-      <section className="settings-card">
-        <p className="eyebrow">Travellers</p>
+  const content = (
+    <>
+      <section className="settings-card" id="traveller-profiles">
+        <p className="eyebrow">Traveller profiles</p>
         <h1>Who’s flying</h1>
         <p>Names are saved securely for booking. Date of birth and gender are optional until you book.</p>
       </section>
@@ -100,10 +96,8 @@ export function Travellers({
                   setBusy(true);
                   setFormError("");
                   try {
-                    const next = await updatePassenger(passenger.id, toPassengerPayload(values));
-                    setPassengers((current) => current.map((row) => (
-                      row.id === next.id ? next : row
-                    )));
+                    await updatePassenger(passenger.id, toPassengerPayload(values));
+                    await reload();
                     setEditingId(null);
                   } catch (cause) {
                     setFormError(cause instanceof ApiError ? cause.message : "Could not save.");
@@ -206,11 +200,28 @@ export function Travellers({
         </div>
       </details>
 
-      {paymentsEnabled && (
+      {paymentsEnabled && !embedded && (
         <p className="settings-card">
-          Next, add a card on the <a className="quiet-link" href="/payment">payment page</a>.
+          Next, add a card in <a className="quiet-link" href="/settings#payment">settings</a>.
         </p>
       )}
+    </>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <main className="shell settings-shell">
+      <header className="topbar">
+        <a className="brand" href="/settings" aria-label="Captain settings">
+          <span className="brand-mark">C</span>
+          <span>Captain</span>
+        </a>
+        <div className="top-actions">
+          {onBack && <button type="button" className="quiet-link" onClick={onBack}>Back</button>}
+        </div>
+      </header>
+      {content}
     </main>
   );
 }
