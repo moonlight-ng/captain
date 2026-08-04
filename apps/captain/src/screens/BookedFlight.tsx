@@ -8,6 +8,7 @@ import {
   dateLabel,
   formatMoney,
   outboundSegments,
+  relativeTime,
   timestampLabel
 } from "../format";
 import { DEFAULT_MOCK_TRAVELLER, type MockBooking, type MockBookingTraveller } from "../mock-booking";
@@ -132,7 +133,7 @@ export function BookedFlight({
       <section className="booking-section">
         <div className="booking-section-heading">
           <div><p className="eyebrow">Flight activity</p></div>
-          <span>Live preview</span>
+          <span>Updated {relativeTime(booking.bookedAt)}</span>
         </div>
         <MockFlightActivity booking={booking} segments={segments} />
       </section>
@@ -330,40 +331,18 @@ function MockFlightActivity({ booking, segments }: { booking: MockBooking; segme
     ? new Date(Date.parse(first.departure) - 24 * 60 * 60 * 1000).toISOString()
     : null;
   const items = [
-    { kind: "step" as const, title: "Booking created", detail: timestampLabel(booking.bookedAt), complete: true },
-    {
-      kind: "step" as const,
-      title: "Online check-in opens",
-      detail: checkInAt ? timestampLabel(checkInAt) : "24 hours before departure",
-      complete: false
-    },
-    { kind: "more" as const },
-    {
-      kind: "step" as const,
-      title: "Departure",
-      detail: first ? `${timestampLabel(first.departure)} · ${first.origin}` : "Awaiting schedule",
-      complete: false
-    },
-    {
-      kind: "step" as const,
-      title: "Arrival",
-      detail: last ? `${timestampLabel(last.arrival)} · ${last.destination}` : "Awaiting schedule",
-      complete: false
-    }
+    { title: "Booking created", detail: timestampLabel(booking.bookedAt), complete: true },
+    { title: "Online check-in opens", detail: checkInAt ? timestampLabel(checkInAt) : "24 hours before departure", complete: false },
+    { title: "Departure", detail: first ? `${timestampLabel(first.departure)} · ${first.origin}` : "Awaiting schedule", complete: false },
+    { title: "Arrival", detail: last ? `${timestampLabel(last.arrival)} · ${last.destination}` : "Awaiting schedule", complete: false }
   ];
   return (
     <ol className="mock-activity-list">
       {items.map((item) => (
-        item.kind === "more" ? (
-          <li className="mock-activity-more" aria-hidden="true" key="more">
-            <i /><i /><i />
-          </li>
-        ) : (
-          <li className={item.complete ? "complete" : ""} key={item.title}>
-            <i aria-hidden="true" />
-            <span><strong>{item.title}</strong><small>{item.detail}</small></span>
-          </li>
-        )
+        <li className={item.complete ? "complete" : ""} key={item.title}>
+          <i aria-hidden="true" />
+          <span><strong>{item.title}</strong><small>{item.detail}</small></span>
+        </li>
       ))}
     </ol>
   );
