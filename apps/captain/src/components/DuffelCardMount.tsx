@@ -155,10 +155,10 @@ export default function DuffelCardMount({
             default: {
               color: "var(--ink)",
               "border-radius": "var(--radius-card, 11px)",
-              "border-color": "rgba(167, 196, 154, .34)"
+              "border-color": "rgba(255, 255, 255, .22)"
             }
           },
-          sectionTitle: { color: "var(--green, #a7c49a)" }
+          sectionTitle: { color: "var(--ink)" }
         }}
         onSaveCardSuccess={(data) => {
           const card: PendingCard = {

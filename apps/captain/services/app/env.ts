@@ -33,7 +33,8 @@ export function loadEnv(): CaptainEnv {
       process.env.CAPTAIN_PUBLIC_BETA_ENABLED,
       mode !== "production"
     ),
-    paymentsEnabled: booleanValue(process.env.CAPTAIN_PAYMENTS_ENABLED, false),
+    // Prototype invariant: no environment override may enable real card collection.
+    paymentsEnabled: false,
     duffelAccessToken: optional("DUFFEL_ACCESS_TOKEN"),
     duffelBaseUrl: (process.env.DUFFEL_BASE_URL?.trim() || "https://api.duffel.com").replace(/\/$/u, ""),
     duffelCardsBaseUrl: (
@@ -48,14 +49,6 @@ export function loadEnv(): CaptainEnv {
       ["CAPTAIN_PII_ENCRYPTION_KEY", env.piiEncryptionKey]
     ] as const) {
       if (!value) throw new Error(`Missing required production environment variable: ${name}`);
-    }
-  }
-  if (env.paymentsEnabled) {
-    if (!env.databaseUrl) {
-      throw new Error("DATABASE_URL is required when CAPTAIN_PAYMENTS_ENABLED is true");
-    }
-    if (!env.duffelAccessToken) {
-      throw new Error("DUFFEL_ACCESS_TOKEN is required when CAPTAIN_PAYMENTS_ENABLED is true");
     }
   }
   return env;

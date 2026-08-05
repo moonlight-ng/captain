@@ -8,7 +8,7 @@ import {
   writeMockBooking,
   type BookingStorage
 } from "../src/mock-booking.js";
-import { MOCK_PAYMENT_METHOD } from "../src/mock-payment.js";
+import { TEST_PAYMENT_METHOD } from "../src/mock-payment.js";
 
 describe("mock booking preview", () => {
   it("creates and persists only local demo state", () => {
@@ -23,7 +23,13 @@ describe("mock booking preview", () => {
       status: "confirmed",
       seat: null,
       checkedBags: 0,
-      bookedAt: "2026-08-04T08:00:00.000Z"
+      bookedAt: "2026-08-04T08:00:00.000Z",
+      traveller: {
+        givenName: "Sample",
+        familyName: "Traveller",
+        email: "sample@example.com",
+        phoneNumber: ""
+      }
     });
     expect(booking.reference).toMatch(/^CAP-[A-Z0-9]+-[A-Z0-9]+$/u);
 
@@ -39,16 +45,33 @@ describe("mock booking preview", () => {
     expect(readMockBooking("trip-a", storage)).toBeNull();
   });
 
-  it("uses a display-only mock card rather than payment credentials", () => {
-    expect(MOCK_PAYMENT_METHOD).toEqual({
-      id: "mock-card",
+  it("backfills traveller details for older stored bookings", () => {
+    const storage = memoryStorage();
+    const booking = createMockBooking(
+      "11111111-1111-4111-8111-111111111111",
+      offer(),
+      new Date("2026-08-04T08:00:00Z")
+    );
+    const { traveller: _traveller, ...legacy } = booking;
+    storage.setItem(`captain:mock-booking:${booking.tripId}`, JSON.stringify(legacy));
+    expect(readMockBooking(booking.tripId, storage)?.traveller).toEqual({
+      givenName: "Sample",
+      familyName: "Traveller",
+      email: "sample@example.com",
+      phoneNumber: ""
+    });
+  });
+
+  it("uses the permanent display-only test card rather than payment credentials", () => {
+    expect(TEST_PAYMENT_METHOD).toEqual({
+      id: "test-card",
       brand: "visa",
       last4: "4242",
       cardholderName: "Sample traveller",
       isDefault: true
     });
-    expect(Object.keys(MOCK_PAYMENT_METHOD)).not.toContain("cardNumber");
-    expect(Object.keys(MOCK_PAYMENT_METHOD)).not.toContain("cvc");
+    expect(Object.keys(TEST_PAYMENT_METHOD)).not.toContain("cardNumber");
+    expect(Object.keys(TEST_PAYMENT_METHOD)).not.toContain("cvc");
   });
 });
 

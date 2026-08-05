@@ -31,9 +31,6 @@ importers:
       '@duffel/components':
         specifier: ^3.17.0
         version: 3.17.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@fontsource/libre-franklin':
-        specifier: ^5.2.8
-        version: 5.3.0
       '@workflow/world-postgres':
         specifier: 5.0.0-beta.24
         version: 5.0.0-beta.24(@types/pg@8.20.0)(postgres@3.4.7)(typescript@6.0.3)
@@ -456,9 +453,6 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
-
-  '@fontsource/libre-franklin@5.3.0':
-    resolution: {integrity: sha512-owd+HDvD4hnGHG1jO3rHtg0BiNT0DJbZMaSqJ7g4r0646G5Q91MjTFWxZbpwg8njLu4BSH3EBqwkVSMLud6brg==}
 
   '@graphile/logger@0.2.0':
     resolution: {integrity: sha512-jjcWBokl9eb1gVJ85QmoaQ73CQ52xAaOCF29ukRbYNl6lY+ts0ErTaDYOBlejcbUs2OpaiqYLO5uDhyLFzWw4w==}
@@ -2186,8 +2180,6 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.1':
     optional: true
-
-  '@fontsource/libre-franklin@5.3.0': {}
 
   '@graphile/logger@0.2.0': {}
 

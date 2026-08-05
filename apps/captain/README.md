@@ -1,8 +1,8 @@
 # Captain
 
 Captain is a Telegram-first flight tracker for one traveller profile and up to
-three active trips. It researches and tracks fares; it does not place orders.
-Traveller names and cards are collected only on Captain’s secure web pages.
+three active trips. It researches and tracks fares; it does not place orders or
+process payments. Traveller details are collected only on Captain’s secure web pages.
 
 ## Product contract
 
@@ -14,18 +14,18 @@ Traveller names and cards are collected only on Captain’s secure web pages.
   currency stays fixed; Duffel and Flysoar USD/GBP results are normalized into it.
 - The dashboard has **Flights**, **Airlines**, and **Browse** views. It only
   displays verified provider offers and never describes the set as exhaustive.
-- `/profile` is the single web destination for traveller details, saved cards,
-  flight preferences, notifications, and trip controls. `/preferences`,
-  `/settings`, `/travellers`, and `/payment` are compatibility aliases. Passenger, payment,
+- `/profile` is the single web destination for traveller details, the fixed
+  prototype test card, flight preferences, notifications, and trip controls. `/preferences`,
+  `/settings`, `/travellers`, and `/payment` are compatibility aliases. Passenger,
   trip-traveller assignment, and account deletion mutations require a revocable
-  HttpOnly session cookie (via single-use login tokens). Production enables the
-  card vault with `CAPTAIN_PAYMENTS_ENABLED=true`; it also requires `DATABASE_URL`
-  and `DUFFEL_ACCESS_TOKEN` (memory mode refuses to start).
+  HttpOnly session cookie (via single-use login tokens). The test card is a
+  display-only fixture; Captain ignores payment feature flags and does not
+  expose card capture.
 - Booking and post-booking management are currently a labelled client-side
   prototype. The Book, seat, baggage, and cancellation actions never call an
   airline or payment API. Mock booking state stays in the browser and can be
   reset from the flight activity screen.
-- Archived trips and their evidence are retained for 90 days. `/delete_account`
+- Archived trips and their evidence are retained for 90 days. `/delete`
   queues remote Duffel card deletions, then removes the traveller, trip,
   sessions, passengers, payment methods, and retained evidence.
 

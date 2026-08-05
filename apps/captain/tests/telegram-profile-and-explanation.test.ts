@@ -4,8 +4,10 @@ import type { OfferSnapshot } from "@agents/flight-domain";
 import type { RecommendationSnapshot } from "@agents/flight-store";
 
 import {
+  CAPTAIN_DELETE_COMMAND,
+  CAPTAIN_DELETE_CONFIRMATION,
   CAPTAIN_NEW_USER_GREETING,
-  CAPTAIN_PAYMENT_UNAVAILABLE,
+  CAPTAIN_PAYMENT_INTRO,
   CAPTAIN_PREFERENCES_INTRO,
   CAPTAIN_PROFILE_COMMAND,
   CAPTAIN_SIGNOUT_CONFIRMATION,
@@ -28,10 +30,10 @@ describe("Telegram profile onboarding", () => {
 
   it("exports fixed handoff copy for travellers, payment, and sign-out", () => {
     expect(CAPTAIN_TRAVELLER_SETUP_PROMPT).toBe(
-      "Save your traveller details and card so Captain is ready when booking opens."
+      "Save your traveller details so Captain is ready for the booking prototype."
     );
-    expect(CAPTAIN_PAYMENT_UNAVAILABLE).toBe(
-      "Card setup isn’t available yet. Captain will let you know when it opens."
+    expect(CAPTAIN_PAYMENT_INTRO).toBe(
+      "Captain uses one fixed test card for the prototype. No payment will be processed."
     );
     expect(CAPTAIN_SIGNOUT_CONFIRMATION).toBe(
       "Signed out of Captain on the web. Open a fresh link from Telegram to sign in again."
@@ -40,6 +42,11 @@ describe("Telegram profile onboarding", () => {
 
   it("uses profile as the single user-facing account command", () => {
     expect(CAPTAIN_PROFILE_COMMAND).toBe("/profile");
+  });
+
+  it("uses the short delete command and confirms full data removal", () => {
+    expect(CAPTAIN_DELETE_COMMAND).toBe("/delete");
+    expect(CAPTAIN_DELETE_CONFIRMATION).toBe("All your Captain data has been deleted.");
   });
 
   it("parses currency, ranking, and preferred/avoided airlines deterministically", () => {

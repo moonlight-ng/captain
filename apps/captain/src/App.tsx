@@ -8,8 +8,6 @@ import {
   getTrip,
   homeHref,
   initializeAccessToken,
-  listPaymentMethods,
-  profileHref,
   setTripFlightSelection,
   tripAction,
   tripHref,
@@ -20,7 +18,6 @@ import {
   sortAndFilterOffers,
   type BrowsePreferences,
   type Passenger,
-  type PaymentMethod,
   type RankingMode,
   type Segment,
   type TravellerProfile,
@@ -29,7 +26,7 @@ import {
   type Watch
 } from "./domain";
 import { airlineGroups } from "./airline-groups";
-import { MOCK_PAYMENT_METHOD } from "./mock-payment";
+import { TEST_PAYMENT_METHOD } from "./mock-payment";
 import {
   activityLabel,
   airlineName,
@@ -127,7 +124,6 @@ export function App() {
   const [profile, setProfile] = useState<TravellerProfile | null>(null);
   const [tripData, setTripData] = useState<TripPayload | null>(null);
   const [displayName, setDisplayName] = useState("");
-  const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [credential, setCredential] = useState<"session" | "legacy-bearer" | null>(null);
   const [loading, setLoading] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
@@ -150,7 +146,6 @@ export function App() {
       initializeAccessToken();
       const session = await getSession();
       setDisplayName(session.displayName);
-      setPaymentsEnabled(session.paymentsEnabled);
       setCredential(session.credential);
       setAuthenticated(true);
       const requestedTripId = currentTripId();
@@ -284,7 +279,6 @@ export function App() {
         profile={profile}
         displayName={displayName}
         sessionCredential={credential === "session"}
-        paymentsEnabled={paymentsEnabled}
         onSaved={setProfile}
         onBack={() => { window.location.href = homeHref(); }}
       />
@@ -439,7 +433,6 @@ export function App() {
             activity={tripData?.activity ?? []}
             travellers={tripData?.travellers ?? []}
             tripId={trip.id}
-            paymentsEnabled={paymentsEnabled}
             sessionCredential={credential === "session"}
             watching={focusWatching}
             refreshBusy={searchBusy}
@@ -720,27 +713,22 @@ function BookingCta({
   offer,
   ready,
   traveller,
-  payment,
   tripId,
-  paymentsEnabled,
   onBook
 }: {
   offer: VerifiedOffer;
   ready: boolean;
   traveller: Passenger | null;
-  payment: PaymentMethod | null;
   tripId: string;
-  paymentsEnabled: boolean;
   onBook: (offer: VerifiedOffer) => void;
 }) {
-  if (ready && traveller && payment) {
+  if (ready && traveller) {
     return (
       <div className="mock-booking-cta is-ready">
         <div className="booking-cta-traveller">
           <strong>{passengerDisplayName(traveller)}</strong>
           <p className="booking-cta-payment">
-            {formatCardBrand(payment.brand)} ···· {payment.last4}
-            {!paymentsEnabled || payment.id === MOCK_PAYMENT_METHOD.id ? " · Mock" : ""}
+            {formatCardBrand(TEST_PAYMENT_METHOD.brand)} ···· {TEST_PAYMENT_METHOD.last4} · Test card
           </p>
         </div>
         <button type="button" className="primary-action" onClick={() => onBook(offer)}>
@@ -750,19 +738,15 @@ function BookingCta({
     );
   }
 
-  const needsTraveller = !traveller?.readyForBooking || !traveller?.readyForInternationalTravel;
-  const needsPayment = paymentsEnabled && payment === null;
-  const setupHref = needsPayment && !needsTraveller
-    ? profileHref("payment")
-    : traveller
-      ? travellerProfileHref(tripId, traveller.id)
-      : tripHref(tripId, "settings");
+  const setupHref = traveller
+    ? travellerProfileHref(tripId, traveller.id)
+    : tripHref(tripId, "settings");
 
   return (
     <div className="mock-booking-cta is-setup">
       <div>
         <strong>Complete profile</strong>
-        <p>{needsTraveller ? "Add traveller details" : "Add a card"}</p>
+        <p>Add traveller details</p>
       </div>
       <a className="primary-action" href={setupHref}>Complete settings</a>
     </div>
@@ -788,7 +772,6 @@ function WatchlistDetail({
   activity,
   travellers,
   tripId,
-  paymentsEnabled,
   sessionCredential,
   watching,
   refreshBusy,
@@ -807,7 +790,6 @@ function WatchlistDetail({
   activity: TripPayload["activity"];
   travellers: Passenger[];
   tripId: string;
-  paymentsEnabled: boolean;
   sessionCredential: boolean;
   watching: boolean;
   refreshBusy: boolean;
@@ -820,23 +802,6 @@ function WatchlistDetail({
   onError: (message: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const [payment, setPayment] = useState<PaymentMethod | null>(null);
-  const [paymentLoaded, setPaymentLoaded] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void listPaymentMethods()
-      .then((methods) => {
-        if (!cancelled) setPayment(methods.find((method) => method.isDefault) ?? methods[0] ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setPayment(null);
-      })
-      .finally(() => {
-        if (!cancelled) setPaymentLoaded(true);
-      });
-    return () => { cancelled = true; };
-  }, []);
 
   if (!offer) {
     return (
@@ -854,13 +819,10 @@ function WatchlistDetail({
   const outbound = outboundSegments(offer.snapshot.segments ?? []);
   const comparison = peerPriceComparison(offer, offers);
   const traveller = travellers[0] ?? null;
-  const paymentReady = !paymentsEnabled || (paymentLoaded && payment !== null);
   const bookingReady = Boolean(
     traveller?.readyForBooking
     && traveller.readyForInternationalTravel
-    && paymentReady
   );
-  const displayPayment = payment ?? (!paymentsEnabled ? MOCK_PAYMENT_METHOD : null);
 
   async function toggleWatchlist() {
     setBusy(true);
@@ -917,17 +879,13 @@ function WatchlistDetail({
         </div>
       </div>
 
-      {(!paymentsEnabled || paymentLoaded) && (
-        <BookingCta
-          offer={offer}
-          ready={bookingReady}
-          traveller={traveller}
-          payment={displayPayment}
-          tripId={tripId}
-          paymentsEnabled={paymentsEnabled}
-          onBook={onBook}
-        />
-      )}
+      <BookingCta
+        offer={offer}
+        ready={bookingReady}
+        traveller={traveller}
+        tripId={tripId}
+        onBook={onBook}
+      />
 
       <TripTravellerPicker
         tripId={tripId}

@@ -51,10 +51,7 @@ export function TripTravellerPicker({
   return (
     <section className="trip-traveller-picker">
       <div className="trip-traveller-heading">
-        <span>
-          <p className="eyebrow">Traveller</p>
-          <h2>Who is flying?</h2>
-        </span>
+        <p className="eyebrow">Traveller</p>
         <a className="quiet-link" href={travellerProfileHref(tripId)}>Manage</a>
       </div>
 

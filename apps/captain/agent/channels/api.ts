@@ -647,7 +647,6 @@ async function deleteAccount(
   userId: string
 ): Promise<Response> {
   const services = await getCaptainServices();
-  await services.auth.signOut(userId);
   await services.platformStore.deleteUser(userId);
   return Response.json({ deleted: true }, { headers: noStore() });
 }

@@ -69,11 +69,11 @@ export const CAPTAIN_NEW_USER_GREETING =
 export const CAPTAIN_PREFERENCES_INTRO = "Let's start with your preferences";
 export const CAPTAIN_PROFILE_COMMAND = "/profile";
 export const CAPTAIN_TRAVELLER_SETUP_PROMPT =
-  "Save your traveller details and card so Captain is ready when booking opens.";
-export const CAPTAIN_PAYMENT_UNAVAILABLE =
-  "Card setup isn’t available yet. Captain will let you know when it opens.";
+  "Save your traveller details so Captain is ready for the booking prototype.";
 export const CAPTAIN_PAYMENT_INTRO =
-  "Add or replace your saved card in your Captain profile.";
+  "Captain uses one fixed test card for the prototype. No payment will be processed.";
+export const CAPTAIN_DELETE_COMMAND = "/delete";
+export const CAPTAIN_DELETE_CONFIRMATION = "All your Captain data has been deleted.";
 export const CAPTAIN_SIGNOUT_CONFIRMATION =
   "Signed out of Captain on the web. Open a fresh link from Telegram to sign in again.";
 
@@ -161,7 +161,7 @@ export default telegramChannel({
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       await postWithLink(
         ctx,
-        "Manage your traveller details, saved card, flight preferences, and notifications in one place.",
+        "Manage your traveller details, prototype test card, flight preferences, and notifications in one place.",
         "Open profile",
         await services.auth.createLoginLink(user.id, "/profile")
       );
@@ -180,10 +180,6 @@ export default telegramChannel({
     }
     if (content === "/payment") {
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
-      if (!services.env.paymentsEnabled) {
-        await ctx.telegram.post(CAPTAIN_PAYMENT_UNAVAILABLE);
-        return null;
-      }
       await postWithLink(
         ctx,
         CAPTAIN_PAYMENT_INTRO,
@@ -197,10 +193,9 @@ export default telegramChannel({
       await ctx.telegram.post(CAPTAIN_SIGNOUT_CONFIRMATION);
       return null;
     }
-    if (content === "/delete_account") {
-      await services.auth.signOut(user.id);
+    if (content === CAPTAIN_DELETE_COMMAND) {
       await services.platformStore.deleteUser(user.id);
-      await ctx.telegram.post("Your Captain account, trip, sessions, and retained fare evidence have been deleted.");
+      await ctx.telegram.post(CAPTAIN_DELETE_CONFIRMATION);
       return null;
     }
     if (!content) {

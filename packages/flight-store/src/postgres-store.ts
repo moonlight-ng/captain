@@ -226,6 +226,9 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       for (const method of methods) {
         await enqueueCardDeletion(tx, method, now);
       }
+      // Audit rows use ON DELETE SET NULL for general retention. Account deletion
+      // is stricter: remove any payload that was associated with this user.
+      await tx`delete from captain.audit_events where user_id = ${userId}`;
       await tx`delete from captain.users where id = ${userId}`;
     });
   }

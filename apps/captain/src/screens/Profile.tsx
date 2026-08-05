@@ -10,22 +10,20 @@ const tabs: ProfileTab[] = ["preferences", "travellers", "payment"];
 const tabLabels: Record<ProfileTab, string> = {
   preferences: "Preferences",
   travellers: "Travellers",
-  payment: "Payment"
+  payment: "Card"
 };
 
 export function Profile({
   profile,
   displayName,
   sessionCredential,
-  paymentsEnabled,
   onSaved,
   onBack
 }: {
   profile: TravellerProfile;
   displayName: string;
-  /** Traveller and card records need a revocable cookie session, not a legacy bearer. */
+  /** Traveller records need a revocable cookie session, not a legacy bearer. */
   sessionCredential: boolean;
-  paymentsEnabled: boolean;
   onSaved: (profile: TravellerProfile) => void;
   onBack: () => void;
 }) {
@@ -60,20 +58,15 @@ export function Profile({
 
       {tab === "preferences" ? (
         <AccountPreferences profile={profile} onSaved={onSaved} />
+      ) : tab === "payment" ? (
+        <Payment />
       ) : !sessionCredential ? (
         <section className="settings-card">
           <h1>Secure setup</h1>
           <p>Open /profile from Captain on Telegram.</p>
         </section>
-      ) : tab === "travellers" ? (
-        <Travellers displayName={displayName} />
-      ) : paymentsEnabled ? (
-        <Payment />
       ) : (
-        <section className="settings-card">
-          <h1>Not available yet</h1>
-          <p>Captain will let you know when payment is ready.</p>
-        </section>
+        <Travellers displayName={displayName} />
       )}
     </main>
   );
