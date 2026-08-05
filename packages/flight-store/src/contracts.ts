@@ -194,6 +194,7 @@ export interface CaptainPlatformStore {
   updateUserTimezone(userId: string, timeZone: string, now: Date): Promise<CaptainUser>;
   countUsers(): Promise<number>;
   deleteUser(userId: string): Promise<void>;
+  clearTravellerData(userId: string, now: Date): Promise<void>;
   getProfile(userId: string): Promise<TravellerProfile | null>;
   ensureProfile(userId: string, now: Date): Promise<TravellerProfile>;
   updateProfile(

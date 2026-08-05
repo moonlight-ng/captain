@@ -8,13 +8,15 @@ export function TripTravellerPicker({
   assigned,
   sessionCredential,
   onChanged,
-  onError
+  onError,
+  onBook
 }: {
   tripId: string;
   assigned: Passenger[];
   sessionCredential: boolean;
   onChanged: (passengers: Passenger[]) => void;
   onError: (message: string) => void;
+  onBook?: () => void;
 }) {
   const [passengers, setPassengers] = useState<Passenger[]>([]);
   const [loading, setLoading] = useState(sessionCredential);
@@ -33,7 +35,13 @@ export function TripTravellerPicker({
     })();
   }, [sessionCredential]);
 
-  const selectedId = assigned[0]?.id ?? null;
+  const selected = assigned[0] ?? null;
+  const selectedId = selected?.id ?? null;
+  const canBook = Boolean(
+    onBook
+    && selected?.readyForBooking
+    && selected.readyForInternationalTravel
+  );
 
   async function choose(passenger: Passenger) {
     if (passenger.id === selectedId) return;
@@ -60,27 +68,27 @@ export function TripTravellerPicker({
       ) : loading ? (
         <p className="set-note">Loading travellers…</p>
       ) : passengers.length === 0 ? (
-        <a className="traveller-picker-empty" href={travellerProfileHref(tripId)}>
-          <span><strong>Add your traveller details</strong><small>You’ll need them before booking.</small></span>
+        <a className="traveller-picker-empty" href={travellerProfileHref(tripId, "new")}>
+          <span><strong>Add a traveller</strong><small>Needed before booking.</small></span>
           <span aria-hidden="true">›</span>
         </a>
       ) : (
         <div className="traveller-picker-list">
           {passengers.map((passenger) => {
-            const selected = passenger.id === selectedId;
+            const isSelected = passenger.id === selectedId;
             return (
               <button
                 type="button"
                 key={passenger.id}
-                className={selected ? "selected" : ""}
-                aria-pressed={selected}
+                className={isSelected ? "selected" : ""}
+                aria-pressed={isSelected}
                 disabled={busyId !== null}
                 onClick={() => void choose(passenger)}
               >
                 <span className="traveller-picker-radio" aria-hidden="true" />
                 <span className="traveller-picker-person">
                   <strong>{fullName(passenger)}</strong>
-                  <small>{passenger.bornOn ? `Born ${formatDate(passenger.bornOn)}` : "Date of birth missing"}</small>
+                  <small>{travellerMeta(passenger)}</small>
                 </span>
                 <span className={`readiness-badge ${passenger.readyForBooking ? "ready" : "incomplete"}`}>
                   {passenger.readyForInternationalTravel
@@ -90,6 +98,14 @@ export function TripTravellerPicker({
               </button>
             );
           })}
+        </div>
+      )}
+
+      {onBook && (
+        <div className="traveller-book-row">
+          <button type="button" className="primary-action" disabled={!canBook} onClick={onBook}>
+            Book flight
+          </button>
         </div>
       )}
     </section>
@@ -105,6 +121,15 @@ export function travellerProfileHref(tripId: string, passengerId?: string): stri
 
 function fullName(passenger: Passenger): string {
   return [passenger.givenName, passenger.middleName, passenger.familyName].filter(Boolean).join(" ");
+}
+
+function travellerMeta(passenger: Passenger): string {
+  const country = passenger.nationality || passenger.countryOfResidence;
+  const dob = passenger.bornOn ? formatDate(passenger.bornOn) : null;
+  if (country && dob) return `${country} · ${dob}`;
+  if (country) return country;
+  if (dob) return dob;
+  return "Details missing";
 }
 
 function formatDate(value: string): string {

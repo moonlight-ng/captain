@@ -254,6 +254,29 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     }
   }
 
+  async clearTravellerData(userId: string, now: Date): Promise<void> {
+    const passengerIds = new Set<string>();
+    for (const [id, passenger] of this.#passengers) {
+      if (passenger.userId === userId) {
+        this.#passengers.delete(id);
+        passengerIds.add(id);
+      }
+    }
+    for (const [tripId, assignments] of this.#tripPassengers) {
+      const next = assignments.filter((assignment) => !passengerIds.has(assignment.passengerId));
+      if (next.length !== assignments.length) this.#tripPassengers.set(tripId, next);
+    }
+    const current = await this.ensureProfile(userId, now);
+    this.#profiles.set(userId, {
+      ...current,
+      ...DEFAULT_PROFILE,
+      preferredAirlineCodes: [],
+      excludedAirlineCodes: [],
+      travellerSetupPromptedAt: null,
+      updatedAt: now.toISOString()
+    });
+  }
+
   async getProfile(userId: string): Promise<TravellerProfile | null> {
     return clone(this.#profiles.get(userId) ?? null);
   }

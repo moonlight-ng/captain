@@ -26,7 +26,6 @@ import {
   type Watch
 } from "./domain";
 import { airlineGroups } from "./airline-groups";
-import { TEST_PAYMENT_METHOD } from "./mock-payment";
 import {
   activityLabel,
   airlineName,
@@ -56,7 +55,7 @@ import {
 } from "./format";
 import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./components/icons";
 import { FilterSheet } from "./components/FilterSheet";
-import { TripTravellerPicker, travellerProfileHref } from "./components/TripTravellerPicker";
+import { TripTravellerPicker } from "./components/TripTravellerPicker";
 import {
   createMockBooking,
   readMockBooking,
@@ -90,7 +89,7 @@ const profileAliasTabs: Record<string, ProfileTab | ""> = {
 
 function currentPage(): Page {
   if (window.location.pathname in profileAliasTabs) return "profile";
-  if (window.location.pathname === "/") return "home";
+  if (window.location.pathname === "/trips") return "home";
   return /^\/trip\/[^/]+\/settings\/?$/u.test(window.location.pathname)
     ? "trip-settings"
     : "trip";
@@ -709,61 +708,6 @@ function RecommendationCard({
   );
 }
 
-function BookingCta({
-  offer,
-  ready,
-  traveller,
-  tripId,
-  onBook
-}: {
-  offer: VerifiedOffer;
-  ready: boolean;
-  traveller: Passenger | null;
-  tripId: string;
-  onBook: (offer: VerifiedOffer) => void;
-}) {
-  if (ready && traveller) {
-    return (
-      <div className="mock-booking-cta is-ready">
-        <div className="booking-cta-traveller">
-          <strong>{passengerDisplayName(traveller)}</strong>
-          <p className="booking-cta-payment">
-            {formatCardBrand(TEST_PAYMENT_METHOD.brand)} ···· {TEST_PAYMENT_METHOD.last4} · Test card
-          </p>
-        </div>
-        <button type="button" className="primary-action" onClick={() => onBook(offer)}>
-          Book flight
-        </button>
-      </div>
-    );
-  }
-
-  const setupHref = traveller
-    ? travellerProfileHref(tripId, traveller.id)
-    : tripHref(tripId, "settings");
-
-  return (
-    <div className="mock-booking-cta is-setup">
-      <div>
-        <strong>Complete profile</strong>
-        <p>Add traveller details</p>
-      </div>
-      <a className="primary-action" href={setupHref}>Complete settings</a>
-    </div>
-  );
-}
-
-function passengerDisplayName(passenger: Passenger): string {
-  const title = passenger.title
-    ? `${passenger.title.charAt(0).toUpperCase()}${passenger.title.slice(1)}`
-    : "";
-  return [title, passenger.givenName, passenger.familyName].filter(Boolean).join(" ");
-}
-
-function formatCardBrand(brand: string): string {
-  return brand.replace(/_/gu, " ").replace(/\b\w/gu, (char) => char.toUpperCase());
-}
-
 function WatchlistDetail({
   offer,
   mode,
@@ -818,11 +762,6 @@ function WatchlistDetail({
 
   const outbound = outboundSegments(offer.snapshot.segments ?? []);
   const comparison = peerPriceComparison(offer, offers);
-  const traveller = travellers[0] ?? null;
-  const bookingReady = Boolean(
-    traveller?.readyForBooking
-    && traveller.readyForInternationalTravel
-  );
 
   async function toggleWatchlist() {
     setBusy(true);
@@ -879,20 +818,13 @@ function WatchlistDetail({
         </div>
       </div>
 
-      <BookingCta
-        offer={offer}
-        ready={bookingReady}
-        traveller={traveller}
-        tripId={tripId}
-        onBook={onBook}
-      />
-
       <TripTravellerPicker
         tripId={tripId}
         assigned={travellers}
         sessionCredential={sessionCredential}
         onChanged={onTravellersChange}
         onError={onError}
+        onBook={() => onBook(offer)}
       />
 
       {outbound.length > 0 && (
@@ -929,7 +861,7 @@ function WatchlistDetail({
                   <td>
                     <a href={item.url} target="_blank" rel="noreferrer">{item.domain}</a>
                   </td>
-                  <td>{item.title}</td>
+                  <td className="sources-title" title={item.title}>{item.title}</td>
                 </tr>
               ))}
             </tbody>

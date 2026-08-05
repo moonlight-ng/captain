@@ -400,55 +400,6 @@ a.recommendation-card:active { transform: scale(.99); }
   font-size: var(--type-body);
   font-weight: var(--weight-medium);
 }
-.mock-booking-cta {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 16px;
-  align-items: center;
-  padding: 16px;
-  border: 1px solid rgba(255, 255, 255, .12);
-  border-radius: var(--radius-card);
-  background: rgba(255, 255, 255, .05);
-}
-.mock-booking-cta > div,
-.mock-booking-cta .booking-cta-traveller {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-}
-.mock-booking-cta strong { font-size: var(--type-body); }
-.mock-booking-cta p {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--type-body);
-  line-height: 1.45;
-}
-.mock-booking-cta .primary-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  white-space: nowrap;
-  text-decoration: none;
-}
-.mock-booking-cta.is-setup {
-  border-color: rgba(255, 255, 255, .14);
-  background: #111111;
-}
-.mock-booking-cta.is-ready {
-  border-color: transparent;
-  background: #ffffff;
-  color: #000000;
-}
-.mock-booking-cta.is-ready p,
-.mock-booking-cta.is-ready .booking-cta-payment {
-  color: rgba(0, 0, 0, .55);
-}
-.mock-booking-cta.is-ready .primary-action {
-  background: #000000;
-  color: #ffffff;
-}
 .trip-traveller-picker {
   margin-bottom: 14px;
   padding: 16px;
@@ -466,8 +417,8 @@ a.recommendation-card:active { transform: scale(.99); }
   min-height: 54px;
   grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  padding: 10px 11px;
+  gap: 14px;
+  padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 11px;
   background: rgba(255, 255, 255, .025);
@@ -479,13 +430,23 @@ a.recommendation-card:active { transform: scale(.99); }
 .traveller-picker-radio { width: 15px; height: 15px; border: 1.5px solid var(--line-strong); border-radius: 50%; }
 .traveller-picker-list button.selected .traveller-picker-radio { border: 4px solid var(--accent); }
 .traveller-picker-person,
-.traveller-picker-empty > span:first-child { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.traveller-picker-empty > span:first-child { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
 .traveller-picker-person strong,
 .traveller-picker-empty strong { overflow: hidden; font-size: var(--type-body); text-overflow: ellipsis; white-space: nowrap; }
 .traveller-picker-person small,
-.traveller-picker-empty small { color: var(--quiet); font-size: var(--type-caption); }
+.traveller-picker-empty small { color: var(--quiet); font-size: var(--type-body); }
 .traveller-picker-empty { grid-template-columns: minmax(0, 1fr) auto; }
 .traveller-picker-empty > span:last-child { color: var(--quiet); font-size: 20px; }
+.traveller-book-row {
+  display: flex;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.traveller-book-row .primary-action {
+  width: 100%;
+  min-height: 44px;
+}
 .mock-pill {
   background: rgba(233, 188, 116, .13);
   color: rgba(247, 211, 153, .86);
@@ -638,6 +599,7 @@ a.recommendation-card:active { transform: scale(.99); }
 }
 .sources-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: var(--type-body);
 }
@@ -650,6 +612,19 @@ a.recommendation-card:active { transform: scale(.99); }
 .sources-table th {
   color: var(--quiet);
   font-weight: var(--weight-medium);
+}
+.sources-table td:first-child {
+  width: 36%;
+  padding-right: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sources-table .sources-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
 }
 .sources-table a {
   color: rgba(255, 255, 255, .88);
@@ -1014,6 +989,39 @@ a.offer-row:active { transform: scale(.99); }
 }
 .traveller-list-view > .set-note {
   margin: 0;
+}
+.traveller-empty-state {
+  gap: 18px;
+  min-height: 280px;
+  border: 0;
+  background: transparent;
+}
+.traveller-empty-state .profile-add-button {
+  min-width: 148px;
+}
+.settings-shell.is-traveller-editor {
+  padding-bottom: 0;
+}
+.traveller-editor {
+  display: flex;
+  min-height: 100dvh;
+  flex-direction: column;
+}
+.traveller-editor > .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: rgba(0, 0, 0, .92);
+  backdrop-filter: blur(10px);
+}
+.traveller-editor-body {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  padding: 8px 22px 44px;
+}
+.traveller-editor-body > .traveller-form {
+  margin-top: 4px;
 }
 .profile-empty-state,
 .invoice-empty-state {
@@ -1911,6 +1919,7 @@ a.read-only-field:hover { border-color: var(--line-strong); background: rgba(255
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/* Booked-flight demo traveller sheet (mock booking only). */
 .traveller-sheet-backdrop {
   position: fixed;
   z-index: 120;
@@ -1932,21 +1941,8 @@ a.read-only-field:hover { border-color: var(--line-strong); background: rgba(255
 .traveller-sheet > header > span { display: flex; flex-direction: column; gap: 2px; }
 .traveller-sheet > header strong { font-size: var(--type-body); }
 .traveller-sheet > header small { color: var(--quiet); font-size: var(--type-body); }
-.traveller-sheet > header small.ready { color: rgba(211, 232, 201, .88); }
-.traveller-sheet > header small.incomplete { color: rgba(247, 211, 153, .78); }
 .traveller-sheet .sheet-scroll {
   padding: 16px 20px 28px;
-}
-.traveller-sheet .traveller-form {
-  gap: 14px;
-}
-.traveller-sheet .form-section {
-  padding: 14px;
-  background: transparent;
-}
-.traveller-sheet .traveller-detail-actions {
-  margin-top: 4px;
-  padding-bottom: 4px;
 }
 .traveller-sheet-form {
   display: flex;
@@ -2026,7 +2022,6 @@ a.read-only-field:hover { border-color: var(--line-strong); background: rgba(255
 }
 .activity-disclosure {
   margin-top: 4px;
-  border-top: 1px solid var(--line);
 }
 .activity-disclosure > summary {
   display: grid;
@@ -2263,8 +2258,6 @@ legend { margin-bottom: 11px; color: var(--quiet); font-size: var(--type-body); 
   .traveller-avatar { width: 38px; height: 38px; }
   .traveller-detail-heading .readiness-badge { align-self: flex-start; }
   .traveller-detail-actions { flex-direction: column; }
-  .mock-booking-cta { grid-template-columns: 1fr; }
-  .mock-booking-cta .primary-action { width: 100%; }
   .flight-facts { grid-template-columns: repeat(2, 1fr); }
   .booking-actions { grid-template-columns: 1fr; }
 }

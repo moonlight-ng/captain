@@ -26,9 +26,9 @@ export function flightHref(tripId: string, itineraryKey: string, mode?: string):
   return withAccess(mode ? `${path}?${new URLSearchParams({ mode }).toString()}` : path);
 }
 
-/** The home screen, where trips are curated. */
+/** The home screen, where trips are curated. Not `/` — Eve owns that landing page. */
 export function homeHref(): string {
-  return withAccess("/");
+  return withAccess("/trips");
 }
 
 /** The trip dashboard, or the settings for that one trip. */

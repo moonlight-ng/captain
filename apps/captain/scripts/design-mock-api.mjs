@@ -5,28 +5,48 @@
  * Open: http://127.0.0.1:4178/trip#access=design
  */
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 
 const PORT = Number(process.env.CAPTAIN_DESIGN_API_PORT || 8080);
 const NOW = "2026-08-04T08:00:00.000Z";
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const TRIP_ID = "22222222-2222-4222-8222-222222222222";
-const PASSENGER_ID = "33333333-3333-4333-8333-333333333333";
 
-const passenger = {
-  id: PASSENGER_ID,
-  userId: USER_ID,
-  givenName: "Ada",
-  familyName: "Lovelace",
-  title: "ms",
-  gender: "f",
-  bornOn: "1990-01-15",
-  email: "ada@example.com",
-  phoneNumber: "+447700900123",
-  isDefault: true,
-  readyForBooking: true,
-  createdAt: NOW,
-  updatedAt: NOW
-};
+/** Start empty so the Add traveller → fake details path is the happy path. */
+let passengers = [];
+let tripPassengerIds = [];
+
+function withReadiness(passenger) {
+  const readyForBooking = Boolean(
+    passenger.givenName?.trim()
+    && passenger.familyName?.trim()
+    && passenger.title
+    && passenger.gender
+    && passenger.bornOn
+    && passenger.email
+    && passenger.phoneNumber
+  );
+  const readyForInternationalTravel = Boolean(
+    passenger.nationality
+    && passenger.countryOfResidence
+    && passenger.passportLast4
+    && passenger.passportIssuingCountry
+    && passenger.passportExpiresOn
+  );
+  return { ...passenger, readyForBooking, readyForInternationalTravel };
+}
+
+function publicPassenger(passenger) {
+  const { passportNumber: _omit, ...rest } = passenger;
+  return withReadiness(rest);
+}
+
+function tripTravellers() {
+  return tripPassengerIds
+    .map((id) => passengers.find((passenger) => passenger.id === id))
+    .filter(Boolean)
+    .map(publicPassenger);
+}
 
 const trip = {
   id: TRIP_ID,
@@ -212,8 +232,7 @@ const tripPayload = {
     eventType: "trip_created",
     payload: {},
     createdAt: NOW
-  }],
-  travellers: [passenger]
+  }]
 };
 
 const noStore = { "cache-control": "no-store", "content-type": "application/json" };
@@ -268,7 +287,10 @@ const server = createServer(async (req, res) => {
   }
 
   if (method === "GET" && path === "/api/me/trip") {
-    return json(res, 200, tripPayload);
+    return json(res, 200, {
+      ...tripPayload,
+      travellers: tripTravellers()
+    });
   }
 
   if (method === "PATCH" && path === "/api/me/trip") {
@@ -291,17 +313,110 @@ const server = createServer(async (req, res) => {
   }
 
   if (method === "GET" && path === "/api/me/passengers") {
-    return json(res, 200, { passengers: [passenger] });
+    return json(res, 200, { passengers: passengers.map(publicPassenger) });
   }
 
   if (method === "POST" && path === "/api/me/passengers") {
-    await readBody(req);
-    return json(res, 200, { passenger });
+    const body = JSON.parse((await readBody(req)) || "{}");
+    const stamp = new Date().toISOString();
+    const makeDefault = body.isDefault === true || passengers.length === 0;
+    if (makeDefault) {
+      passengers = passengers.map((passenger) => ({ ...passenger, isDefault: false, updatedAt: stamp }));
+    }
+    const passenger = {
+      id: randomUUID(),
+      userId: USER_ID,
+      givenName: body.givenName ?? "Traveller",
+      middleName: body.middleName ?? null,
+      familyName: body.familyName ?? "Demo",
+      title: body.title ?? null,
+      gender: body.gender ?? null,
+      bornOn: body.bornOn ?? null,
+      email: body.email ?? null,
+      phoneNumber: body.phoneNumber ?? null,
+      nationality: body.nationality ?? null,
+      countryOfResidence: body.countryOfResidence ?? null,
+      passportNumber: body.passportNumber ?? null,
+      passportLast4: body.passportNumber ? String(body.passportNumber).slice(-4) : null,
+      passportIssuingCountry: body.passportIssuingCountry ?? null,
+      passportExpiresOn: body.passportExpiresOn ?? null,
+      isDefault: makeDefault,
+      createdAt: stamp,
+      updatedAt: stamp
+    };
+    passengers = [...passengers, passenger];
+    return json(res, 200, { passenger: publicPassenger(passenger) });
+  }
+
+  const passengerMatch = /^\/api\/me\/passengers\/([^/]+)(?:\/(default))?$/u.exec(path);
+  if (passengerMatch) {
+    const passengerId = decodeURIComponent(passengerMatch[1]);
+    const index = passengers.findIndex((passenger) => passenger.id === passengerId);
+    if (index < 0) return json(res, 404, { error: "not_found" });
+
+    if (method === "PATCH" && !passengerMatch[2]) {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const stamp = new Date().toISOString();
+      const current = passengers[index];
+      const next = {
+        ...current,
+        ...("givenName" in body ? { givenName: body.givenName } : {}),
+        ...("middleName" in body ? { middleName: body.middleName } : {}),
+        ...("familyName" in body ? { familyName: body.familyName } : {}),
+        ...("title" in body ? { title: body.title } : {}),
+        ...("gender" in body ? { gender: body.gender } : {}),
+        ...("bornOn" in body ? { bornOn: body.bornOn } : {}),
+        ...("email" in body ? { email: body.email } : {}),
+        ...("phoneNumber" in body ? { phoneNumber: body.phoneNumber } : {}),
+        ...("nationality" in body ? { nationality: body.nationality } : {}),
+        ...("countryOfResidence" in body ? { countryOfResidence: body.countryOfResidence } : {}),
+        ...("passportIssuingCountry" in body ? { passportIssuingCountry: body.passportIssuingCountry } : {}),
+        ...("passportExpiresOn" in body ? { passportExpiresOn: body.passportExpiresOn } : {}),
+        ...("passportNumber" in body
+          ? {
+            passportNumber: body.passportNumber,
+            passportLast4: body.passportNumber ? String(body.passportNumber).slice(-4) : null
+          }
+          : {}),
+        ...("isDefault" in body ? { isDefault: Boolean(body.isDefault) } : {}),
+        updatedAt: stamp
+      };
+      if (next.isDefault) {
+        passengers = passengers.map((passenger, i) => (
+          i === index ? next : { ...passenger, isDefault: false, updatedAt: stamp }
+        ));
+      } else {
+        passengers = passengers.map((passenger, i) => (i === index ? next : passenger));
+      }
+      const updated = passengers.find((passenger) => passenger.id === passengerId);
+      return json(res, 200, { passenger: publicPassenger(updated) });
+    }
+
+    if (method === "DELETE" && !passengerMatch[2]) {
+      await readBody(req);
+      passengers = passengers.filter((passenger) => passenger.id !== passengerId);
+      tripPassengerIds = tripPassengerIds.filter((id) => id !== passengerId);
+      return json(res, 200, { ok: true });
+    }
+
+    if (method === "POST" && passengerMatch[2] === "default") {
+      await readBody(req);
+      const stamp = new Date().toISOString();
+      passengers = passengers.map((passenger) => ({
+        ...passenger,
+        isDefault: passenger.id === passengerId,
+        updatedAt: stamp
+      }));
+      const updated = passengers.find((passenger) => passenger.id === passengerId);
+      return json(res, 200, { passenger: publicPassenger(updated) });
+    }
   }
 
   if (method === "PUT" && path === "/api/me/trip/travellers") {
-    await readBody(req);
-    return json(res, 200, { passengers: [passenger] });
+    const body = JSON.parse((await readBody(req)) || "{}");
+    const ids = Array.isArray(body.passengerIds) ? body.passengerIds.map(String) : [];
+    tripPassengerIds = ids.filter((id) => passengers.some((passenger) => passenger.id === id));
+    return json(res, 200, { passengers: tripTravellers() });
   }
 
   if (method === "GET" && path === "/api/me/payments/cards") {

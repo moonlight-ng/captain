@@ -25,9 +25,10 @@ process payments. Traveller details are collected only on Captain’s secure web
   prototype. The Book, seat, baggage, and cancellation actions never call an
   airline or payment API. Mock booking state stays in the browser and can be
   reset from the flight activity screen.
-- Archived trips and their evidence are retained for 90 days. `/delete`
-  queues remote Duffel card deletions, then removes the traveller, trip,
-  sessions, passengers, payment methods, and retained evidence.
+- Archived trips and their evidence are retained for 90 days. `/clear`
+  removes saved travellers and resets preferences to defaults. Account
+  deletion via the API queues remote Duffel card deletions, then removes the
+  traveller, trip, sessions, passengers, payment methods, and retained evidence.
 
 ## Architecture
 

@@ -233,6 +233,33 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     });
   }
 
+  async clearTravellerData(userId: string, now: Date): Promise<void> {
+    await this.ensureProfile(userId, now);
+    await this.#sql.begin(async (tx) => {
+      await tx`delete from captain.passengers where user_id = ${userId}`;
+      await tx`
+        update captain.traveller_profiles set
+          default_currency = ${DEFAULT_PROFILE.defaultCurrency},
+          ranking_mode = ${DEFAULT_PROFILE.rankingMode},
+          preferred_airline_codes = ${tx.json([])},
+          excluded_airline_codes = ${tx.json([])},
+          alerts_enabled = ${DEFAULT_PROFILE.alertsEnabled},
+          notification_mode = ${DEFAULT_PROFILE.notificationMode},
+          digest_hour_local = ${DEFAULT_PROFILE.digestHourLocal},
+          price_rise_alerts_enabled = ${DEFAULT_PROFILE.priceRiseAlertsEnabled},
+          better_option_alerts_enabled = ${DEFAULT_PROFILE.betterOptionAlertsEnabled},
+          tracking_checkins_enabled = ${DEFAULT_PROFILE.trackingCheckinsEnabled},
+          max_alerts_per_day = ${DEFAULT_PROFILE.maxAlertsPerDay},
+          quiet_hours_enabled = ${DEFAULT_PROFILE.quietHoursEnabled},
+          quiet_hours_start = ${DEFAULT_PROFILE.quietHoursStart},
+          quiet_hours_end = ${DEFAULT_PROFILE.quietHoursEnd},
+          traveller_setup_prompted_at = null,
+          updated_at = ${now}
+        where user_id = ${userId}
+      `;
+    });
+  }
+
   async getProfile(userId: string): Promise<TravellerProfile | null> {
     const rows = await this.#sql<ProfileRow[]>`
       select * from captain.traveller_profiles where user_id = ${userId}

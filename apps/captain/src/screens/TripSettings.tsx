@@ -494,7 +494,7 @@ function TravellerCard({
       <div className="settings-body">
         {available.length === 0 ? (
           <p>
-            <a className="quiet-link" href={travellerProfileHref(tripId, "new")}>Add a traveller</a> in your profile.
+            <a className="quiet-link" href={travellerProfileHref(tripId, "new")}>Add a traveller</a>.
           </p>
         ) : traveller && (readOnly || !changing) ? (
           <>

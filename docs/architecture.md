@@ -23,7 +23,7 @@ only to clean up tokenised cards created before this boundary was adopted.
 Confirmed trip currency is immutable; changing the profile default affects
 only future trips.
 
-The web app is rooted at `/`, a home screen listing the traveller's trips. `/trip/:id` is the trip dashboard and
+The web app home is `/trips`, listing the traveller's trips (`/` is Eve's landing page). `/trip/:id` is the trip dashboard and
 `/trip/:id/settings` holds everything scoped to that one search — tracking controls,
 the trip brief, the traveller assigned to it, and its activity log. What that screen
 offers is driven by the trip's stage (`src/trip-stage.ts`); once a mock booking exists

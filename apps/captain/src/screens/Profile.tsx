@@ -28,6 +28,9 @@ export function Profile({
   onBack: () => void;
 }) {
   const [tab, setTab] = useState<ProfileTab>(requestedTab);
+  const [editingTraveller, setEditingTraveller] = useState(
+    () => Boolean(new URLSearchParams(window.location.search).get("traveller"))
+  );
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -38,23 +41,27 @@ export function Profile({
   }, [tab]);
 
   return (
-    <main className="settings-shell">
-      <header className="topbar">
-        <button className="back-link" onClick={onBack}>← Home</button>
-        <span className="name">{displayName}</span>
-      </header>
+    <main className={`settings-shell${editingTraveller ? " is-traveller-editor" : ""}`}>
+      {!editingTraveller && (
+        <>
+          <header className="topbar">
+            <button className="back-link" onClick={onBack}>← Home</button>
+            <span className="name">{displayName}</span>
+          </header>
 
-      <nav className="tabs" aria-label="Profile">
-        {tabs.map((item) => (
-          <button
-            key={item}
-            className={tab === item ? "active" : ""}
-            onClick={() => setTab(item)}
-          >
-            {tabLabels[item]}
-          </button>
-        ))}
-      </nav>
+          <nav className="tabs" aria-label="Profile">
+            {tabs.map((item) => (
+              <button
+                key={item}
+                className={tab === item ? "active" : ""}
+                onClick={() => setTab(item)}
+              >
+                {tabLabels[item]}
+              </button>
+            ))}
+          </nav>
+        </>
+      )}
 
       {tab === "preferences" ? (
         <AccountPreferences profile={profile} onSaved={onSaved} />
@@ -66,7 +73,7 @@ export function Profile({
           <p>Open /profile from Captain on Telegram.</p>
         </section>
       ) : (
-        <Travellers displayName={displayName} />
+        <Travellers displayName={displayName} onEditingChange={setEditingTraveller} />
       )}
     </main>
   );
@@ -75,6 +82,8 @@ export function Profile({
 /** Honours `?tab=`, and the older `?section=` / `#payment` links still in Telegram history. */
 function requestedTab(): ProfileTab {
   const search = new URLSearchParams(window.location.search);
+  // Trip deep-links open a traveller editor; force the Travellers tab.
+  if (search.get("traveller")) return "travellers";
   const requested = search.get("tab") ?? search.get("section") ?? window.location.hash.slice(1);
   if (tabs.includes(requested as ProfileTab)) return requested as ProfileTab;
   if (requested === "card" || requested === "invoices") return "payment";

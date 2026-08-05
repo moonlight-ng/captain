@@ -72,10 +72,9 @@ export const CAPTAIN_TRAVELLER_SETUP_PROMPT =
   "Save your traveller details so Captain is ready for the booking prototype.";
 export const CAPTAIN_PAYMENT_INTRO =
   "Captain uses one fixed test card for the prototype. No payment will be processed.";
-export const CAPTAIN_DELETE_COMMAND = "/delete";
-export const CAPTAIN_DELETE_CONFIRMATION = "All your Captain data has been deleted.";
-export const CAPTAIN_SIGNOUT_CONFIRMATION =
-  "Signed out of Captain on the web. Open a fresh link from Telegram to sign in again.";
+export const CAPTAIN_CLEAR_COMMAND = "/clear";
+export const CAPTAIN_CLEAR_CONFIRMATION =
+  "Your travellers and preferences have been cleared.";
 
 export default telegramChannel({
   route: "/eve/v1/telegram",
@@ -188,14 +187,9 @@ export default telegramChannel({
       );
       return null;
     }
-    if (content === "/signout") {
-      await services.auth.signOut(user.id);
-      await ctx.telegram.post(CAPTAIN_SIGNOUT_CONFIRMATION);
-      return null;
-    }
-    if (content === CAPTAIN_DELETE_COMMAND) {
-      await services.platformStore.deleteUser(user.id);
-      await ctx.telegram.post(CAPTAIN_DELETE_CONFIRMATION);
+    if (content === CAPTAIN_CLEAR_COMMAND) {
+      await services.platformStore.clearTravellerData(user.id, new Date());
+      await ctx.telegram.post(CAPTAIN_CLEAR_CONFIRMATION);
       return null;
     }
     if (!content) {

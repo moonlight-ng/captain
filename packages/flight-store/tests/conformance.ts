@@ -1186,6 +1186,42 @@ export function describeCaptainPlatformStore(
       expect(intent?.componentClientKey).toBeNull();
     });
 
+    it("clears travellers and resets preferences without deleting the account", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const now = new Date("2026-08-01T12:00:00Z");
+      await store.updateProfile(ada.id, {
+        defaultCurrency: "NGN",
+        rankingMode: "cheapest",
+        preferredAirlineCodes: ["BA"],
+        excludedAirlineCodes: ["KL"],
+        notificationMode: "off",
+        quietHoursEnabled: false
+      }, now);
+      await store.markTravellerSetupPrompted(ada.id, now);
+      const passenger = await store.createPassenger(ada.id, {
+        givenName: "Ada",
+        familyName: "Lovelace"
+      }, now);
+      const created = await store.createTrip(ada.id, tripInput, buildSearchSpecs(tripInput.brief), now);
+      await store.setTripPassengers(ada.id, created.trip.id, [passenger.id]);
+      await store.clearTravellerData(ada.id, now);
+      await expect(store.listPassengers(ada.id)).resolves.toEqual([]);
+      await expect(store.listTripPassengers(ada.id, created.trip.id)).resolves.toEqual([]);
+      const profile = await store.getProfile(ada.id);
+      expect(profile).toMatchObject({
+        defaultCurrency: "USD",
+        rankingMode: "balanced",
+        preferredAirlineCodes: [],
+        excludedAirlineCodes: [],
+        notificationMode: "smart",
+        quietHoursEnabled: true,
+        travellerSetupPromptedAt: null
+      });
+      await expect(store.getUser(ada.id)).resolves.toMatchObject({ id: ada.id });
+      await expect(store.listTrips(ada.id)).resolves.toHaveLength(1);
+    });
+
     it("clears all user-owned data when a user is deleted", async () => {
       const store = await createStore();
       const ada = await user(store, 1);

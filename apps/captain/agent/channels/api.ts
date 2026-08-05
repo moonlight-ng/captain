@@ -38,7 +38,7 @@ export default defineChannel({
   routes: [
     GET("/health", async () => Response.json({ status: "ok" })),
     GET("/ready", readiness),
-    GET("/", serveIndex),
+    GET("/trips", serveIndex),
     GET("/trip", serveIndex),
     GET("/trip/:id", serveIndex),
     GET("/trip/:id/settings", serveIndex),
@@ -168,7 +168,7 @@ async function exchangeLoginLink(request: Request): Promise<Response> {
   const raw = new URL(request.url).searchParams.get("t")?.trim() ?? "";
   const exchanged = raw ? await services.auth.exchangeLoginToken(raw) : null;
   if (!exchanged) {
-    return Response.redirect(new URL("/?e=expired", services.env.publicUrl).toString(), 302);
+    return Response.redirect(new URL("/trips?e=expired", services.env.publicUrl).toString(), 302);
   }
   const location = services.auth.redirectAfterLogin(exchanged.redirectPath, request.url);
   return new Response(null, {
