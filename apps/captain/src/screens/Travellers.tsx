@@ -12,11 +12,11 @@ import type { Passenger } from "../domain";
 import {
   PassengerForm,
   emptyPassengerForm,
-  missingBookingDetails,
   passengerToForm,
   readinessLabel,
   toPassengerPayload
 } from "../components/PassengerForm";
+import { CloseIcon } from "../components/icons";
 
 export function Travellers({
   displayName,
@@ -35,8 +35,8 @@ export function Travellers({
   });
   const [formError, setFormError] = useState("");
 
-  async function reload() {
-    setLoading(true);
+  async function reload(opts?: { quiet?: boolean }) {
+    if (!opts?.quiet) setLoading(true);
     setError("");
     try {
       const next = await listPassengers();
@@ -45,7 +45,7 @@ export function Travellers({
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not load travellers.");
     } finally {
-      setLoading(false);
+      if (!opts?.quiet) setLoading(false);
     }
   }
 
@@ -58,187 +58,208 @@ export function Travellers({
     givenName: nameParts[0] ?? "",
     familyName: nameParts.slice(1).join(" ")
   }), [displayName]);
+
+  const sheetOpen = selectedId !== null;
   const selected = selectedId && selectedId !== "new"
     ? passengers.find((passenger) => passenger.id === selectedId) ?? null
     : null;
+  const creating = selectedId === "new";
+
+  function closeSheet() {
+    setSelectedId(null);
+    setFormError("");
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("traveller")) {
+      url.searchParams.delete("traveller");
+      window.history.replaceState(null, "", url.toString());
+    }
+  }
 
   if (loading) return <section className="profile-empty-state"><p>Loading travellers…</p></section>;
   if (error) return <section className="profile-empty-state form-error" role="alert">{error}</section>;
-
-  if (selectedId === "new" || (passengers.length === 0 && selectedId === null)) {
-    return (
-      <section className="profile-detail-view">
-        {passengers.length > 0 && (
-          <button type="button" className="back-link" onClick={() => setSelectedId(null)}>
-            ← Travellers
-          </button>
-        )}
-        <div className="profile-section-heading">
-          <div>
-            <p className="eyebrow">New traveller</p>
-            <h1>{passengers.length === 0 ? "Your traveller details" : "Add a traveller"}</h1>
-            <p>{passengers.length === 0
-              ? "We’ve pre-filled what Captain knows. Complete the government-ID details before booking."
-              : "Use the traveller’s own government ID and contact details."}</p>
-          </div>
-        </div>
-        <PassengerForm
-          initial={emptyPassengerForm(prefill)}
-          busy={busy}
-          error={formError}
-          submitLabel="Save traveller"
-          onSubmit={async (values) => {
-            setBusy(true);
-            setFormError("");
-            try {
-              const passenger = await createPassenger({
-                ...toPassengerPayload(values),
-                isDefault: passengers.length === 0
-              });
-              await reload();
-              setSelectedId(passenger.id);
-            } catch (cause) {
-              setFormError(cause instanceof ApiError ? cause.message : "Could not save traveller.");
-            } finally {
-              setBusy(false);
-            }
-          }}
-        />
-      </section>
-    );
-  }
-
-  if (selected) {
-    const missing = missingBookingDetails(selected);
-    return (
-      <section className="profile-detail-view">
-        <button type="button" className="back-link" onClick={() => setSelectedId(null)}>
-          ← Travellers
-        </button>
-        <div className="profile-section-heading traveller-detail-heading">
-          <div>
-            <p className="eyebrow">Traveller</p>
-            <h1>{fullName(selected)}</h1>
-            <p>{selected.readyForBooking
-              ? "Core details are complete for booking."
-              : `Still needed: ${missing.join(", ")}.`}</p>
-          </div>
-          <span className={`readiness-badge ${selected.readyForBooking ? "ready" : "incomplete"}`}>
-            {readinessLabel(selected)}
-          </span>
-        </div>
-        {selected.passportLast4 && (
-          <div className="secure-summary">
-            <span>Passport on file</span>
-            <strong>•••• {selected.passportLast4}</strong>
-            <small>{selected.passportIssuingCountry ?? "—"} · expires {selected.passportExpiresOn ?? "—"}</small>
-          </div>
-        )}
-        <PassengerForm
-          initial={passengerToForm(selected)}
-          existingPassportLast4={selected.passportLast4}
-          busy={busy}
-          error={formError}
-          submitLabel="Save changes"
-          onSubmit={async (values) => {
-            setBusy(true);
-            setFormError("");
-            try {
-              await updatePassenger(selected.id, toPassengerPayload(values, Boolean(selected.passportLast4)));
-              await reload();
-            } catch (cause) {
-              setFormError(cause instanceof ApiError ? cause.message : "Could not save traveller.");
-            } finally {
-              setBusy(false);
-            }
-          }}
-        />
-        <div className="traveller-detail-actions">
-          {!selected.isDefault && (
-            <button
-              type="button"
-              className="quiet-link"
-              disabled={busy}
-              onClick={() => void (async () => {
-                setBusy(true);
-                try {
-                  await setDefaultPassenger(selected.id);
-                  await reload();
-                } finally {
-                  setBusy(false);
-                }
-              })()}
-            >
-              Make default traveller
-            </button>
-          )}
-          <button
-            type="button"
-            className="quiet-link danger-link"
-            disabled={busy}
-            onClick={() => {
-              if (!window.confirm(`Remove ${fullName(selected)}?`)) return;
-              void (async () => {
-                setBusy(true);
-                try {
-                  await deletePassenger(selected.id);
-                  await reload();
-                  setSelectedId(null);
-                } finally {
-                  setBusy(false);
-                }
-              })();
-            }}
-          >
-            Remove traveller
-          </button>
-        </div>
-      </section>
-    );
-  }
 
   return (
     <section className="traveller-list-view">
       <div className="profile-section-heading">
         <div>
           <p className="eyebrow">Travellers</p>
-          <h1>Who can Captain book for?</h1>
-          <p>Open a traveller to review government-ID, contact, and passport readiness.</p>
+          <p>Government ID, contact, and passport details for booking.</p>
         </div>
-        <button type="button" className="profile-add-button" onClick={() => setSelectedId("new")}>
+        <button type="button" className="profile-add-button" onClick={() => {
+          setFormError("");
+          setSelectedId("new");
+        }}>
           Add traveller
         </button>
       </div>
-      <div className="traveller-card-list">
-        {passengers.map((passenger) => (
-          <button
-            type="button"
-            className="traveller-summary-card"
-            key={passenger.id}
-            onClick={() => {
-              setFormError("");
-              setSelectedId(passenger.id);
-            }}
-          >
-            <span className="traveller-avatar" aria-hidden="true">
-              {passenger.givenName.slice(0, 1)}{passenger.familyName.slice(0, 1)}
-            </span>
-            <span className="traveller-card-main">
-              <span>
-                <strong>{fullName(passenger)}</strong>
-                {passenger.isDefault && <small>Default traveller</small>}
+
+      {passengers.length === 0 ? (
+        <p className="set-note">No travellers yet. Add one to book.</p>
+      ) : (
+        <div className="traveller-card-list">
+          {passengers.map((passenger) => (
+            <button
+              type="button"
+              className="traveller-summary-card"
+              key={passenger.id}
+              onClick={() => {
+                setFormError("");
+                setSelectedId(passenger.id);
+              }}
+            >
+              <span className="traveller-avatar" aria-hidden="true">
+                {passenger.givenName.slice(0, 1)}{passenger.familyName.slice(0, 1)}
               </span>
-              <small>
-                {passenger.bornOn ? `Born ${formatDate(passenger.bornOn)}` : "Date of birth missing"}
-                {passenger.passportLast4 ? ` · Passport •••• ${passenger.passportLast4}` : " · No passport"}
-              </small>
+              <span className="traveller-card-main">
+                <span>
+                  <strong>{fullName(passenger)}</strong>
+                  {passenger.isDefault && <small>Default traveller</small>}
+                </span>
+                <small>
+                  {passenger.bornOn ? `Born ${formatDate(passenger.bornOn)}` : "Date of birth missing"}
+                  {passenger.passportLast4 ? ` · Passport •••• ${passenger.passportLast4}` : " · No passport"}
+                </small>
+              </span>
+              <span className={`readiness-badge ${passenger.readyForBooking ? "ready" : "incomplete"}`}>
+                {readinessLabel(passenger)}
+              </span>
+              <span className="card-chevron" aria-hidden="true">›</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div
+        className="sheet-backdrop traveller-sheet-backdrop"
+        data-open={sheetOpen}
+        aria-hidden={!sheetOpen}
+        role="presentation"
+        onMouseDown={(event) => {
+          if (event.currentTarget === event.target) closeSheet();
+        }}
+      >
+        <section
+          className="bottom-sheet traveller-sheet"
+          role="dialog"
+          aria-modal={sheetOpen}
+          aria-label={creating ? "Add traveller" : selected ? fullName(selected) : "Traveller"}
+        >
+          <header>
+            <span>
+              <strong>{creating ? "Add traveller" : selected ? fullName(selected) : "Traveller"}</strong>
+              {selected && (
+                <small className={selected.readyForBooking ? "ready" : "incomplete"}>
+                  {readinessLabel(selected)}
+                </small>
+              )}
+              {creating && <small>Use the traveller’s government ID and contact details.</small>}
             </span>
-            <span className={`readiness-badge ${passenger.readyForBooking ? "ready" : "incomplete"}`}>
-              {readinessLabel(passenger)}
-            </span>
-            <span className="card-chevron" aria-hidden="true">›</span>
-          </button>
-        ))}
+            <button type="button" className="icon-button" aria-label="Close traveller" onClick={closeSheet}>
+              <CloseIcon />
+            </button>
+          </header>
+
+          <div className="sheet-scroll">
+            {creating && (
+              <PassengerForm
+                key="new"
+                initial={emptyPassengerForm(prefill)}
+                busy={busy}
+                error={formError}
+                submitLabel="Save traveller"
+                onSubmit={async (values) => {
+                  setBusy(true);
+                  setFormError("");
+                  try {
+                    await createPassenger({
+                      ...toPassengerPayload(values),
+                      isDefault: passengers.length === 0
+                    });
+                    await reload({ quiet: true });
+                    closeSheet();
+                  } catch (cause) {
+                    setFormError(cause instanceof ApiError ? cause.message : "Could not save traveller.");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              />
+            )}
+
+            {selected && (
+              <>
+                <PassengerForm
+                  key={selected.id}
+                  initial={passengerToForm(selected)}
+                  existingPassportLast4={selected.passportLast4}
+                  busy={busy}
+                  error={formError}
+                  submitLabel="Save changes"
+                  onSubmit={async (values) => {
+                    setBusy(true);
+                    setFormError("");
+                    try {
+                      await updatePassenger(
+                        selected.id,
+                        toPassengerPayload(values, Boolean(selected.passportLast4))
+                      );
+                      await reload({ quiet: true });
+                      closeSheet();
+                    } catch (cause) {
+                      setFormError(cause instanceof ApiError ? cause.message : "Could not save traveller.");
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                />
+                <div className="traveller-detail-actions">
+                  {!selected.isDefault && (
+                    <button
+                      type="button"
+                      className="quiet-link"
+                      disabled={busy}
+                      onClick={() => void (async () => {
+                        setBusy(true);
+                        try {
+                          await setDefaultPassenger(selected.id);
+                          await reload({ quiet: true });
+                        } finally {
+                          setBusy(false);
+                        }
+                      })()}
+                    >
+                      Make default traveller
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="quiet-link danger-link"
+                    disabled={busy}
+                    onClick={() => {
+                      if (!window.confirm(`Remove ${fullName(selected)}?`)) return;
+                      void (async () => {
+                        setBusy(true);
+                        try {
+                          await deletePassenger(selected.id);
+                          await reload({ quiet: true });
+                          closeSheet();
+                        } finally {
+                          setBusy(false);
+                        }
+                      })();
+                    }}
+                  >
+                    Remove traveller
+                  </button>
+                </div>
+              </>
+            )}
+
+            {sheetOpen && !creating && !selected && (
+              <p className="set-note">That traveller is no longer available.</p>
+            )}
+          </div>
+        </section>
       </div>
     </section>
   );

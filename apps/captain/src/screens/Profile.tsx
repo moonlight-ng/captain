@@ -10,7 +10,7 @@ const tabs: ProfileTab[] = ["preferences", "travellers", "payment"];
 const tabLabels: Record<ProfileTab, string> = {
   preferences: "Preferences",
   travellers: "Travellers",
-  payment: "Test card"
+  payment: "Card"
 };
 
 export function Profile({

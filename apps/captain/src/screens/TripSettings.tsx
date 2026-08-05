@@ -3,7 +3,6 @@ import { useEffect, useState, type FormEvent } from "react";
 import {
   ApiError,
   listPassengers,
-  profileHref,
   setTripTravellers,
   tripAction,
   updateTripBrief
@@ -23,7 +22,7 @@ import {
 import { stageLabel, tripStage, type TripStage } from "../trip-stage";
 import type { MockBooking } from "../mock-booking";
 import { AirlineSearchSelect } from "../components/AirlineSearchSelect";
-import { readinessLabel } from "../components/PassengerForm";
+import { travellerProfileHref } from "../components/TripTravellerPicker";
 
 export function TripSettings({
   tripData,
@@ -488,27 +487,27 @@ function TravellerCard({
     <details className="settings-card settings-disclosure" open={!readOnly}>
       <summary>
         <span><strong>Traveller</strong></span>
-        <em>{traveller
-          ? readinessLabel(traveller)
-          : available.length === 0 ? "None saved" : "Not assigned"}</em>
+        <em className={`traveller-state ${travellerStateTone(traveller)}`}>
+          {travellerStateLabel(traveller, available.length)}
+        </em>
       </summary>
       <div className="settings-body">
         {available.length === 0 ? (
           <p>
-            <a className="quiet-link" href={profileHref("travellers")}>Add a traveller</a> in your profile.
+            <a className="quiet-link" href={travellerProfileHref(tripId, "new")}>Add a traveller</a> in your profile.
           </p>
         ) : traveller && (readOnly || !changing) ? (
           <>
-            <div className="read-only-field">
+            <a className="read-only-field" href={travellerProfileHref(tripId, traveller.id)}>
               <strong>{traveller.givenName} {traveller.familyName}</strong>
-            </div>
+            </a>
             <div className="entity-row" style={{ marginTop: 16 }}>
               {!readOnly && (
                 <button type="button" className="quiet-link" onClick={() => setChanging(true)}>
                   Change
                 </button>
               )}
-              <a className="quiet-link" href={profileHref("travellers")}>Edit details</a>
+              <a className="quiet-link" href={travellerProfileHref(tripId, "new")}>Add</a>
             </div>
           </>
         ) : (
@@ -560,6 +559,18 @@ function TravellerCard({
       </div>
     </details>
   );
+}
+
+function travellerStateLabel(traveller: Passenger | null, availableCount: number): string {
+  if (!traveller) return availableCount === 0 ? "None" : "Empty";
+  if (traveller.readyForBooking) return "Ready";
+  return "Incomplete";
+}
+
+function travellerStateTone(traveller: Passenger | null): "ready" | "warn" | "quiet" {
+  if (!traveller) return "quiet";
+  if (traveller.readyForBooking) return "ready";
+  return "warn";
 }
 
 function BookingCard({
