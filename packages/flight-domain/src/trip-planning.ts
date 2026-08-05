@@ -120,7 +120,7 @@ export const tripCreationReceiptSchema = z.object({
   maxStops: z.number().int().min(0).max(2),
   currency: z.string().regex(/^[A-Z]{3}$/u),
   dashboardUrl: z.url(),
-  accessHint: z.literal("Send /trips to open your trips.")
+  accessHint: z.literal("Send /trip to open your trip.")
 }).strict();
 export type TripCreationReceipt = z.infer<typeof tripCreationReceiptSchema>;
 

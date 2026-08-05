@@ -35,7 +35,7 @@ if (deleting) {
   await telegramApi("setMyCommands", {
     scope: { type: "all_private_chats" },
     commands: [
-      { command: "trips", description: "Show your active trips" },
+      { command: "trip", description: "Show your active trip" },
       { command: "profile", description: "Manage your Captain profile" },
       { command: "clear", description: "Clear all data" }
     ]

@@ -68,6 +68,7 @@ export const CAPTAIN_NEW_USER_GREETING =
   "Hi, I'm Captain! I can help you prepare for a flight by tracking suitable options and reporting price changes.";
 export const CAPTAIN_PREFERENCES_INTRO = "Let's start with your preferences";
 export const CAPTAIN_PROFILE_COMMAND = "/profile";
+export const CAPTAIN_TRIP_COMMAND = "/trip";
 export const CAPTAIN_TRAVELLER_SETUP_PROMPT =
   "Save your traveller details so Captain is ready for the booking prototype.";
 export const CAPTAIN_PAYMENT_INTRO =
@@ -141,7 +142,7 @@ export default telegramChannel({
         );
         await postCurrencyQuestion(ctx);
       } else {
-        const welcome = "I’m Captain. I can watch up to three trips and let you know when prices or better options change.";
+        const welcome = "I’m Captain. I can watch one trip at a time and let you know when prices or better options change.";
         await services.platformStore.appendMessage(user.id, "assistant", welcome, new Date());
         await postWithLink(
           ctx,
@@ -166,7 +167,7 @@ export default telegramChannel({
       );
       return null;
     }
-    if (content === "/trips") {
+    if (content === CAPTAIN_TRIP_COMMAND) {
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       const response = await services.tripPlanning.activeTripsLocation(user.id);
       if (!response) {
@@ -273,7 +274,7 @@ export default telegramChannel({
       }
     } catch (error) {
       if (error instanceof TripLimitError) {
-        const message = "You’re already tracking three trips. Open Profile and stop tracking one before creating another.";
+        const message = "You’re already tracking a trip. Open Profile and stop tracking it before creating another.";
         await services.platformStore.appendMessage(user.id, "assistant", message, new Date());
         await postWithLink(
           ctx,
@@ -411,11 +412,11 @@ export default telegramChannel({
       if (error instanceof TripLimitError) {
         await ctx.telegram.answerCallbackQuery({
           callbackQueryId: query.id,
-          text: "Three-trip limit reached."
+          text: "One-trip limit reached."
         });
         await postWithLink(
           ctx,
-          "You’re already tracking three trips. Stop tracking one before creating another.",
+          "You’re already tracking a trip. Stop tracking it before creating another.",
           "Open profile",
           await services.auth.createLoginLink(user.id, "/profile")
         );
@@ -869,7 +870,7 @@ async function completeOnboarding(
   );
   await postWithLink(
     ctx,
-    "Preferences set. Tell me where and roughly when you want to fly. I can track up to three trips at a time.",
+    "Preferences set. Tell me where and roughly when you want to fly. I can track one trip at a time.",
     "Edit preferences",
     await services.auth.createLoginLink(userId, "/profile", { tab: "preferences" })
   );

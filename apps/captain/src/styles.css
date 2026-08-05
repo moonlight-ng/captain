@@ -256,10 +256,10 @@ h2 { margin-bottom: 7px; font-size: var(--type-title); font-weight: var(--weight
 .watchlist-divider span {
   flex: 0 0 auto;
 }
-.recommendation-card, .airline-card, .offer-row, .settings-card {
+.recommendation-card, .airline-card, .settings-card {
   border: 1px solid rgba(255, 255, 255, .1);
   border-radius: var(--radius-card);
-  background: #0a0a0a;
+  background: var(--panel);
   box-shadow: 0 12px 32px rgba(0, 0, 0, .12);
 }
 
@@ -357,7 +357,7 @@ a.recommendation-card:active { transform: scale(.99); }
   padding: 16px;
   border: 1px solid rgba(255, 255, 255, .1);
   border-radius: var(--radius-card);
-  background: #0a0a0a;
+  background: var(--panel);
 }
 .watchlist-summary-top {
   display: flex;
@@ -499,7 +499,7 @@ a.recommendation-card:active { transform: scale(.99); }
   margin-top: 4px;
   border: 1.5px solid rgba(255, 255, 255, .55);
   border-radius: 50%;
-  background: #050505;
+  background: var(--panel-soft);
   justify-self: center;
 }
 .timeline-node-body {
@@ -648,7 +648,7 @@ a.recommendation-card:active { transform: scale(.99); }
   color: rgba(255, 255, 255, .8);
   font-size: var(--type-body);
   font-weight: var(--weight-medium);
-  transition: transform var(--duration-press-out) var(--ease-out), border-color 160ms var(--ease-out), background 160ms var(--ease-out);
+  transition: transform var(--duration-press-out) var(--ease-out), border-color var(--duration-sheet-exit) var(--ease-out), background var(--duration-sheet-exit) var(--ease-out);
 }
 .watchlist-toggle:active { transform: scale(.99); }
 .watchlist-toggle.watching {
@@ -798,31 +798,6 @@ textarea {
   min-height: 92px;
   resize: vertical;
 }
-.offer-row {
-  display: grid;
-  grid-template-columns: 31px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  padding: 16px;
-  color: inherit;
-  text-decoration: none;
-}
-a.offer-row { transition: transform var(--duration-press-out) var(--ease-out); }
-a.offer-row:active { transform: scale(.99); }
-.carrier { display: contents; }
-.carrier > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-.carrier strong, .route strong, .fare strong { font-size: var(--type-body); font-weight: var(--weight-medium); }
-.carrier p, .route p, .fare span, .trip-stats > span { margin: 0; color: var(--quiet); font-size: var(--type-body); }
-.route { grid-column: 1 / -1; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
-.trip-stats {
-  grid-column: 1 / 3;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.metrics.compact { margin: 0; }
-.fare { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
-
 .trip-list {
   position: relative;
   z-index: 1;
@@ -1023,8 +998,7 @@ a.offer-row:active { transform: scale(.99); }
 .traveller-editor-body > .traveller-form {
   margin-top: 4px;
 }
-.profile-empty-state,
-.invoice-empty-state {
+.profile-empty-state {
   display: flex;
   min-height: 220px;
   flex-direction: column;
@@ -1035,21 +1009,9 @@ a.offer-row:active { transform: scale(.99); }
   border-radius: var(--radius-card);
   text-align: center;
 }
-.profile-empty-state h2,
-.invoice-empty-state h2 { margin: 0 0 7px; font-size: var(--type-title); }
-.profile-empty-state p,
-.invoice-empty-state p { max-width: 310px; margin: 0; color: var(--muted); font-size: var(--type-body); line-height: 1.55; }
+.profile-empty-state h2 { margin: 0 0 7px; font-size: var(--type-title); }
+.profile-empty-state p { max-width: 310px; margin: 0; color: var(--muted); font-size: var(--type-body); line-height: 1.55; }
 .profile-empty-state.form-error { min-height: auto; color: rgba(242, 176, 163, .9); }
-.invoice-empty-icon {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  margin-bottom: 16px;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  color: var(--quiet);
-}
 
 .traveller-card-list,
 .payment-card-list { display: flex; flex-direction: column; gap: 10px; }
@@ -1188,30 +1150,8 @@ a.offer-row:active { transform: scale(.99); }
 .traveller-detail-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .danger-link { color: rgba(242, 176, 163, .82); }
 
-.payment-method-card {
-  display: flex;
-  min-height: 168px;
-  flex-direction: column;
-  padding: 18px;
-  border: 1px solid var(--line);
-  border-radius: 17px;
-  background: #0a0a0a;
-}
-.payment-method-card.default { border-color: rgba(167, 196, 154, .22); }
-.payment-card-brand-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.payment-card-brand { font-size: var(--type-caption); font-weight: var(--weight-bold); letter-spacing: .08em; text-transform: uppercase; }
-.payment-card-number { margin-top: 35px; font-size: var(--type-title); letter-spacing: .08em; }
-.payment-card-holder { margin-top: 10px; color: var(--muted); font-size: var(--type-caption); text-transform: uppercase; }
-.payment-method-card .set-note { margin: auto 0 0; }
-.payment-card-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: auto; }
 .profile-form-panel { margin-top: 12px; }
 .profile-form-panel .card-form { margin-top: 14px; }
-.invoice-list { display: flex; flex-direction: column; border-top: 1px solid var(--line); }
-.invoice-list article { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 2px; border-bottom: 1px solid var(--line); }
-.invoice-list article > span { display: flex; flex-direction: column; gap: 5px; }
-.invoice-list strong { font-size: var(--type-body); }
-.invoice-list small { color: var(--quiet); font-size: var(--type-caption); text-transform: capitalize; }
-.invoice-amount { align-items: flex-end; }
 .settings-intro {
   position: relative;
   z-index: 1;
@@ -1245,6 +1185,7 @@ a.offer-row:active { transform: scale(.99); }
   background: transparent;
 }
 .payment-settings .set-note {
+  margin-top: 16px;
   text-align: center;
 }
 .settings-disclosure { padding: 0; overflow: hidden; }
@@ -1269,7 +1210,7 @@ a.offer-row:active { transform: scale(.99); }
   content: "";
   transform: translateY(-1px) rotate(45deg);
   transform-origin: 50% 50%;
-  transition: transform 160ms var(--ease-out);
+  transition: transform var(--duration-sheet-exit) var(--ease-out);
 }
 .settings-disclosure[open] > summary::after {
   transform: translateY(1px) rotate(225deg);
@@ -1398,7 +1339,7 @@ a.offer-row:active { transform: scale(.99); }
   list-style: none;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: #0a0a0a;
+  background: var(--panel);
   box-shadow: 0 18px 40px rgba(0, 0, 0, .35);
 }
 .airline-search-results button {
@@ -1452,6 +1393,10 @@ a.read-only-field:hover { border-color: var(--line-strong); background: rgba(255
   flex-wrap: wrap;
 }
 .entity-row > div { display: flex; gap: 12px; flex-wrap: wrap; }
+.read-only-field + .entity-row,
+.settings-list + .entity-row {
+  margin-top: 16px;
+}
 .card-form {
   margin-top: 16px;
   padding: 12px;
@@ -1486,7 +1431,7 @@ a.read-only-field:hover { border-color: var(--line-strong); background: rgba(255
   padding: 18px;
   border: 1px solid rgba(255, 255, 255, .1);
   border-radius: var(--radius-card);
-  background: #0a0a0a;
+  background: var(--panel);
   box-shadow: 0 12px 32px rgba(0, 0, 0, .12);
 }
 .booking-identity-row {
@@ -1635,7 +1580,7 @@ a.read-only-field:hover { border-color: var(--line-strong); background: rgba(255
 .notes-tile {
   border: 1px solid rgba(255, 255, 255, .1);
   border-radius: 15px;
-  background: #0a0a0a;
+  background: var(--panel);
   color: var(--ink);
   text-align: left;
 }
@@ -1867,7 +1812,7 @@ a.read-only-field:hover { border-color: var(--line-strong); background: rgba(255
   margin-top: 2px;
   border: 2px solid rgba(255, 255, 255, .25);
   border-radius: 50%;
-  background: #0a0a0a;
+  background: var(--panel);
 }
 .mock-activity-list li.complete i {
   border-color: var(--green);
@@ -2010,7 +1955,7 @@ a.read-only-field:hover { border-color: var(--line-strong); background: rgba(255
   border-radius: 50%;
   background: rgba(255, 255, 255, .66);
   content: "";
-  transition: transform 160ms var(--ease-out);
+  transition: transform var(--duration-sheet-exit) var(--ease-out);
 }
 .switch-setting input[role="switch"]:checked {
   border-color: rgba(167, 196, 154, .4);
@@ -2047,7 +1992,7 @@ a.read-only-field:hover { border-color: var(--line-strong); background: rgba(255
   content: "";
   transform: translateY(-1px) rotate(45deg);
   transform-origin: 50% 50%;
-  transition: transform 160ms var(--ease-out);
+  transition: transform var(--duration-sheet-exit) var(--ease-out);
 }
 .activity-disclosure[open] > summary::after {
   transform: translateY(1px) rotate(225deg);

@@ -22,7 +22,7 @@ export default defineEval({
     const started = await t.send("Yes");
     started.expectOk();
     t.check(started.message, includes(/Trip is saved|already saved/iu));
-    t.check(started.message, includes("Send /trips"));
+    t.check(started.message, includes("Send /trip"));
 
     const where = await t.send("Where?");
     t.succeeded();

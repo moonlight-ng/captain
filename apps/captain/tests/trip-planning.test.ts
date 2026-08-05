@@ -118,7 +118,7 @@ describe("Captain trip planning", () => {
       returnDate: "2025-08-24",
       stayNights: 7
     });
-    expect(started.message).toContain("Send /trips");
+    expect(started.message).toContain("Send /trip");
     expect(started.message).toContain(`Open trip: https://captain.example/t#test-${started.receipt.tripId}`);
     expect(started.message).not.toContain("Trip reference");
     const renderedReceipt = telegramDashboardMessage(started.message);
@@ -130,12 +130,12 @@ describe("Captain trip planning", () => {
       user.id,
       `Your trip has been set up. trip reference: ${started.receipt.tripId}`
     )).resolves.toEqual({
-      message: "I couldn’t verify a trip-creation receipt. Send /trips to check your trips.",
+      message: "I couldn’t verify a trip-creation receipt. Send /trip to check your trip.",
       createdTrip: false
     });
     await expect(planning.groundAssistantMessage(user.id, "Your trip has been set up."))
       .resolves.toEqual({
-        message: "I couldn’t verify a trip-creation receipt. Send /trips to check your trips.",
+        message: "I couldn’t verify a trip-creation receipt. Send /trip to check your trip.",
         createdTrip: false
       });
     for (const greeting of [
@@ -658,7 +658,7 @@ describe("Captain trip planning", () => {
     expect(await trips.list(user.id)).toHaveLength(0);
   });
 
-  it("tracks a different confirmed trip alongside the current trip", async () => {
+  it("holds a second trip back while one is already tracking", async () => {
     const { planning, trips, user } = await setup();
     const current = await trips.create(user.id, {
       title: "Existing London trip",
@@ -671,23 +671,36 @@ describe("Captain trip planning", () => {
       cadenceHours: 6,
       trackingDurationHours: 72
     });
-    const ready = await planning.prepare(
+    const blocked = await planning.prepare(
       user.id,
       "Create a one-way trip from Lagos to New York on August 17 2025 for one adult."
     );
-    if (ready.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
-    expect(ready.confirmation).not.toContain("archive");
-    const added = await planning.confirm(user.id, ready.draft.id, ready.draft.revision);
-    expect(added.status).toBe("started");
-    if (added.status !== "started") throw new Error("Expected started trip");
+    expect(blocked.status).toBe("needs_input");
+    if (blocked.status !== "needs_input") throw new Error("Expected the trip limit prompt");
+    expect(blocked.prompt).toContain("You’re already tracking a trip.");
+    expect(blocked.draft.confirmationSnapshot).toBeNull();
+
     const saved = await trips.list(user.id);
-    expect(saved).toHaveLength(2);
-    expect(saved.find((trip) => trip.id === current.trip.id)).toMatchObject({
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({
+      id: current.trip.id,
       status: "tracking",
       archiveReason: null
     });
-    expect(saved).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: current.trip.id, status: "tracking" }),
+
+    // Stopping the current trip frees the slot, and the held draft continues.
+    await trips.action(user.id, current.trip.id, {
+      type: "cancel",
+      expectedVersion: current.trip.version
+    });
+    const ready = await planning.prepare(user.id, "continue", null, blocked.draft.id);
+    expect(ready.status).toBe("awaiting_confirmation");
+    if (ready.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    const added = await planning.confirm(user.id, ready.draft.id, ready.draft.revision);
+    expect(added.status).toBe("started");
+    if (added.status !== "started") throw new Error("Expected started trip");
+    expect(await trips.list(user.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: current.trip.id, status: "cancelled" }),
       expect.objectContaining({ id: added.receipt.tripId, status: "tracking" })
     ]));
   });
@@ -715,7 +728,7 @@ describe("Captain trip planning", () => {
   });
 
   it("supports typed confirmation, cancellation, edits, and grounded Where replies", async () => {
-    const { planning, user } = await setup();
+    const { planning, trips, user } = await setup();
     const ready = await planning.prepare(
       user.id,
       "Create a one-way trip from Lagos to New York on August 17 2025 for one adult."
@@ -732,6 +745,12 @@ describe("Captain trip planning", () => {
       + `Open trip: https://captain.example/t#test-${started?.status === "started" ? started.receipt.tripId : ""}`
     );
 
+    // Only one trip tracks at a time, so stop that one before planning another.
+    const tracking = (await trips.list(user.id))[0]!;
+    await trips.action(user.id, tracking.id, {
+      type: "cancel",
+      expectedVersion: tracking.version
+    });
     const next = await planning.prepare(
       user.id,
       "Create a one-way trip from Lagos to London on August 20 2025 for one adult."
@@ -749,7 +768,7 @@ describe("Captain trip planning", () => {
     expect(cancelled.status).toBe("cancelled");
   });
 
-  it("turns Telegram into the selector when several trips are active", async () => {
+  it("points Telegram at the traveller's one active trip", async () => {
     const { planning, trips, user } = await setup();
     const anambra = await trips.create(user.id, {
       title: "Anambra",
@@ -762,33 +781,32 @@ describe("Captain trip planning", () => {
       cadenceHours: 6,
       trackingDurationHours: 72
     });
-    const london = await trips.create(user.id, {
-      title: "London",
-      brief: defaultTestBrief({
-        originAirports: ["LOS"],
-        destinationAirports: ["LHR"],
-        departureWindow: { start: "2025-09-01", end: "2025-09-01" },
-        currency: "USD"
-      }),
-      cadenceHours: 6,
-      trackingDurationHours: 72
-    });
 
     const message = await planning.activeTripsLocation(user.id);
-    expect(message).toContain("You’re tracking 2 trips:");
+    expect(message).toContain("Your trip is tracking.");
     expect(message).toContain("• LOS → ANA");
-    expect(message).toContain("• LOS → LHR");
     const rendered = telegramDashboardMessage(message!);
-    expect(rendered.links).toEqual(expect.arrayContaining([
+    expect(rendered.links).toEqual([
       {
-        text: "Open LOS → ANA",
+        text: "Open trip",
         url: `https://captain.example/t#test-${anambra.trip.id}`
-      },
-      {
-        text: "Open LOS → LHR",
-        url: `https://captain.example/t#test-${london.trip.id}`
       }
+    ]);
+    expect(rendered.text).not.toContain("https://");
+  });
+
+  // Travellers who already had several trips when the one-trip limit landed
+  // still get a button per trip.
+  it("keeps a button per trip for a legacy multi-trip listing", () => {
+    const rendered = telegramDashboardMessage(formatActiveTripList([
+      legacyTripListEntry("ANA", "2025-08-01", "https://captain.example/t#test-anambra"),
+      legacyTripListEntry("LHR", "2025-09-01", "https://captain.example/t#test-london")
     ]));
+    expect(rendered.links).toEqual([
+      { text: "Open LOS → ANA", url: "https://captain.example/t#test-anambra" },
+      { text: "Open LOS → LHR", url: "https://captain.example/t#test-london" }
+    ]);
+    expect(rendered.text).toContain("You’re tracking 2 trips:");
     expect(rendered.text).not.toContain("https://");
   });
 });

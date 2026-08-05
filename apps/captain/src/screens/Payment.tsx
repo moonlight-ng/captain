@@ -5,7 +5,7 @@ export function Payment() {
   return (
     <section className="settings-card payment-settings">
       <div className="payment-card-list">
-        <article className="payment-method-row">
+        <article className="entity-row">
           <div className="read-only-field">
             <strong>
               {formatBrand(TEST_PAYMENT_METHOD.brand)} ···· {TEST_PAYMENT_METHOD.last4} · Test card
@@ -14,7 +14,7 @@ export function Payment() {
           </div>
         </article>
       </div>
-      <p className="set-note" style={{ marginTop: 16 }}>
+      <p className="set-note">
         Prototype only. Captain never collects or charges a real card.
       </p>
     </section>

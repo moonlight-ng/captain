@@ -46,7 +46,7 @@ const CREATION_SUCCESS_PATTERNS = [
   /\btrip\b\s+(?:has\s+been|was)\s+(?:successfully\s+)?(?:created|saved|set\s+up|started)\b/iu
 ] as const;
 const UUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/iu;
-const UNGROUNDED_CREATION_MESSAGE = "I couldn’t verify a trip-creation receipt. Send /trips to check your trips.";
+const UNGROUNDED_CREATION_MESSAGE = "I couldn’t verify a trip-creation receipt. Send /trip to check your trip.";
 
 export class TripPlanningService {
   readonly #store: CaptainPlatformStore;
@@ -171,7 +171,7 @@ export class TripPlanningService {
     );
     const basePrompt = !confirmationSnapshot || tripLimitReached
       ? tripLimitReached
-        ? "You’re already tracking three trips. Open /profile, stop tracking one trip, then reply “continue” here."
+        ? "You’re already tracking a trip. Open /profile, stop tracking it, then reply “continue” here."
         : unsupportedParty
           ? "Captain’s beta currently tracks fares for exactly one adult. Reply “just me” to continue, or cancel this trip."
           : unsupportedCurrency
@@ -626,7 +626,7 @@ function buildReceiptFromTrip(
     maxStops: trip.brief.maxStops,
     currency: trip.brief.currency,
     dashboardUrl,
-    accessHint: "Send /trips to open your trips."
+    accessHint: "Send /trip to open your trip."
   };
 }
 

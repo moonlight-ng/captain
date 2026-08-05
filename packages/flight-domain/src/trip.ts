@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import type { FlightSearchProviderId } from "./provider.js";
 
-export const MAX_ACTIVE_TRIPS_PER_USER = 3;
+export const MAX_ACTIVE_TRIPS_PER_USER = 1;
 export const MAX_SEARCH_COMBINATIONS = 1;
 export const TRACKING_CADENCE_HOURS = 6;
 export const DEFAULT_TRACKING_DURATION_HOURS = 72;
@@ -196,7 +196,10 @@ export class TripVersionConflictError extends Error {
 
 export class TripLimitError extends Error {
   constructor() {
-    super(`A user may have at most ${MAX_ACTIVE_TRIPS_PER_USER} active trips`);
+    super(
+      `A user may have at most ${MAX_ACTIVE_TRIPS_PER_USER} active `
+      + `trip${MAX_ACTIVE_TRIPS_PER_USER === 1 ? "" : "s"}`
+    );
     this.name = "TripLimitError";
   }
 }

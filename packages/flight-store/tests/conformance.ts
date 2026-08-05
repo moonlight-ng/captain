@@ -393,6 +393,8 @@ export function describeCaptainPlatformStore(
     it("starts every new trip with a fixed three-day run", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
+      // One trip per traveller, so the distant departure needs its own owner.
+      const grace = await user(store, 2);
       const now = new Date("2026-08-01T00:00:00Z");
       const boundary = inputFor("Berlin", "BER", "2026-08-31");
       const distant = inputFor("Paris", "CDG", "2026-09-01");
@@ -404,7 +406,7 @@ export function describeCaptainPlatformStore(
         now
       );
       const future = await store.createTrip(
-        ada.id,
+        grace.id,
         distant,
         buildSearchSpecs(distant.brief, false),
         now
@@ -490,7 +492,7 @@ export function describeCaptainPlatformStore(
       });
     });
 
-    it("groups up to three active Trips into one daily digest", async () => {
+    it("digests the one active Trip and leaves a cancelled one out", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
       const now = new Date("2026-08-01T12:00:00Z");
@@ -499,10 +501,12 @@ export function describeCaptainPlatformStore(
         digestHourLocal: 9,
         quietHoursEnabled: false
       }, now);
+      // A traveller tracks one trip at a time, so the earlier trip has to be
+      // cancelled before the next one can start.
       for (const [index, destination] of ["BER", "CDG"].entries()) {
         const input = inputFor(destination, destination, "2026-08-20");
         const specs = buildSearchSpecs(input.brief, false);
-        await store.createTrip(ada.id, input, specs, now);
+        const created = await store.createTrip(ada.id, input, specs, now);
         await runSearch(
           store,
           specs[0]!.id,
@@ -511,6 +515,17 @@ export function describeCaptainPlatformStore(
           100 + index * 25,
           destination
         );
+        if (destination === "BER") {
+          await store.applyTripAction(
+            ada.id,
+            created.trip.id,
+            {
+              type: "cancel",
+              expectedVersion: (await store.getTrip(ada.id, created.trip.id))!.version
+            },
+            now
+          );
+        }
       }
 
       expect(await store.enqueueDueDigests(new Date("2026-08-01T12:05:00Z"))).toBe(1);
@@ -522,14 +537,11 @@ export function describeCaptainPlatformStore(
         expect.objectContaining({
           kind: "daily_digest",
           payload: expect.objectContaining({
-            trips: expect.arrayContaining([
-              expect.objectContaining({ tripTitle: "BER" }),
-              expect.objectContaining({ tripTitle: "CDG" })
-            ])
+            trips: [expect.objectContaining({ tripTitle: "CDG" })]
           })
         })
       ]);
-      expect((notifications[0]!.payload.trips as unknown[])).toHaveLength(2);
+      expect((notifications[0]!.payload.trips as unknown[])).toHaveLength(1);
     });
 
     it("carries a meaningful improvement into the digest after a later unchanged check", async () => {
@@ -694,10 +706,11 @@ export function describeCaptainPlatformStore(
       const first = await store.createTrip(ada.id, firstInput, firstSpecs, start);
       await runSearch(store, firstSpecs[0]!.id, start, "BA982|LHR|BER", 100, "BER");
       expect(await store.enqueueInventoryGapForSearchSpec(firstSpecs[0]!.id, start)).toBe(0);
+      // Cancelling frees the traveller's single trip slot; pausing does not.
       await store.applyTripAction(
         ada.id,
         first.trip.id,
-        { type: "pause", expectedVersion: (await store.getTrip(ada.id, first.trip.id))!.version },
+        { type: "cancel", expectedVersion: (await store.getTrip(ada.id, first.trip.id))!.version },
         new Date("2026-08-01T00:01:00Z")
       );
 

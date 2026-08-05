@@ -501,7 +501,7 @@ function TravellerCard({
             <a className="read-only-field" href={travellerProfileHref(tripId, traveller.id)}>
               <strong>{traveller.givenName} {traveller.familyName}</strong>
             </a>
-            <div className="entity-row" style={{ marginTop: 16 }}>
+            <div className="entity-row">
               {!readOnly && (
                 <button type="button" className="quiet-link" onClick={() => setChanging(true)}>
                   Change
@@ -600,7 +600,7 @@ function BookingCard({
           <div><dt>Seat</dt><dd>{booking.seat ?? "None"}</dd></div>
           <div><dt>Bags</dt><dd>{booking.checkedBags}</dd></div>
         </dl>
-        <div className="entity-row" style={{ marginTop: 16 }}>
+        <div className="entity-row">
           <button type="button" className="quiet-link" onClick={onBack}>Manage booking</button>
           {!cancelled && (
             <button

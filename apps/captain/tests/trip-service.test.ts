@@ -100,7 +100,7 @@ describe("Trip service", () => {
     );
   });
 
-  it("tracks three Trips without replacement and rejects a fourth", async () => {
+  it("tracks one Trip without replacement and rejects a second", async () => {
     const now = new Date("2026-08-01T12:00:00Z");
     const store = new MemoryCaptainPlatformStore();
     const owner = await store.ensureTelegramUser({
@@ -111,20 +111,14 @@ describe("Trip service", () => {
       lastName: null
     }, now);
     const service = new TripService({ store, now: () => now });
-    for (const [title, destination] of [
-      ["Anambra", "ANA"],
-      ["Paris", "CDG"],
-      ["New York", "JFK"]
-    ] as const) {
-      await service.create(owner.id, {
-        title,
-        brief: defaultTestBrief({ destinationAirports: [destination] }),
-        cadenceHours: 6,
-        trackingDurationHours: 72
-      });
-    }
+    await service.create(owner.id, {
+      title: "Anambra",
+      brief: defaultTestBrief({ destinationAirports: ["ANA"] }),
+      cadenceHours: 6,
+      trackingDurationHours: 72
+    });
     expect((await service.list(owner.id)).filter((trip) => trip.status === "tracking"))
-      .toHaveLength(3);
+      .toHaveLength(1);
     await expect(service.create(owner.id, {
       title: "Nairobi",
       brief: defaultTestBrief({ destinationAirports: ["NBO"] }),

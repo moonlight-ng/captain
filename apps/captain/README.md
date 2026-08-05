@@ -1,15 +1,15 @@
 # Captain
 
-Captain is a Telegram-first flight tracker for one traveller profile and up to
-three active trips. It researches and tracks fares; it does not place orders or
+Captain is a Telegram-first flight tracker for one traveller profile and one
+active trip. It researches and tracks fares; it does not place orders or
 process payments. Traveller details are collected only on Captain’s secure web pages.
 
 ## Product contract
 
 - `/start` sets a default currency, ranking mode, and optional preferred or
   avoided airlines.
-- A traveller can have up to three active or paused trips. A fourth trip
-  requires stopping or completing one of the existing trips.
+- A traveller can have one active or paused trip at a time. A second trip
+  requires stopping or completing the existing one.
 - Captain currently supports USD and GBP trips. The confirmed display
   currency stays fixed; Duffel and Flysoar USD/GBP results are normalized into it.
 - The dashboard has **Flights**, **Airlines**, and **Browse** views. It only
