@@ -1,7 +1,10 @@
 # Captain
 
-Captain is a private Moonlight repository for the Telegram-first travel agent,
-its flight-search worker, and their shared flight platform.
+Captain is a private Moonlight repository for the Telegram-first flight price
+tracker, its search worker, and their shared flight platform.
+
+You describe a trip, Captain finds flights, you pick one to watch, and it
+checks the price daily until you fly — telling you how it moves and when to buy.
 
 - `apps/captain` owns onboarding, trip planning, authenticated APIs, and the
   traveller dashboard.
@@ -14,8 +17,8 @@ Captain deploys as `dr-captain`; the worker deploys as `dr-flight-worker`.
 They share Captain's Postgres schema but have independent Fly applications and
 deployment credentials. Pilot is a separate private product and repository.
 
-The current release stops at flight discovery. It does not book travel, take
-payments, or collect passenger documents. Booking uses a fixed display-only test card.
+Captain tracks fares and nothing else. It does not book travel, take payments,
+or hold any traveller identity: there is no passenger record and no stored card.
 
 ## Commands
 

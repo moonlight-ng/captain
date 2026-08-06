@@ -2,7 +2,10 @@
 
 Source of truth for **existing** web UI: `apps/captain/src/styles.css`, mounted screens/components under `apps/captain/src/`, and stage labels from `trip-stage.ts`.
 
-This file is a **utility catalog**. Assemble new screens from live entries. Do not invent parallel cards, payment chrome, or offer layouts.
+This file is a **utility catalog**. Assemble new screens from live entries. Do not invent parallel cards or offer layouts.
+
+Captain tracks flight prices. It has no booking, payment, or traveller-identity
+surface, and nothing here should reintroduce one.
 
 **Status tags**
 
@@ -56,11 +59,11 @@ Tokens only for shared easing/duration. No global screen entrances. Press via `t
 
 ### Accessibility
 
-Focus-visible: `2px solid rgba(255,255,255,.82)` + `3px` offset. Primary actions ~44px min height. Ready vs incomplete always includes badge text, not color alone. Icons: stroke SVG in `components/icons.tsx` (~14–22px).
+Focus-visible: `2px solid rgba(255,255,255,.82)` + `3px` offset. Primary actions ~44px min height. Status is always carried by text as well as color — the price verdict reads “Good time to buy”, never a bare green chip. The price chart labels its low and high and carries a full sentence in `aria-label`, so it is never the only way to get the numbers. Icons: stroke SVG in `components/icons.tsx` (~14–22px).
 
 ### Trip stage vocabulary (`trip-stage.ts`)
 
-Stages: `stopped` | `booked` | `paused` | `stale` | `searching` | `tracking`. `stageLabel()` feeds trip header meta and Trip Settings tracking summary. Not a visual component — compose with `.trip-meta`, disclosure `em`, or notices.
+Stages: `stopped` | `paused` | `stale` | `searching` | `tracking`. `stageLabel()` feeds trip header meta and Trip Settings tracking summary. Not a visual component — compose with `.trip-meta`, disclosure `em`, or notices.
 
 ---
 
@@ -122,37 +125,29 @@ Stages: `stopped` | `booked` | `paused` | `stale` | `searching` | `tracking`. `s
 #### Segmented tabs
 - **Classes:** `.tabs` (+ `button.active`, optional count `span`)
 - **Status:** `live`
-- **Job:** Trip results (Flights / Airlines / Browse) and Profile (Preferences / Travellers / Card).
+- **Job:** Trip results only — Top picks / Airlines / All flights. Profile is a single page with no tabs.
 - **Inputs:** Selected tab id; optional badge counts.
-- **Compose with:** `.shell` / `.settings-shell` (settings tabs get 3-column margin via `.settings-shell .tabs`).
-
-#### Profile header / profile tabs (legacy)
-- **Classes:** `.profile-header`, `.profile-tabs`, `.profile-tab-panel`, `.profile-inline-notice`
-- **Status:** `orphaned`
-- **Job:** Older profile chrome.
-- **Do not use when:** Building profile UI — use `.topbar` + `.tabs` as in `Profile.tsx`.
-
----
+- **Compose with:** `.shell`. Sits **below** the tracked flight card, never above it.
 
 ### Feedback
 
 #### Notices
 - **Classes:** `.notice`, `.notice-delay`, `.notice-mock-success`
 - **Status:** `live`
-- **Job:** Error/interrupt (coral); soft delay/info (sage); mock booking success.
+- **Job:** Error/interrupt (coral); soft delay/info (sage).
 - **Inputs:** Short message string; `role="status"` / `alert` as appropriate.
-- **Compose with:** Trip shell, booked flight hero.
+- **Compose with:** Trip shell, above the tracked flight card.
 
 #### Form error
 - **Classes:** `.form-error`
 - **Status:** `live`
 - **Job:** Inline save/API failure under forms.
-- **Compose with:** PassengerForm, AccountPreferences, TripSettings, Duffel orphan form.
+- **Compose with:** AccountPreferences, TripSettings.
 
 #### Set note
 - **Classes:** `.set-note`
 - **Status:** `live`
-- **Job:** Quiet helper copy under panels, payments, watchlist panels.
+- **Job:** Quiet helper copy under panels — price-history read, evidence provenance, watchlist panels.
 - **Compose with:** Almost any card or empty.
 
 #### Results empty
@@ -162,14 +157,6 @@ Stages: `stopped` | `booked` | `paused` | `stale` | `searching` | `tracking`. `s
 - **Inputs:** Searching vs needs-manual-search vs completed; optional primary search button.
 - **Compose with:** FlightsTab, AirlinesTab, BrowseTab, WatchlistDetail miss.
 
-#### Profile / traveller empty
-- **Classes:** `.profile-empty-state` (+ `.form-error`), `.traveller-empty-state`
-- **Status:** `live`
-- **Job:** Loading / error / zero travellers in profile flows.
-- **Compose with:** `.profile-add-button`.
-
----
-
 ### Actions
 
 #### Trip controls / save
@@ -177,40 +164,20 @@ Stages: `stopped` | `booked` | `paused` | `stale` | `searching` | `tracking`. `s
 - **Status:** `live`
 - **Job:** Pause / resume / refresh / stop; full-width form saves.
 - **Inputs:** Busy/disabled; confirm on stop.
-- **Compose with:** Tracking disclosure, PassengerForm, AccountPreferences, trip brief.
+- **Compose with:** Tracking disclosure, AccountPreferences, trip brief.
 
 #### Primary / secondary sheet CTAs
 - **Classes:** `.primary-action`, `.secondary-action`
 - **Status:** `live`
-- **Job:** Pill CTAs in filter sheet footer, traveller book row, traveller sheet footer.
+- **Job:** Pill CTAs in the filter sheet footer.
 - **Compose with:** `.filter-sheet` footer, `.traveller-book-row`, `.traveller-sheet-form`.
-
-#### Profile add button
-- **Classes:** `.profile-add-button`
-- **Status:** `live`
-- **Job:** Add traveller / retry CTA in list empties.
-- **Compose with:** Travellers list heading / empty state.
 
 #### Icon button
 - **Classes:** `.icon-button`
 - **Status:** `live`
 - **Job:** 34×34 close control on sheets.
 - **Inputs:** `aria-label`; SVG child (`CloseIcon`).
-- **Compose with:** FilterSheet / traveller sheet headers.
-
-#### Danger link
-- **Classes:** `.danger-link`
-- **Status:** `live`
-- **Job:** Text-style destructive action (delete traveller).
-- **Compose with:** `.traveller-detail-actions`.
-
-#### Booking action grid
-- **Classes:** `.booking-actions` (+ `button.danger`)
-- **Status:** `live`
-- **Job:** Mock booking secondary actions (baggage / cancel / etc.).
-- **Compose with:** `.booking-section`, mock action panels.
-
----
+- **Compose with:** FilterSheet header.
 
 ### Status chips and badges
 
@@ -220,25 +187,6 @@ Stages: `stopped` | `booked` | `paused` | `stale` | `searching` | `tracking`. `s
 - **Job:** “Your preference”, “Watching”, “Mixed” on cards.
 - **Compose with:** `.card-top`, `.airline-card-title`.
 - **Do not use when:** Prototype labelling — that was `.mock-pill` (orphaned).
-
-#### Mock pill
-- **Classes:** `.mock-pill`
-- **Status:** `orphaned`
-- **Job:** Amber prototype label (CSS only).
-- **Do not use when:** Shipping UI — prefer live `.pill` or booking status chips.
-
-#### Readiness badge
-- **Classes:** `.readiness-badge.ready` / `.incomplete`
-- **Status:** `live`
-- **Job:** Traveller booking-ready vs incomplete.
-- **Inputs:** `readyForBooking` boolean + short label.
-- **Compose with:** Traveller summary cards, picker rows, editor heading.
-
-#### Booking status
-- **Classes:** `.booking-status.confirmed` / `.cancelled`
-- **Status:** `live`
-- **Job:** Uppercase status chip on booked-flight hero.
-- **Compose with:** `.booking-identity-row`.
 
 #### Watchlist toggle
 - **Classes:** `.watchlist-toggle` (+ `.watching`)
@@ -253,11 +201,38 @@ Stages: `stopped` | `booked` | `paused` | `stale` | `searching` | `tracking`. `s
 - **Job:** Manual refresh beside watchlist price.
 - **Compose with:** `.watchlist-summary-top`.
 
-#### Traveller state (disclosure)
-- **Classes:** `em.traveller-state.ready` / `.warn` / `.quiet`
+### The watched flight
+
+#### Tracked flight card
+- **Classes / components:** `.tracked-card`, `.tracked-top`, `.tracked-headline`, `.tracked-change` (+ `.up` / `.down`), `.tracked-read`, `.tracked-foot`, `.tracked-more`, `TrackedFlightCard`
 - **Status:** `live`
-- **Job:** Right-side status on Trip Settings traveller disclosure.
-- **Compose with:** `.settings-disclosure` summary.
+- **Job:** The one flight being watched, and whether now is the moment to buy. Sage-tinted so it reads as the answer, not another result.
+- **Inputs:** `TrackedPriceHistory`; the matching `VerifiedOffer` when it is still in the verified set; `onOpen`.
+- **Compose with:** `.eyebrow`, `.verdict-pill`, `PriceChart`, `.price`.
+- **Placement:** Directly under `.trip-heading`, **above** `.tabs`. Exactly one per trip, and only once a flight is watched.
+- **Do not use when:** Showing an option the traveller has not chosen — that is a recommendation card.
+
+#### Verdict pill
+- **Classes:** `.verdict-pill` (+ `.book_now` / `.wait`; `.good_price` and `.holding` are neutral)
+- **Status:** `live`
+- **Job:** Captain's read on the watched fare, in words.
+- **Inputs:** `PriceVerdict` from `summarizePriceHistory` — never a locally computed judgement.
+- **Compose with:** `.tracked-top`.
+- **Do not use when:** Any status that is not a price verdict — use `.pill`.
+
+#### Price chart
+- **Classes / components:** `.tracked-chart`, `.tracked-chart-plot`, `.tracked-chart-line`, `.tracked-chart-fill`, `.tracked-chart-now`, `.tracked-chart-empty`, `PriceChart`
+- **Status:** `live`
+- **Job:** One fare over time. Area + line, low/high in the caption, a dot at today.
+- **Inputs:** `TrackedPriceHistory`; optional `height` (64 on the card, 110 in detail).
+- **Notes:** The SVG stretches with `preserveAspectRatio="none"`, so the “now” dot is a positioned element outside it — drawn inside it would be an ellipse and clipped at the edge. Under two points it renders `.tracked-chart-empty` instead of a misleading flat line.
+- **Compose with:** `.tracked-card`, watchlist detail panel, `.tracked-stats`.
+
+#### Tracked stats
+- **Classes:** `.tracked-stats`
+- **Status:** `live`
+- **Job:** Now / Lowest / Highest / Average under the detail chart.
+- **Compose with:** `.watchlist-panel`, `PriceChart`.
 
 ---
 
@@ -268,8 +243,8 @@ Stages: `stopped` | `booked` | `paused` | `stale` | `searching` | `tracking`. `s
 - **Status:** `live`
 - **Job:** Ranked suggestion or browsable/watched offer: mode/airline label, optional pill, price, metrics, schedule spine.
 - **Inputs:** `VerifiedOffer`; ranking mode or airline name; selected/watching flag; `onOpen`.
-- **Compose with:** `.card-top`, `.mode-label`, `.pill`, `.price`, `.metrics`, `ScheduleSpine`, `.watchlist-divider`.
-- **Do not use when:** Inventing a second offer-card layout — App `OfferRow` already mounts this class.
+- **Compose with:** `.card-top`, `.mode-label`, `.pill`, `.price`, `.metrics`, `ScheduleSpine`.
+- **Do not use when:** Inventing a second offer-card layout — App `OfferRow` already mounts this class. Also never for the watched flight: that is the tracked flight card.
 
 #### Airline card
 - **Classes / components:** `.airline-card`, `.airline-grid`, `.airline-monogram`, `.airline-card-title`, `.carrier-list`, `.airline-stats`, `AirlinesTab`
@@ -290,14 +265,6 @@ Stages: `stopped` | `booked` | `paused` | `stale` | `searching` | `tracking`. `s
 - **Status:** `live`
 - **Job:** Vertical stack for browse results (children are recommendation cards).
 - **Compose with:** BrowseTab, `.browse-toolbar`.
-
-#### Watchlist divider
-- **Classes:** `.watchlist-divider`
-- **Status:** `live`
-- **Job:** “Recommendations” hairline separator between watched and suggested cards.
-- **Compose with:** `.recommendation-grid`.
-
----
 
 ### Explanation (watchlist detail)
 
@@ -320,7 +287,7 @@ Stages: `stopped` | `booked` | `paused` | `stale` | `searching` | `tracking`. `s
 - **Status:** `live`
 - **Job:** Dotted-rail segment itinerary on watchlist detail.
 - **Inputs:** `Segment[]`.
-- **Do not use when:** Booked-flight “now” card — that uses the booked `.flight-timeline-*` end/rail recipe below.
+- **Do not use when:** Showing how a fare moved over time — that is the tracked flight chart.
 
 #### Peer price plot
 - **Classes / components:** `.peer-plot`, `.peer-plot-track`, `.peer-plot-fill`, `.peer-plot-median`, `.peer-plot-pin`, `.peer-plot-labels`, `PeerPricePlot`
@@ -378,7 +345,7 @@ Stages: `stopped` | `booked` | `paused` | `stale` | `searching` | `tracking`. `s
 - **Job:** Sort + stops/airlines/airports/departure filters with sticky header/footer.
 - **Inputs:** `BrowsePreferences`, offer universe, open flag, apply/close.
 - **Compose with:** `.icon-button`, `.primary-action` / `.secondary-action` footer.
-- **Do not use when:** Non-filter sheets — reuse backdrop/bottom-sheet but booked traveller sheet has its own `.traveller-sheet*` variants.
+- **Do not use when:** Anything but sort/filter — the filter sheet is the only sheet Captain mounts.
 
 ---
 
@@ -387,21 +354,21 @@ Stages: `stopped` | `booked` | `paused` | `stale` | `searching` | `tracking`. `s
 #### Settings card / disclosure
 - **Classes:** `.settings-card`, `.settings-disclosure`, `.settings-body`, `.settings-list`
 - **Status:** `live`
-- **Job:** Collapsible settings sections (Tracking, Brief, Traveller, Activity, Notifications, Flight preferences) or static card shell (payment, secure setup).
+- **Job:** Collapsible settings sections (Tracking, Brief, Activity, Notifications, Flight preferences) or a static card shell.
 - **Inputs:** Summary title + `em` meta; body form or dl.
 - **Compose with:** `.trip-controls`, `.form-grid`, `.ranking-options`, `.switch-setting`, `.read-only-field`, `.entity-row`, AirlineSearchSelect.
 
 #### Read-only field
 - **Classes:** `.read-only-field`
 - **Status:** `live`
-- **Job:** Bordered read-only value (multi-city route note, assigned traveller link, payment fixture line).
-- **Compose with:** Trip brief, TravellerCard, Payment.
+- **Job:** Bordered read-only value (multi-city route note).
+- **Compose with:** Trip brief.
 
 #### Entity row
 - **Classes:** `.entity-row`
 - **Status:** `live`
-- **Job:** Horizontal action/meta row (Change/Add traveller; payment fixture line).
-- **Compose with:** Settings body, live Payment, `.read-only-field` / `.settings-list` (adjacent spacing via CSS).
+- **Job:** Horizontal action/meta row inside a settings body.
+- **Compose with:** Settings body, `.read-only-field` / `.settings-list` (adjacent spacing via CSS).
 
 #### Ranking options
 - **Classes:** `.ranking-options` (+ `label.checked`)
@@ -420,7 +387,7 @@ Stages: `stopped` | `booked` | `paused` | `stale` | `searching` | `tracking`. `s
 - **Classes:** `.form-grid` (+ `.two`, `.three`)
 - **Status:** `live`
 - **Job:** Responsive field grids (collapse ≤520px).
-- **Compose with:** Trip brief, PassengerForm, AccountPreferences.
+- **Compose with:** Trip brief, AccountPreferences.
 
 #### Airline search select
 - **Classes / components:** `.airline-search`, `.airline-search-field`, `.airline-chip`, `.airline-search-results`, `AirlineSearchSelect`
@@ -429,103 +396,6 @@ Stages: `stopped` | `booked` | `paused` | `stale` | `searching` | `tracking`. `s
 - **Inputs:** Code list; onChange; placeholder.
 - **Compose with:** Trip brief preferred/excluded; AccountPreferences.
 
-#### Payment (live fixture)
-- **Classes / components:** `.payment-settings`, `.payment-card-list`, `.entity-row`, `Payment`
-- **Status:** `live`
-- **Job:** Prototype test-card display — never collects a real card.
-- **Inputs:** `TEST_PAYMENT_METHOD` fixture.
-- **Compose with:** `.settings-card`, `.read-only-field`, `.set-note`, `.entity-row`.
-- **Do not use when:** Reintroducing wallet-card chrome or Duffel iframe capture — product boundary is display-only fixture.
-
----
-
-### Traveller and book
-
-#### Traveller list / summary card
-- **Classes / components:** `.traveller-list-view`, `.traveller-card-list`, `.traveller-summary-card`, `.traveller-avatar`, `.traveller-card-main`, `.card-chevron`, `Travellers`
-- **Status:** `live`
-- **Job:** Profile traveller roster with initials avatar, readiness badge, chevron.
-- **Inputs:** `Passenger[]`; navigate to editor.
-- **Compose with:** `.profile-section-heading`, `.profile-add-button`, readiness badge.
-
-#### Traveller editor
-- **Classes:** `.traveller-editor`, `.traveller-editor-body`, `.profile-section-heading`, `.traveller-detail-heading`, `.traveller-detail-actions`
-- **Status:** `live`
-- **Job:** Full-screen add/edit traveller with sticky topbar.
-- **Compose with:** PassengerForm, readiness badge, danger-link.
-
-#### Passenger form
-- **Classes / components:** `.traveller-form`, `.form-section`, `.form-section-heading`, `.required-note`, `.secure-label`, `.input-with-action`, `.passport-number-field`, `PassengerForm`
-- **Status:** `live`
-- **Job:** Government name, contact, encrypted travel document sections.
-- **Inputs:** Form values; busy/error; submit handler.
-- **Compose with:** `.form-grid`, `.save-button`, `.set-note`.
-
-#### Secure summary
-- **Classes:** `.secure-summary`
-- **Status:** `orphaned`
-- **Job:** Sage summary grid for secured fields (CSS only).
-- **Do not use when:** Live traveller detail — form sections + secure-label cover the job.
-
-#### Trip traveller picker
-- **Classes / components:** `.trip-traveller-picker`, `.trip-traveller-heading`, `.traveller-picker-list`, `.traveller-picker-radio`, `.traveller-picker-person`, `.traveller-picker-empty`, `.traveller-book-row`, `TripTravellerPicker`
-- **Status:** `live`
-- **Job:** Choose saved traveller + Book CTA on watchlist detail.
-- **Inputs:** Trip id, passengers, selection, canBook, onBook.
-- **Compose with:** `.eyebrow`, `.quiet-link`, readiness badge, `.primary-action`.
-
----
-
-### Sheets (non-filter)
-
-#### Traveller sheet (booked mock)
-- **Classes:** `.traveller-sheet-backdrop`, `.traveller-sheet`, `.traveller-sheet-form`, `.traveller-sheet-row`, BookedFlight sheet helpers
-- **Status:** `live`
-- **Job:** Edit mock booking traveller fields in a bottom sheet.
-- **Compose with:** `.sheet-backdrop` / `.bottom-sheet` base, `.icon-button`, primary/secondary actions.
-
----
-
-### Booking mock
-
-#### Booked flight screen
-- **Classes / components:** `.booked-flight`, `.booking-hero`, `.booking-identity-row`, `BookedFlight`
-- **Status:** `live`
-- **Job:** Prototype post-book surface when trip stage is booked.
-- **Inputs:** `MockBooking`; cancel/seat/baggage/traveller mutations.
-- **Compose with:** Status chip, flight-now card, personal tiles, booking sections, prototype disclaimer.
-
-#### Flight now card
-- **Classes:** `.flight-now-card`, `.flight-status-block` (+ `.is-on-time` / `.is-cancelled`), `.flight-timeline-end`, `.flight-timeline-meta`, `.flight-timeline-time`, `.flight-timeline-rail`, `.flight-overnight`, `.flight-facility-chips`
-- **Status:** `live`
-- **Job:** Status headline + airport/time ends with rail duration (distinct from watchlist `FlightTimeline`).
-- **Compose with:** `.booking-hero` / section stack.
-
-#### Personal tiles
-- **Classes:** `.flight-personal-tiles`, `.flight-personal-tile`, `.seat-tile`, `.booking-code-input`
-- **Status:** `live` (`.flight-personal-tile-top` / `.flight-personal-tile-body` → `orphaned` substructure unused by current JSX)
-- **Job:** Confirmation code input + seat tile.
-- **Compose with:** BookedFlight.
-
-#### Notes / route history
-- **Classes:** `.notes-tile` (+ `.placeholder`), `.route-history-stats`, `.route-history-empty`, `.flight-facts`
-- **Status:** `orphaned`
-- **Do not use when:** Booked flight — current screen uses good-to-know list + mock activity instead.
-
-#### Booking sections
-- **Classes:** `.booking-section`, `.booking-section-heading`, `.booking-traveller-row`, `.good-to-know-list`, `.booking-receipt`, `.booking-receipt-lines`, `.booking-receipt-total`, `.booking-receipt-card`, `.prototype-disclaimer`
-- **Status:** `live`
-- **Job:** Traveller row, tips, updates, receipt, prototype note.
-- **Compose with:** traveller avatar/main, mock activity list.
-
-#### Mock activity / seat / cancel panels
-- **Classes:** `.mock-activity-list`, `.mock-action-panel` (+ `.danger-panel`), `.mock-action-heading`, `.seat-picker`, `.mock-confirm-action`
-- **Status:** `live`
-- **Job:** Prototype updates timeline and amber/coral action confirmations.
-- **Compose with:** BookedFlight sheets/panels.
-
----
-
 ### Stage chrome (copy helpers)
 
 Not separate CSS atoms — wire stage into existing chrome:
@@ -533,7 +403,6 @@ Not separate CSS atoms — wire stage into existing chrome:
 | Stage | Typical live surface |
 | --- | --- |
 | `stopped` | Settings intro “Trip stopped”; empty trip hero |
-| `booked` | `BookedFlight` instead of Flights tabs; BookingCard in settings |
 | `paused` | `.eyebrow` “Tracking paused”; pause controls |
 | `stale` | `stageLabel` “Prices stale”; Track + Stop controls |
 | `searching` | `.results-empty.searching`; header meta “Searching” |
@@ -541,39 +410,12 @@ Not separate CSS atoms — wire stage into existing chrome:
 
 ---
 
-### Misc / unused heading atoms
-
-#### Section heading / section label
-- **Classes:** `.section-heading`, `.section-label`
-- **Status:** `orphaned` (responsive rules still mention `.section-heading`)
-- **Do not use when:** Prefer `.eyebrow` + local headings (`.profile-section-heading`, `.flight-details-heading`, `.booking-section-heading`).
-
-#### Icons
-- **Components:** `FilterIcon`, `ChevronRightIcon`, `CloseIcon`, `FlightIcon`, `SearchRadarIcon` in `icons.tsx`
-- **Status:** `live`
-- **Job:** Stroke icons for filter chrome and empty searching state.
-- **Compose with:** Browse toolbar, ResultsEmpty, sheets.
-
----
-
-## 3. Reuse-first rules
-
-1. **Search this catalog** before adding a class or component.
-2. **Ignore `orphaned` entries** when generating new UI — they are leftover CSS only.
-3. **Compose live atoms** for new jobs (e.g. a day filter → FilterSheet choice rows or tabs + `.recommendation-card` list — do not invent a third offer card).
-4. **Add a new component only** when no live entry covers the job; then document it here with status `live`.
-5. **Canonical prefers**
-   - Offer presentation → `.recommendation-card` (App `OfferRow` uses this)
-   - Payment → live `Payment.tsx` fixture + `.entity-row` / `.read-only-field`
-   - Profile chrome → `.topbar` + `.tabs` (not `.profile-header` / `.profile-tabs`)
-   - Itinerary on watchlist → `FlightTimeline`; on booked mock → `.flight-timeline-end` / rail recipe
-
 ### Known drift
 
-**Fixed (conformance pass):** panel fills use `var(--panel)` / `var(--panel-soft)`; sheet-exit-aligned transitions use `--duration-sheet-exit`; orphaned `.offer-row` / payment-card / invoice CSS and unused `Invoices` / `DuffelCardMount` modules removed; Payment/TripSettings spacing via CSS adjacency rules.
+**Fixed:** panel fills use `var(--panel)` / `var(--panel-soft)`; sheet-exit-aligned transitions use `--duration-sheet-exit`. Every booking, payment, and traveller class was deleted along with its component, and `styles.css` now contains no rule whose selector cannot match the mounted tree.
 
 **Still open:**
 
 - **Radius sprawl:** cards use `--radius-card` (19px); controls/forms use 7–15px; sheets 22px; pills often `99px`.
 - **Peer-plot pin:** soft ring (`box-shadow: 0 0 0 4px …`) — local exception to “no glow” guidance.
-- **Leftover CSS:** `.mock-pill`, `.tag`, `.profile-header` / `.profile-tabs`, `.secure-summary`, `.section-heading`, `.card-form*` remain unmounted — treat as `orphaned`, do not revive without documenting.
+- **Two price visualisations:** the tracked flight card charts one fare over time; the peer plot places one fare against its peers. They answer different questions and deliberately look different, but a reader can mistake one for the other.

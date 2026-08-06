@@ -14,42 +14,36 @@ shared credentials, redirects, or access to Captain profiles and trips.
 
 Each Telegram traveller has one `TravellerProfile` (preferences) and one active
 or paused trip at a time (`MAX_ACTIVE_TRIPS_PER_USER`); a new trip needs the
-current one stopped or completed. Passenger identity lives in `captain.passengers` and is
-assigned to trips via `captain.trip_passengers`. Payment processing is outside
-the prototype boundary: the UI always uses one display-only test-card fixture,
-the service reports payments disabled, and environment configuration cannot
-enable card capture. Legacy payment tables and the worker deletion queue remain
-only to clean up tokenised cards created before this boundary was adopted.
+current one stopped or completed.
+
+Captain holds no traveller identity and no payment instrument. There is no
+passenger record, no card, and no booking: migration 012 dropped the tables
+that once supported a prototype purchase, and the only personal data Captain
+keeps is a Telegram ID, a timezone, and preferences.
 
 Confirmed trip currency is immutable; changing the profile default affects
 only future trips.
 
-The web app home is `/trips`, listing the traveller's trips (`/` is Eve's landing page). `/trip/:id` is the trip dashboard and
-`/trip/:id/settings` holds everything scoped to that one search — tracking controls,
-the trip brief, the traveller assigned to it, and its activity log. What that screen
-offers is driven by the trip's stage (`src/trip-stage.ts`); once a mock booking exists
-it drops tracking and the brief and shows the booking instead. `/profile` is the
-account surface and is never scoped to a trip: Preferences, Travellers, and
-a Test card tab. `?tab=` selects the active tab; the test card keeps the legacy
-`payment` value for compatibility. Nothing inside a trip links to the profile.
+The web app home is `/trips`, listing the traveller's trips (`/` is Eve's landing
+page). `/trip/:id` is the trip dashboard and `/trip/:id/settings` holds everything
+scoped to that one search — tracking controls, the trip brief, and its activity
+log. What that screen offers is driven by the trip's stage (`src/trip-stage.ts`).
+`/profile` is the account surface and is never scoped to a trip: notifications
+and flight ranking, on one page with no tabs. Nothing inside a trip links to it.
+
+The trip dashboard leads with the watched flight. A traveller watches one
+itinerary at a time; that flight gets a card above the result tabs carrying its
+price series, its low and high, and Captain's read on whether to buy. It is
+deliberately absent from the picks below, which are the alternatives to it.
 
 Trip and read-only profile dashboard links still use deterministic `#access` bearer
 tokens for backwards compatibility with live beta Telegram history; those
-tokens may only call an explicit allowlist of trip/profile routes. New
-Telegram profile links target `/profile`, deep-linking a tab where it helps
-(`?tab=payment` from `/payment`). All passenger and account mutations require a
-single-use login token in the URL **query string** (`/auth/link?t=…`). The old
-`/settings`, `/preferences`, `/travellers`, and `/payment` paths remain compatibility
-aliases and redirect to the profile tab each one used to mean.
-
-The booking transition is intentionally a prototype boundary. A mock booking is
-stored only in browser local storage and drives a post-booking flight activity
-screen with simulated seat, baggage, and cancellation actions. It never invokes
-Duffel Orders, an airline booking endpoint, or a payment charge. The default
-test card is display-only and Captain never collects or charges a real card.
-Tokens expire after 15 minutes and exchange for a hashed, revocable, HttpOnly,
-SameSite=Lax session cookie lasting 30 days. The authenticated API exposes the
-current profile, selected trip, and passengers.
+tokens may only call an explicit allowlist of trip/profile routes. Account
+deletion requires a single-use login token in the URL **query string**
+(`/auth/link?t=…`). Tokens expire after 15 minutes and exchange for a hashed,
+revocable, HttpOnly, SameSite=Lax session cookie lasting 30 days. The old
+`/settings`, `/preferences`, `/travellers`, and `/payment` paths remain
+compatibility aliases that redirect to `/profile`.
 
 ## Search flow
 
@@ -79,10 +73,22 @@ traveller in a rolling 24 hours. Each sent Telegram message ID points to an
 immutable recommendation snapshot so a quoted reply explains that exact
 historical comparison.
 
+`summarizePriceHistory` in `@agents/flight-domain` turns the watched flight's
+observations into the current price, its range, and a verdict. The dashboard,
+the `get_trip` agent tool, and anything else that speaks about timing all read
+it, so the card and the conversation cannot disagree. It refuses to call a
+trend from a single day and stops advising anyone to wait once departure is
+close enough that waiting cannot pay off.
+
 ## Public beta controls
 
 Production originally started with `CAPTAIN_PUBLIC_BETA_ENABLED=false`.
 The capped public beta now runs with the gate enabled; switching it back to
 `false` closes onboarding without interrupting existing travellers. Capacity
-is capped at 25 travellers. The worker has a global tracking kill switch, adaptive
-12/6/3-hour checks, and six-hour manual refresh limits.
+is capped at 25 travellers. The worker has a global tracking kill switch.
+
+Tracking runs one search a day until the end of the departure day
+(`trackingRunEndsAt`), bounded by `MAX_TRACKING_RUN_MS` for a departure that
+never arrives. Fares move day to day, and a trip booked months out is exactly
+the one worth watching that long — which is why the former inactivity check-in
+and its auto-pause are gone.
