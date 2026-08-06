@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Trip, Watch } from "../src/domain.js";
-import { stageLabel, tripStage } from "../src/trip-stage.js";
+import { shouldAutoSearchOnOpen, stageLabel, tripStage } from "../src/trip-stage.js";
 
 describe("trip stage", () => {
   it("reports a stopped trip before anything else", () => {
@@ -41,6 +41,38 @@ describe("trip stage", () => {
     expect(tripStage({ trip: trip(), watch: watch() })).toBe("tracking");
   });
 
+  it("checks prices when a tracked trip is opened, whatever the schedule says", () => {
+    expect(shouldAutoSearchOnOpen({ trip: trip(), watch: watch() })).toBe(true);
+    expect(shouldAutoSearchOnOpen({
+      trip: trip(),
+      watch: watch({ status: "scheduled", nextCheckAt: dayAway(), trackingStartsAt: dayAway() })
+    })).toBe(true);
+  });
+
+  it("leaves a stopped, finished, or booked trip alone on open", () => {
+    expect(shouldAutoSearchOnOpen({ trip: null, watch: watch() })).toBe(false);
+    expect(shouldAutoSearchOnOpen({ trip: trip(), watch: null })).toBe(false);
+    expect(shouldAutoSearchOnOpen({ trip: trip(), watch: watch(), booked: true })).toBe(false);
+    expect(shouldAutoSearchOnOpen({ trip: trip({ status: "paused" }), watch: watch() })).toBe(false);
+    expect(shouldAutoSearchOnOpen({ trip: trip(), watch: watch({ status: "paused" }) })).toBe(false);
+    expect(shouldAutoSearchOnOpen({ trip: trip(), watch: watch({ status: "completed" }) })).toBe(false);
+  });
+
+  it("skips the open check while a run is already searching", () => {
+    expect(shouldAutoSearchOnOpen({ trip: trip(), watch: watch({ lastCheckAt: null }) })).toBe(false);
+    expect(shouldAutoSearchOnOpen({
+      trip: trip(),
+      watch: watch({ nextCheckAt: new Date(Date.now() + 30_000).toISOString() })
+    })).toBe(false);
+  });
+
+  it("leaves a run past its window to Track, which a refresh cannot restart", () => {
+    expect(shouldAutoSearchOnOpen({
+      trip: trip(),
+      watch: watch({ runEndsAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() })
+    })).toBe(false);
+  });
+
   it("labels a tracking stage with check freshness", () => {
     expect(stageLabel("stale")).toBe("Prices stale");
     expect(stageLabel("stopped")).toBe("");
@@ -48,6 +80,10 @@ describe("trip stage", () => {
     expect(stageLabel("tracking", null)).toBe("Tracking");
   });
 });
+
+function dayAway(): string {
+  return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+}
 
 function trip(overrides: Partial<Trip> = {}): Trip {
   return {
@@ -83,7 +119,7 @@ function watch(overrides: Partial<Watch> = {}): Watch {
     cadenceHours: 6,
     trackingDurationHours: 72,
     runStartedAt: "2026-08-04T00:00:00.000Z",
-    runEndsAt: "2026-08-07T00:00:00.000Z",
+    runEndsAt: dayAway(),
     completedAt: null,
     checksCompleted: 2,
     nextCheckAt: hourAway,

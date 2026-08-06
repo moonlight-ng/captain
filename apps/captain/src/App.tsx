@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, Fragment, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, Fragment, type Dispatch, type SetStateAction } from "react";
 
 import {
   ApiError,
@@ -63,7 +63,7 @@ import {
   writeMockBooking,
   type MockBooking
 } from "./mock-booking";
-import { isWatchSearching } from "./trip-stage";
+import { isWatchSearching, shouldAutoSearchOnOpen } from "./trip-stage";
 import { BookedFlight } from "./screens/BookedFlight";
 import { Home } from "./screens/Home";
 import { Profile } from "./screens/Profile";
@@ -136,6 +136,8 @@ export function App() {
   const [watchedOfferCache, setWatchedOfferCache] = useState<Record<string, VerifiedOffer>>({});
   const [searchBusy, setSearchBusy] = useState(false);
   const [mockBooking, setMockBooking] = useState<MockBooking | null>(null);
+  /** Trips already checked on arrival, so a reload of state can't re-fire it. */
+  const autoSearchedTripIds = useRef(new Set<string>());
   const page = currentPage();
 
   async function load() {
@@ -263,6 +265,63 @@ export function App() {
     return items;
   }, [personSelectionKeys, watchedOfferCache, offers]);
 
+  const needsManualSearch = Boolean(
+    trip && trip.status !== "paused" && watch?.status === "scheduled"
+  );
+
+  /**
+   * A background search leaves the page as it is: results already on screen
+   * stay put and stay interactive, and a failure waits for the next check
+   * rather than interrupting with an error nobody asked for.
+   */
+  async function searchFlights({ background = false } = {}) {
+    if (!trip) return;
+    if (!background) {
+      setSearchBusy(true);
+      setError("");
+    }
+    try {
+      await tripAction("refresh", trip.id, trip.version);
+      const next = await getTrip(trip.id);
+      setTripData((current) => {
+        if (next.offers.length === 0 && (current?.offers.length ?? 0) > 0) {
+          return { ...next, offers: current!.offers };
+        }
+        return next;
+      });
+    } catch {
+      if (!background) setError("That search didn’t start. Try again.");
+    } finally {
+      if (!background) setSearchBusy(false);
+    }
+  }
+
+  async function trackPrices() {
+    if (!trip) return;
+    setSearchBusy(true);
+    setError("");
+    try {
+      await tripAction("track", trip.id, trip.version);
+      const next = await getTrip(trip.id);
+      setTripData(next);
+    } catch {
+      setError("That tracking run didn’t start. Try again.");
+    } finally {
+      setSearchBusy(false);
+    }
+  }
+
+  // Opening a trip checks prices right away, so the page shows what fares cost
+  // now rather than whatever the last scheduled check left behind. With nothing
+  // to show yet the search takes over the page; with results already up it runs
+  // behind them and the poller swaps in whatever comes back.
+  useEffect(() => {
+    if (page !== "trip" || !trip || autoSearchedTripIds.current.has(trip.id)) return;
+    if (!shouldAutoSearchOnOpen({ trip, watch, booked: readMockBooking(trip.id) !== null })) return;
+    autoSearchedTripIds.current.add(trip.id);
+    void searchFlights({ background: offers.length > 0 });
+  }, [page, trip?.id, trip?.status, watch?.status]);
+
   if (loading) return <CenteredState title="Opening Captain…" detail="Loading your trip." />;
   if (!authenticated) {
     return (
@@ -304,45 +363,6 @@ export function App() {
         onBack={() => { window.location.href = tripHref(trip?.id); }}
       />
     );
-  }
-
-  const needsManualSearch = Boolean(
-    trip && trip.status !== "paused" && watch?.status === "scheduled"
-  );
-
-  async function searchFlights() {
-    if (!trip) return;
-    setSearchBusy(true);
-    setError("");
-    try {
-      await tripAction("refresh", trip.id, trip.version);
-      const next = await getTrip(trip.id);
-      setTripData((current) => {
-        if (next.offers.length === 0 && (current?.offers.length ?? 0) > 0) {
-          return { ...next, offers: current!.offers };
-        }
-        return next;
-      });
-    } catch {
-      setError("That search didn’t start. Try again.");
-    } finally {
-      setSearchBusy(false);
-    }
-  }
-
-  async function trackPrices() {
-    if (!trip) return;
-    setSearchBusy(true);
-    setError("");
-    try {
-      await tripAction("track", trip.id, trip.version);
-      const next = await getTrip(trip.id);
-      setTripData(next);
-    } catch {
-      setError("That tracking run didn’t start. Try again.");
-    } finally {
-      setSearchBusy(false);
-    }
   }
 
   const emptySearch = {
