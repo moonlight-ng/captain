@@ -114,7 +114,8 @@ onboarding without interrupting existing travellers.
 
 - Maximum 25 travellers.
 - One check a day per trip, until the day the trip departs.
-- At most two improvement alerts in a rolling 24-hour period.
+- One improvement alert in a rolling 24-hour period, or two if the traveller
+  raises the cap in Profile.
 - Deferred searches keep the last verified results and show delayed tracking.
 
 Public launch remains gated by the live evaluation corpus against Duffel. It

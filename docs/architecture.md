@@ -68,10 +68,11 @@ Fastest. Any itinerary using an excluded carrier is removed. Journey duration
 is the sum of each leg's elapsed flight time, excluding destination stays.
 
 Improvement alerts require a 5% price reduction, 10% journey-time reduction,
-or 10% Balanced-score improvement, with at most two improvement alerts per
-traveller in a rolling 24 hours. Each sent Telegram message ID points to an
-immutable recommendation snapshot so a quoted reply explains that exact
-historical comparison.
+or 10% Balanced-score improvement, with at most one improvement alert per
+traveller in a rolling 24 hours. That cap is the default; a traveller can raise
+it to two in Profile, which is the ceiling. Each sent Telegram message ID
+points to an immutable recommendation snapshot so a quoted reply explains that
+exact historical comparison.
 
 `summarizePriceHistory` in `@agents/flight-domain` turns the watched flight's
 observations into the current price, its range, and a verdict. The dashboard,
