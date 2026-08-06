@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 
 import { PostgresCaptainPlatformStore } from "@agents/flight-store";
 import { logEvent } from "@agents/observability";
-import { DuffelCardsClient, DuffelFlightSearchProvider } from "@agents/provider-duffel";
+import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
 import {
   FallbackFlightSearchProvider,
   FlysoarMcpFlightSearchProvider
@@ -17,11 +17,6 @@ const primaryProvider = new DuffelFlightSearchProvider({
   accessToken: env.duffelAccessToken,
   baseUrl: env.duffelBaseUrl
 });
-const cardsClient = new DuffelCardsClient({
-  accessToken: env.duffelAccessToken,
-  baseUrl: env.duffelBaseUrl,
-  cardsBaseUrl: env.duffelCardsBaseUrl
-});
 const fallbackProvider = new FlysoarMcpFlightSearchProvider({
   mcpUrl: env.flysoarMcpUrl
 });
@@ -33,7 +28,6 @@ const provider = new FallbackFlightSearchProvider({
 const worker = new FlightWorker({
   store,
   provider,
-  cardsClient,
   telegramBotToken: env.telegramBotToken,
   captainPublicUrl: env.captainPublicUrl,
   trackingEnabled: env.trackingEnabled,

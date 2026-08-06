@@ -1,4 +1,4 @@
-import type { TravellerProfile, TripPayload, Passenger, PaymentMethod, Invoice } from "./domain";
+import type { TravellerProfile, TripPayload } from "./domain";
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string, readonly body?: unknown) {
@@ -14,8 +14,6 @@ export function initializeAccessToken(): boolean {
   accessToken = token?.trim() ?? "";
   return Boolean(accessToken);
 }
-
-export type ProfileTab = "preferences" | "travellers" | "payment";
 
 /**
  * One flight inside a trip. Keyed by itinerary rather than offer id so the link
@@ -38,9 +36,9 @@ export function tripHref(tripId?: string, view: "trip" | "settings" = "trip"): s
   return withAccess(view === "settings" ? `${path}/settings` : path);
 }
 
-/** The account surface. It is never scoped to a trip. */
-export function profileHref(tab?: ProfileTab): string {
-  return withAccess(tab ? `/profile?${new URLSearchParams({ tab }).toString()}` : "/profile");
+/** The account surface: notifications and flight preferences. Never scoped to a trip. */
+export function profileHref(): string {
+  return withAccess("/profile");
 }
 
 function withAccess(target: string): string {
@@ -51,7 +49,6 @@ function withAccess(target: string): string {
 export function getSession(): Promise<{
   authenticated: true;
   displayName: string;
-  paymentsEnabled: boolean;
   credential: "session" | "legacy-bearer";
 }> {
   return api("/api/auth/session");
@@ -127,123 +124,6 @@ export async function setTripFlightSelection(
 
 export async function deleteAccount(): Promise<void> {
   await api("/api/me/account", { method: "DELETE", body: "{}" });
-}
-
-export async function listPassengers(): Promise<Passenger[]> {
-  return (await api<{ passengers: Passenger[] }>("/api/me/passengers")).passengers;
-}
-
-export async function createPassenger(
-  input: Omit<
-    Passenger,
-    | "id"
-    | "userId"
-    | "readyForBooking"
-    | "readyForInternationalTravel"
-    | "passportLast4"
-    | "createdAt"
-    | "updatedAt"
-    | "isDefault"
-  > & {
-    passportNumber?: string | null;
-    isDefault?: boolean;
-  }
-): Promise<Passenger> {
-  return (await api<{ passenger: Passenger }>("/api/me/passengers", {
-    method: "POST",
-    body: JSON.stringify(input)
-  })).passenger;
-}
-
-export async function updatePassenger(
-  id: string,
-  input: Partial<Pick<
-    Passenger,
-    | "givenName"
-    | "middleName"
-    | "familyName"
-    | "title"
-    | "gender"
-    | "bornOn"
-    | "email"
-    | "phoneNumber"
-    | "nationality"
-    | "countryOfResidence"
-    | "passportIssuingCountry"
-    | "passportExpiresOn"
-    | "isDefault"
-  >> & { passportNumber?: string | null }
-): Promise<Passenger> {
-  return (await api<{ passenger: Passenger }>(`/api/me/passengers/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(input)
-  })).passenger;
-}
-
-export async function deletePassenger(id: string): Promise<void> {
-  await api(`/api/me/passengers/${id}`, { method: "DELETE", body: "{}" });
-}
-
-export async function setDefaultPassenger(id: string): Promise<Passenger> {
-  return (await api<{ passenger: Passenger }>(`/api/me/passengers/${id}/default`, {
-    method: "POST",
-    body: "{}"
-  })).passenger;
-}
-
-export async function setTripTravellers(
-  tripId: string,
-  passengerIds: string[]
-): Promise<Passenger[]> {
-  return (await api<{ passengers: Passenger[] }>(
-    `/api/me/trip/travellers?${new URLSearchParams({ trip: tripId }).toString()}`,
-    {
-      method: "PUT",
-      body: JSON.stringify({ passengerIds })
-    }
-  )).passengers;
-}
-
-export async function listPaymentMethods(): Promise<PaymentMethod[]> {
-  return (await api<{ cards: PaymentMethod[] }>("/api/me/payments/cards")).cards;
-}
-
-export async function createPaymentClientKey(setupIntentId: string): Promise<{
-  clientKey: string;
-  setupIntentId: string;
-}> {
-  return api("/api/me/payments/client-key", {
-    method: "POST",
-    body: JSON.stringify({ setupIntentId })
-  });
-}
-
-export async function savePaymentMethod(input: {
-  setupIntentId: string;
-  cardId: string;
-  brand: string;
-  last4: string;
-  cardholderName: string;
-}): Promise<PaymentMethod> {
-  return (await api<{ card: PaymentMethod }>("/api/me/payments/cards", {
-    method: "POST",
-    body: JSON.stringify(input)
-  })).card;
-}
-
-export async function removePaymentMethod(id: string): Promise<void> {
-  await api(`/api/me/payments/cards/${id}`, { method: "DELETE", body: "{}" });
-}
-
-export async function setDefaultPaymentMethod(id: string): Promise<PaymentMethod> {
-  return (await api<{ card: PaymentMethod }>(`/api/me/payments/cards/${id}/default`, {
-    method: "POST",
-    body: "{}"
-  })).card;
-}
-
-export async function listInvoices(): Promise<Invoice[]> {
-  return (await api<{ invoices: Invoice[] }>("/api/me/invoices")).invoices;
 }
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {

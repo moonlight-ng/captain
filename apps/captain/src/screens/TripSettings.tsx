@@ -1,18 +1,11 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 
-import {
-  ApiError,
-  listPassengers,
-  setTripTravellers,
-  tripAction,
-  updateTripBrief
-} from "../api";
-import type { Passenger, TripPayload } from "../domain";
+import { ApiError, tripAction, updateTripBrief } from "../api";
+import type { TripPayload } from "../domain";
 import {
   activityLabel,
   dateLabel,
   dateRangeLabel,
-  formatMoney,
   label,
   relativeTime,
   routeLabel,
@@ -20,34 +13,25 @@ import {
   timestampLabel
 } from "../format";
 import { stageLabel, tripStage, type TripStage } from "../trip-stage";
-import type { MockBooking } from "../mock-booking";
 import { AirlineSearchSelect } from "../components/AirlineSearchSelect";
-import { travellerProfileHref } from "../components/TripTravellerPicker";
 
 export function TripSettings({
   tripData,
-  booking,
   trackingError,
-  sessionCredential,
   onTripChanged,
   onTripError,
-  onBookingChange,
   onBack
 }: {
   tripData: TripPayload | null;
-  booking: MockBooking | null;
   trackingError: string;
-  /** Assigning a traveller needs a revocable cookie session, not a legacy bearer. */
-  sessionCredential: boolean;
   onTripChanged: () => Promise<void>;
   onTripError: (value: string) => void;
-  onBookingChange: (booking: MockBooking) => void;
   onBack: () => void;
 }) {
   const [stopped, setStopped] = useState(false);
   const trip = stopped ? null : tripData?.trip ?? null;
   const watch = stopped ? null : tripData?.watch ?? null;
-  const stage = tripStage({ trip, watch, booked: Boolean(booking) });
+  const stage = tripStage({ trip, watch });
 
   if (!trip || !tripData) {
     return (
@@ -69,29 +53,15 @@ export function TripSettings({
         <p>{dateRangeLabel(trip.brief.departureWindow.start, trip.brief.departureWindow.end)}</p>
       </section>
 
-      {stage === "booked" && booking ? (
-        <BookingCard booking={booking} onChange={onBookingChange} onBack={onBack} />
-      ) : (
-        <>
-          <TrackingCard
-            data={tripData}
-            stage={stage}
-            error={trackingError}
-            onChanged={onTripChanged}
-            onStopped={() => setStopped(true)}
-            onError={onTripError}
-          />
-          <BriefCard trip={trip} onSaved={onTripChanged} />
-        </>
-      )}
-
-      <TravellerCard
-        tripId={trip.id}
-        assigned={tripData.travellers}
-        sessionCredential={sessionCredential}
-        readOnly={stage === "booked"}
-        onAssigned={onTripChanged}
+      <TrackingCard
+        data={tripData}
+        stage={stage}
+        error={trackingError}
+        onChanged={onTripChanged}
+        onStopped={() => setStopped(true)}
+        onError={onTripError}
       />
+      <BriefCard trip={trip} onSaved={onTripChanged} />
 
       <details className="settings-card settings-disclosure">
         <summary>
@@ -445,176 +415,6 @@ function BriefCard({
             {busy ? "Saving…" : saved ? "Updated" : "Update trip"}
           </button>
         </form>
-      </div>
-    </details>
-  );
-}
-
-function TravellerCard({
-  tripId,
-  assigned,
-  sessionCredential,
-  readOnly,
-  onAssigned
-}: {
-  tripId: string;
-  assigned: Passenger[];
-  sessionCredential: boolean;
-  readOnly: boolean;
-  onAssigned: () => Promise<void>;
-}) {
-  const [available, setAvailable] = useState<Passenger[]>([]);
-  const [changing, setChanging] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const traveller = assigned[0] ?? null;
-
-  useEffect(() => {
-    if (!sessionCredential) return;
-    void listPassengers().then(setAvailable).catch(() => setAvailable([]));
-  }, [sessionCredential]);
-
-  if (!sessionCredential) {
-    return (
-      <section className="settings-card">
-        <p className="eyebrow">Traveller</p>
-        <p>Open Captain from Telegram to assign a traveller.</p>
-      </section>
-    );
-  }
-
-  return (
-    <details className="settings-card settings-disclosure" open={!readOnly}>
-      <summary>
-        <span><strong>Traveller</strong></span>
-        <em className={`traveller-state ${travellerStateTone(traveller)}`}>
-          {travellerStateLabel(traveller, available.length)}
-        </em>
-      </summary>
-      <div className="settings-body">
-        {available.length === 0 ? (
-          <p>
-            <a className="quiet-link" href={travellerProfileHref(tripId, "new")}>Add a traveller</a>.
-          </p>
-        ) : traveller && (readOnly || !changing) ? (
-          <>
-            <a className="read-only-field" href={travellerProfileHref(tripId, traveller.id)}>
-              <strong>{traveller.givenName} {traveller.familyName}</strong>
-            </a>
-            <div className="entity-row">
-              {!readOnly && (
-                <button type="button" className="quiet-link" onClick={() => setChanging(true)}>
-                  Change
-                </button>
-              )}
-              <a className="quiet-link" href={travellerProfileHref(tripId, "new")}>Add</a>
-            </div>
-          </>
-        ) : (
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              const select = event.currentTarget.elements.namedItem("passengerId");
-              const passengerId = select && "value" in select ? String(select.value) : "";
-              if (!passengerId) return;
-              void (async () => {
-                setBusy(true);
-                setError("");
-                try {
-                  await setTripTravellers(tripId, [passengerId]);
-                  setChanging(false);
-                  await onAssigned();
-                } catch (cause) {
-                  setError(cause instanceof ApiError ? cause.message : "Could not assign traveller.");
-                } finally {
-                  setBusy(false);
-                }
-              })();
-            }}
-          >
-            <label>
-              Flying on this trip
-              <select
-                name="passengerId"
-                defaultValue={
-                  traveller?.id
-                  ?? available.find((passenger) => passenger.isDefault)?.id
-                  ?? available[0]?.id
-                }
-              >
-                {available.map((passenger) => (
-                  <option key={passenger.id} value={passenger.id}>
-                    {passenger.givenName} {passenger.familyName}
-                    {passenger.isDefault ? " (default)" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {error && <p className="form-error" role="alert">{error}</p>}
-            <button className="save-button" disabled={busy}>
-              {busy ? "Saving…" : "Save"}
-            </button>
-          </form>
-        )}
-      </div>
-    </details>
-  );
-}
-
-function travellerStateLabel(traveller: Passenger | null, availableCount: number): string {
-  if (!traveller) return availableCount === 0 ? "None" : "Empty";
-  if (traveller.readyForBooking) return "Ready";
-  return "Incomplete";
-}
-
-function travellerStateTone(traveller: Passenger | null): "ready" | "warn" | "quiet" {
-  if (!traveller) return "quiet";
-  if (traveller.readyForBooking) return "ready";
-  return "warn";
-}
-
-function BookingCard({
-  booking,
-  onChange,
-  onBack
-}: {
-  booking: MockBooking;
-  onChange: (booking: MockBooking) => void;
-  onBack: () => void;
-}) {
-  const cancelled = booking.status === "cancelled";
-  return (
-    <details className="settings-card settings-disclosure" open>
-      <summary>
-        <span><strong>Booking</strong></span>
-        <em>{cancelled ? "Mock cancelled" : "Mock confirmed"}</em>
-      </summary>
-      <div className="settings-body">
-        <dl className="settings-list">
-          <div><dt>Reference</dt><dd>{booking.reference}</dd></div>
-          <div><dt>Booked</dt><dd>{timestampLabel(booking.bookedAt)}</dd></div>
-          <div>
-            <dt>Fare</dt>
-            <dd>{formatMoney(booking.offer.price, booking.offer.currency)}</dd>
-          </div>
-          <div><dt>Seat</dt><dd>{booking.seat ?? "None"}</dd></div>
-          <div><dt>Bags</dt><dd>{booking.checkedBags}</dd></div>
-        </dl>
-        <div className="entity-row">
-          <button type="button" className="quiet-link" onClick={onBack}>Manage booking</button>
-          {!cancelled && (
-            <button
-              type="button"
-              className="quiet-link"
-              onClick={() => {
-                if (!window.confirm("Cancel this mock booking?")) return;
-                onChange({ ...booking, status: "cancelled" });
-              }}
-            >
-              Cancel booking
-            </button>
-          )}
-        </div>
       </div>
     </details>
   );

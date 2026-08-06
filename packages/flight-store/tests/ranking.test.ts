@@ -108,7 +108,6 @@ function profile(
     quietHoursEnd: 7,
     onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
     onboardingStep: "complete",
-    travellerSetupPromptedAt: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z"
   };

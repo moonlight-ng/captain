@@ -2,13 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 import { buildSearchSpecs, type CreateTripInput } from "@agents/flight-domain";
-import {
-  PaymentMethodLimitError,
-  PaymentSetupConflictError,
-  PaymentSetupInProgressError,
-  type CaptainPlatformStore,
-  type TripRecommendation
-} from "../src/index.js";
+import type { CaptainPlatformStore, TripRecommendation } from "../src/index.js";
 
 /**
  * Behaviour every `CaptainPlatformStore` implementation must share.
@@ -40,7 +34,6 @@ export function describeCaptainPlatformStore(
       ).resolves.toMatchObject({
         onboardingStep: "welcome",
         onboardingCompletedAt: null,
-        travellerSetupPromptedAt: null
       });
     });
 
@@ -750,22 +743,6 @@ export function describeCaptainPlatformStore(
         "new_best"
       ]);
     });
-    it("marks traveller setup as prompted at most once under concurrency", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      await store.ensureProfile(ada.id, new Date("2026-08-01T12:00:00Z"));
-      const now = new Date("2026-08-01T13:00:00Z");
-      const results = await Promise.all([
-        store.markTravellerSetupPrompted(ada.id, now),
-        store.markTravellerSetupPrompted(ada.id, now),
-        store.markTravellerSetupPrompted(ada.id, now)
-      ]);
-      expect(results.filter(Boolean)).toHaveLength(1);
-      await expect(store.getProfile(ada.id)).resolves.toMatchObject({
-        travellerSetupPromptedAt: now.toISOString()
-      });
-    });
-
     it("hands the welcome greeting to one caller only", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
@@ -791,439 +768,6 @@ export function describeCaptainPlatformStore(
       await expect(store.claimOnboardingWelcome(ada.id, now)).resolves.toBe(false);
     });
 
-    it("stores passengers with one default and an eight-row cap", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      const now = new Date("2026-08-01T12:00:00Z");
-      const first = await store.createPassenger(ada.id, {
-        givenName: "Ada",
-        familyName: "Lovelace"
-      }, now);
-      expect(first.isDefault).toBe(true);
-      const second = await store.createPassenger(ada.id, {
-        givenName: "Charles",
-        familyName: "Babbage",
-        isDefault: true
-      }, now);
-      expect(second.isDefault).toBe(true);
-      await expect(store.getPassenger(ada.id, first.id)).resolves.toMatchObject({ isDefault: false });
-      for (let index = 0; index < 6; index += 1) {
-        await store.createPassenger(ada.id, {
-          givenName: `Traveller`,
-          familyName: `Number${["One", "Two", "Three", "Four", "Five", "Six"][index]}`
-        }, now);
-      }
-      await expect(store.createPassenger(ada.id, {
-        givenName: "Too",
-        familyName: "Many"
-      }, now)).rejects.toThrow(/at most 8/i);
-      await expect(store.listPassengers(ada.id)).resolves.toHaveLength(8);
-    });
-
-    it("assigns trip passengers without bumping trip version", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      const now = new Date("2026-08-01T12:00:00Z");
-      const created = await store.createTrip(ada.id, tripInput, buildSearchSpecs(tripInput.brief), now);
-      const version = created.trip.version;
-      const passenger = await store.createPassenger(ada.id, {
-        givenName: "Ada",
-        familyName: "Lovelace"
-      }, now);
-      await store.setTripPassengers(ada.id, created.trip.id, [passenger.id]);
-      await expect(store.listTripPassengers(ada.id, created.trip.id)).resolves.toEqual([
-        expect.objectContaining({ id: passenger.id, givenName: "Ada" })
-      ]);
-      await expect(store.getTrip(ada.id, created.trip.id)).resolves.toMatchObject({ version });
-    });
-
-    it("reserves, finalizes, switches defaults, and removes multiple payment methods", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      const now = new Date("2026-08-01T12:00:00Z");
-      const intentA = randomUUID();
-      await store.reservePaymentCardSetupIntent(ada.id, intentA, now);
-      const methodA = await store.finalizePaymentMethod(ada.id, {
-        setupIntentId: intentA,
-        cardId: "tcd_cardA",
-        brand: "visa",
-        last4: "4242",
-        cardholderName: "Ada Lovelace"
-      }, now);
-      expect(methodA).toMatchObject({ last4: "4242", isDefault: true, status: "active" });
-      expect(methodA).not.toHaveProperty("expiryMonth");
-      expect(methodA).not.toHaveProperty("expiryYear");
-
-      const intentB = randomUUID();
-      await store.reservePaymentCardSetupIntent(ada.id, intentB, now);
-      const methodB = await store.finalizePaymentMethod(ada.id, {
-        setupIntentId: intentB,
-        cardId: "tcd_cardB",
-        brand: "mastercard",
-        last4: "4444",
-        cardholderName: "Ada Lovelace"
-      }, now);
-      await expect(store.listPaymentMethods(ada.id)).resolves.toEqual([
-        expect.objectContaining({ id: methodA.id, last4: "4242", status: "active", isDefault: true }),
-        expect.objectContaining({ id: methodB.id, last4: "4444", status: "active", isDefault: false })
-      ]);
-
-      await expect(store.setDefaultPaymentMethod(ada.id, methodB.id, now)).resolves.toMatchObject({
-        id: methodB.id,
-        isDefault: true
-      });
-      await expect(store.listPaymentMethods(ada.id)).resolves.toEqual([
-        expect.objectContaining({ id: methodB.id, isDefault: true }),
-        expect.objectContaining({ id: methodA.id, isDefault: false })
-      ]);
-
-      await expect(store.finalizePaymentMethod(ada.id, {
-        setupIntentId: intentB,
-        cardId: "tcd_cardB",
-        brand: "mastercard",
-        last4: "4444",
-        cardholderName: "Ada Lovelace"
-      }, now)).resolves.toMatchObject({ id: methodB.id });
-
-      await store.removePaymentMethod(ada.id, methodB.id, now);
-      await expect(store.listPaymentMethods(ada.id)).resolves.toEqual([
-        expect.objectContaining({ id: methodA.id, isDefault: true })
-      ]);
-    });
-
-    it("treats setup intent reservation as idempotent and rejects remount collisions", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      const now = new Date("2026-08-01T12:00:00Z");
-      const intentId = randomUUID();
-      const first = await store.reservePaymentCardSetupIntent(ada.id, intentId, now);
-      const second = await store.reservePaymentCardSetupIntent(ada.id, intentId, now);
-      expect(second).toEqual(first);
-      await expect(store.reservePaymentCardSetupIntent(ada.id, randomUUID(), now))
-        .rejects.toBeInstanceOf(PaymentSetupInProgressError);
-    });
-
-    it("issues one reusable client key per pending setup intent", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      const now = new Date("2026-08-01T12:00:00Z");
-      const intentId = randomUUID();
-      let mints = 0;
-      const mint = async () => {
-        mints += 1;
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        return `key_${mints}`;
-      };
-      const [first, second] = await Promise.all([
-        store.issuePaymentCardSetupClientKey(ada.id, intentId, mint, now),
-        store.issuePaymentCardSetupClientKey(ada.id, intentId, mint, now)
-      ]);
-      expect(first).toEqual({ setupIntentId: intentId, clientKey: "key_1" });
-      expect(second).toEqual(first);
-      expect(mints).toBe(1);
-
-      const third = await store.issuePaymentCardSetupClientKey(ada.id, intentId, mint, now);
-      expect(third).toEqual(first);
-      expect(mints).toBe(1);
-
-      await store.finalizePaymentMethod(ada.id, {
-        setupIntentId: intentId,
-        cardId: "tcd_keyOnce",
-        brand: "visa",
-        last4: "4242",
-        cardholderName: "Ada Lovelace"
-      }, now);
-      await expect(store.issuePaymentCardSetupClientKey(ada.id, intentId, mint, now))
-        .rejects.toMatchObject({ code: "setup_intent_completed" } satisfies Partial<PaymentSetupConflictError>);
-      expect(mints).toBe(1);
-    });
-
-    it("releases a failed client-key issuance so the same intent can retry", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      const now = new Date("2026-08-01T12:00:00Z");
-      const intentId = randomUUID();
-      await expect(store.issuePaymentCardSetupClientKey(
-        ada.id,
-        intentId,
-        async () => {
-          throw new Error("provider unavailable");
-        },
-        now
-      )).rejects.toThrow("provider unavailable");
-      await expect(store.issuePaymentCardSetupClientKey(
-        ada.id,
-        intentId,
-        async () => "key_retry",
-        now
-      )).resolves.toEqual({ setupIntentId: intentId, clientKey: "key_retry" });
-    });
-
-    it("keeps store capacity available while four client keys are minted", async () => {
-      const store = await createStore();
-      const travellers = await Promise.all([1, 2, 3, 4].map((id) => user(store, id)));
-      const now = new Date("2026-08-01T12:00:00Z");
-      let enteredCount = 0;
-      let markAllEntered!: () => void;
-      const allEntered = new Promise<void>((resolve) => {
-        markAllEntered = resolve;
-      });
-      let release!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      const issues = travellers.map((traveller, index) => {
-        const setupIntentId = randomUUID();
-        return store.issuePaymentCardSetupClientKey(
-          traveller.id,
-          setupIntentId,
-          async () => {
-            enteredCount += 1;
-            if (enteredCount === travellers.length) markAllEntered();
-            await gate;
-            return `key_${index + 1}`;
-          },
-          now
-        );
-      });
-
-      await allEntered;
-      try {
-        await expect(within(store.listPaymentMethods(travellers[0]!.id), 2_000))
-          .resolves.toEqual([]);
-      } finally {
-        release();
-      }
-      await expect(Promise.all(issues)).resolves.toHaveLength(4);
-    });
-
-    it("rejects a concurrent client-key request with a different setup intent id", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      const now = new Date("2026-08-01T12:00:00Z");
-      const intentA = randomUUID();
-      const intentB = randomUUID();
-      let markEntered!: () => void;
-      const entered = new Promise<void>((resolve) => {
-        markEntered = resolve;
-      });
-      let release!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      let mints = 0;
-      const mint = async () => {
-        mints += 1;
-        markEntered();
-        await gate;
-        return `key_${mints}`;
-      };
-      const first = store.issuePaymentCardSetupClientKey(ada.id, intentA, mint, now);
-      await entered;
-      const second = store.issuePaymentCardSetupClientKey(ada.id, intentB, mint, now);
-      // Attach the rejection handler now, not after awaiting `first`. Against real
-      // Postgres that await spans I/O, long enough for Node to flag the already
-      // rejected `second` as an unhandled rejection and fail the run.
-      const secondRejects = expect(second).rejects.toBeInstanceOf(PaymentSetupInProgressError);
-      release();
-      await expect(first).resolves.toEqual({ setupIntentId: intentA, clientKey: "key_1" });
-      await secondRejects;
-      expect(mints).toBe(1);
-    });
-
-    it("enforces a hard cap of twenty payment method records", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      const now = new Date("2026-08-01T12:00:00Z");
-      for (let index = 0; index < 20; index += 1) {
-        const intentId = randomUUID();
-        await store.reservePaymentCardSetupIntent(ada.id, intentId, now);
-        await store.finalizePaymentMethod(ada.id, {
-          setupIntentId: intentId,
-          cardId: `tcd_limit${index}`,
-          brand: "visa",
-          last4: "1000",
-          cardholderName: "Ada Lovelace"
-        }, now);
-      }
-      await expect(store.reservePaymentCardSetupIntent(ada.id, randomUUID(), now))
-        .rejects.toBeInstanceOf(PaymentMethodLimitError);
-    });
-
-    it("claims, completes, fails, and reclaims card deletions under lease", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      const now = new Date("2026-08-01T12:00:00Z");
-      const intentId = randomUUID();
-      await store.reservePaymentCardSetupIntent(ada.id, intentId, now);
-      const method = await store.finalizePaymentMethod(ada.id, {
-        setupIntentId: intentId,
-        cardId: "tcd_deleteQueue",
-        brand: "visa",
-        last4: "9999",
-        cardholderName: "Ada Lovelace"
-      }, now);
-      await store.removePaymentMethod(ada.id, method.id, now);
-
-      const [firstClaim, secondClaim] = await Promise.all([
-        store.claimCardDeletions("worker-a", now, 60_000, 10),
-        store.claimCardDeletions("worker-b", now, 60_000, 10)
-      ]);
-      const claimedIds = [...firstClaim, ...secondClaim].map((row) => row.id);
-      expect(new Set(claimedIds).size).toBe(claimedIds.length);
-      expect(claimedIds).toHaveLength(1);
-      const deletion = firstClaim[0] ?? secondClaim[0]!;
-      const owner = firstClaim[0] ? "worker-a" : "worker-b";
-      const other = owner === "worker-a" ? "worker-b" : "worker-a";
-
-      await expect(store.completeCardDeletion(other, deletion.id)).resolves.toBe(false);
-      await expect(store.failCardDeletion(other, deletion.id, "stale", null, null, now))
-        .resolves.toBe(false);
-
-      const leaseExpired = new Date(now.getTime() + 61_000);
-      const reclaimed = await store.claimCardDeletions(other, leaseExpired, 60_000, 10);
-      expect(reclaimed).toEqual([expect.objectContaining({ id: deletion.id, claimedBy: other })]);
-      await expect(store.failCardDeletion(other, deletion.id, "upstream", "boom", 1, leaseExpired))
-        .resolves.toBe(true);
-
-      let attemptClock = new Date(leaseExpired.getTime() + 2);
-      for (let attempt = 0; attempt < 6; attempt += 1) {
-        const rows = await store.claimCardDeletions("retry-worker", attemptClock, 60_000, 10);
-        expect(rows).toHaveLength(1);
-        await expect(store.failCardDeletion(
-          "retry-worker",
-          rows[0]!.id,
-          "upstream",
-          "boom",
-          1,
-          attemptClock
-        )).resolves.toBe(true);
-        attemptClock = new Date(attemptClock.getTime() + 2);
-      }
-      const stillClaimable = await store.claimCardDeletions("retry-worker", attemptClock, 60_000, 10);
-      expect(stillClaimable).toHaveLength(1);
-      await expect(store.completeCardDeletion("retry-worker", stillClaimable[0]!.id))
-        .resolves.toBe(true);
-    });
-
-    it("records the provider detail separately from the error code", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      const now = new Date("2026-08-01T12:00:00Z");
-      const intentId = randomUUID();
-      await store.reservePaymentCardSetupIntent(ada.id, intentId, now);
-      const method = await store.finalizePaymentMethod(ada.id, {
-        setupIntentId: intentId,
-        cardId: "tcd_detail",
-        brand: "visa",
-        last4: "4242",
-        cardholderName: "Ada Lovelace"
-      }, now);
-      await store.removePaymentMethod(ada.id, method.id, now);
-      const [claim] = await store.claimCardDeletions("worker-a", now, 60_000, 1);
-      await store.failCardDeletion(
-        "worker-a",
-        claim!.id,
-        "rate_limited",
-        "Too many requests for this token",
-        null,
-        now
-      );
-      const [requeued] = await store.claimCardDeletions(
-        "worker-a",
-        new Date(now.getTime() + 10 * 60_000),
-        60_000,
-        1
-      );
-      expect(requeued!.lastErrorCode).toBe("rate_limited");
-      expect(requeued!.lastErrorDetail).toBe("Too many requests for this token");
-    });
-
-    it("parks a permanently failing deletion and frees the local card row", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      let clock = new Date("2026-08-01T12:00:00Z");
-      const intentId = randomUUID();
-      await store.reservePaymentCardSetupIntent(ada.id, intentId, clock);
-      const method = await store.finalizePaymentMethod(ada.id, {
-        setupIntentId: intentId,
-        cardId: "tcd_doomed",
-        brand: "visa",
-        last4: "0000",
-        cardholderName: "Ada Lovelace"
-      }, clock);
-      await store.removePaymentMethod(ada.id, method.id, clock);
-
-      // Ten attempts exhaust the ladder; the eleventh claim must find nothing.
-      for (let attempt = 0; attempt < 10; attempt += 1) {
-        const [claim] = await store.claimCardDeletions("worker-a", clock, 60_000, 1);
-        expect(claim).toBeDefined();
-        await store.failCardDeletion("worker-a", claim!.id, "unauthorized", "nope", null, clock);
-        clock = new Date(clock.getTime() + 48 * 60 * 60_000);
-      }
-      await expect(store.claimCardDeletions("worker-a", clock, 60_000, 1)).resolves.toEqual([]);
-
-      const counts = await store.countPendingCardDeletions();
-      expect(counts.failed).toBe(1);
-      expect(counts.queued + counts.running).toBe(0);
-
-      // The local row is released so a doomed card cannot consume the per-user cap.
-      const nextIntent = randomUUID();
-      await store.reservePaymentCardSetupIntent(ada.id, nextIntent, clock);
-      await expect(store.finalizePaymentMethod(ada.id, {
-        setupIntentId: nextIntent,
-        cardId: "tcd_replacement",
-        brand: "visa",
-        last4: "1234",
-        cardholderName: "Ada Lovelace"
-      }, clock)).resolves.toMatchObject({ last4: "1234" });
-    });
-
-    it("refuses a card ID already active on another traveller", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      const grace = await user(store, 2);
-      const now = new Date("2026-08-01T12:00:00Z");
-      const adaIntent = randomUUID();
-      await store.reservePaymentCardSetupIntent(ada.id, adaIntent, now);
-      await store.finalizePaymentMethod(ada.id, {
-        setupIntentId: adaIntent,
-        cardId: "tcd_shared",
-        brand: "visa",
-        last4: "5555",
-        cardholderName: "Ada Lovelace"
-      }, now);
-
-      const graceIntent = randomUUID();
-      await store.reservePaymentCardSetupIntent(grace.id, graceIntent, now);
-      await expect(store.finalizePaymentMethod(grace.id, {
-        setupIntentId: graceIntent,
-        cardId: "tcd_shared",
-        brand: "visa",
-        last4: "5555",
-        cardholderName: "Grace Hopper"
-      }, now)).rejects.toMatchObject({ code: "card_unavailable" });
-    });
-
-    it("clears the component client key once the intent completes", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      const now = new Date("2026-08-01T12:00:00Z");
-      const intentId = randomUUID();
-      await store.reservePaymentCardSetupIntent(ada.id, intentId, now);
-      await store.issuePaymentCardSetupClientKey(ada.id, intentId, async () => "ck_secret", now);
-      await store.finalizePaymentMethod(ada.id, {
-        setupIntentId: intentId,
-        cardId: "tcd_clears",
-        brand: "visa",
-        last4: "7777",
-        cardholderName: "Ada Lovelace"
-      }, now);
-      const intent = await store.getPaymentCardSetupIntent(ada.id, intentId);
-      expect(intent?.status).toBe("completed");
-      expect(intent?.componentClientKey).toBeNull();
-    });
-
     it("clears travellers and resets preferences without deleting the account", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
@@ -1236,16 +780,8 @@ export function describeCaptainPlatformStore(
         notificationMode: "off",
         quietHoursEnabled: false
       }, now);
-      await store.markTravellerSetupPrompted(ada.id, now);
-      const passenger = await store.createPassenger(ada.id, {
-        givenName: "Ada",
-        familyName: "Lovelace"
-      }, now);
-      const created = await store.createTrip(ada.id, tripInput, buildSearchSpecs(tripInput.brief), now);
-      await store.setTripPassengers(ada.id, created.trip.id, [passenger.id]);
+      await store.createTrip(ada.id, tripInput, buildSearchSpecs(tripInput.brief), now);
       await store.clearTravellerData(ada.id, now);
-      await expect(store.listPassengers(ada.id)).resolves.toEqual([]);
-      await expect(store.listTripPassengers(ada.id, created.trip.id)).resolves.toEqual([]);
       const profile = await store.getProfile(ada.id);
       expect(profile).toMatchObject({
         defaultCurrency: "USD",
@@ -1253,8 +789,7 @@ export function describeCaptainPlatformStore(
         preferredAirlineCodes: [],
         excludedAirlineCodes: [],
         notificationMode: "smart",
-        quietHoursEnabled: true,
-        travellerSetupPromptedAt: null
+        quietHoursEnabled: true
       });
       await expect(store.getUser(ada.id)).resolves.toMatchObject({ id: ada.id });
       await expect(store.listTrips(ada.id)).resolves.toHaveLength(1);
@@ -1271,39 +806,19 @@ export function describeCaptainPlatformStore(
       await store.ensureProfile(ada.id, now);
       const sourceMessageId = await store.appendMessage(ada.id, "user", "Delete this", now);
       const draft = await store.createTripPlanDraft(ada.id, "Plan a trip", sourceMessageId, now);
-      await store.createLoginToken(ada.id, loginToken, "/travellers", expiresAt, now);
+      await store.createLoginToken(ada.id, loginToken, "/profile", expiresAt, now);
       await store.createWebSession(ada.id, sessionToken, expiresAt, now);
       await expect(store.claimTelegramUpdate("delete-me", ada.id, now)).resolves.toBe(true);
-      const passenger = await store.createPassenger(ada.id, {
-        givenName: "Ada",
-        familyName: "Lovelace"
-      }, now);
-      const intentId = randomUUID();
-      await store.reservePaymentCardSetupIntent(ada.id, intentId, now);
-      const method = await store.finalizePaymentMethod(ada.id, {
-        setupIntentId: intentId,
-        cardId: "tcd_deleteMe",
-        brand: "visa",
-        last4: "1111",
-        cardholderName: "Ada Lovelace"
-      }, now);
-      const created = await store.createTrip(ada.id, tripInput, buildSearchSpecs(tripInput.brief), now);
-      await store.setTripPassengers(ada.id, created.trip.id, [passenger.id]);
+      await store.createTrip(ada.id, tripInput, buildSearchSpecs(tripInput.brief), now);
       await store.deleteUser(ada.id);
       await expect(store.getProfile(ada.id)).resolves.toBeNull();
       await expect(store.getConversation(ada.id)).rejects.toThrow("Conversation not found");
       await expect(store.listTrips(ada.id)).resolves.toEqual([]);
-      await expect(store.listPassengers(ada.id)).resolves.toEqual([]);
-      await expect(store.getPassenger(ada.id, passenger.id)).resolves.toBeNull();
-      await expect(store.listPaymentMethods(ada.id)).resolves.toEqual([]);
       await expect(store.getTripPlanDraft(ada.id, draft.id, now)).resolves.toBeNull();
       await expect(store.consumeLoginToken(loginToken, now)).resolves.toBeNull();
       await expect(store.resolveWebSession(sessionToken, now)).resolves.toBeNull();
       await expect(store.claimTelegramUpdate("delete-me", grace.id, now)).resolves.toBe(true);
       await expect(store.getUser(ada.id)).resolves.toBeNull();
-      const pending = await store.countPendingCardDeletions();
-      expect(pending.queued + pending.running).toBeGreaterThan(0);
-      void method;
     });
 
     it("accepts login tokens for session paths and rejects others at the type boundary", async () => {
@@ -1311,14 +826,14 @@ export function describeCaptainPlatformStore(
       const ada = await user(store, 1);
       const now = new Date("2026-08-01T12:00:00Z");
       const expiresAt = new Date("2026-08-01T12:15:00Z");
-      await store.createLoginToken(ada.id, "a".repeat(64), "/travellers", expiresAt, now);
-      await store.createLoginToken(ada.id, "b".repeat(64), "/payment", expiresAt, now);
+      await store.createLoginToken(ada.id, "a".repeat(64), "/profile", expiresAt, now);
+      await store.createLoginToken(ada.id, "b".repeat(64), "/preferences", expiresAt, now);
       await expect(store.consumeLoginToken("a".repeat(64), now)).resolves.toMatchObject({
         userId: ada.id,
-        redirectPath: "/travellers"
+        redirectPath: "/profile"
       });
       await expect(store.consumeLoginToken("b".repeat(64), now)).resolves.toMatchObject({
-        redirectPath: "/payment"
+        redirectPath: "/preferences"
       });
     });
   });

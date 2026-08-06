@@ -5,12 +5,11 @@ import { loadEnv } from "../services/app/env.js";
 describe("Captain public environment", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("requires database, Telegram, and passenger encryption credentials in production", () => {
+  it("requires database and Telegram credentials in production", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("DATABASE_URL", "postgresql://captain.invalid/db");
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "telegram-token");
     vi.stubEnv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "telegram-webhook-secret");
-    vi.stubEnv("CAPTAIN_PII_ENCRYPTION_KEY", "passenger-document-key");
     vi.stubEnv("CAPTAIN_BETA_USER_LIMIT", undefined);
     vi.stubEnv("CAPTAIN_PUBLIC_BETA_ENABLED", undefined);
     expect(loadEnv()).toMatchObject({
@@ -36,13 +35,9 @@ describe("Captain public environment", () => {
     expect(loadEnv().tripInterpreterModel).toBe("openai/custom-extractor");
   });
 
-  it("keeps real payments disabled even when an environment override requests them", () => {
+  it("falls back to the in-memory store when no database is configured", () => {
     vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("CAPTAIN_PAYMENTS_ENABLED", "true");
     vi.stubEnv("DATABASE_URL", "");
-    expect(loadEnv()).toMatchObject({
-      paymentsEnabled: false,
-      databaseUrl: null
-    });
+    expect(loadEnv()).toMatchObject({ databaseUrl: null });
   });
 });

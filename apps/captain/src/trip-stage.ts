@@ -7,7 +7,6 @@ import { relativeTime, scheduleTime } from "./format.js";
  */
 export type TripStage =
   | "stopped"
-  | "booked"
   | "paused"
   | "stale"
   | "searching"
@@ -16,16 +15,13 @@ export type TripStage =
 export function tripStage({
   trip,
   watch,
-  booked = false,
   searchBusy = false
 }: {
   trip: TripPayload["trip"] | null;
   watch: TripPayload["watch"] | null | undefined;
-  booked?: boolean;
   searchBusy?: boolean;
 }): TripStage {
   if (!trip) return "stopped";
-  if (booked) return "booked";
   if (trip.status === "paused" || watch?.status === "paused") return "paused";
   if (watch?.status === "completed") return "stale";
   if (searchBusy || isWatchSearching(watch, trip)) return "searching";
@@ -38,7 +34,6 @@ export function stageLabel(
   watch?: TripPayload["watch"] | null
 ): string {
   if (stage === "stopped") return "";
-  if (stage === "booked") return "Booked";
   if (stage === "paused") return "Paused";
   if (stage === "stale") return "Prices stale";
   if (stage === "searching") return "Searching";
@@ -52,21 +47,19 @@ export function stageLabel(
 
 /**
  * Opening a trip should show current prices, so Captain starts a check on
- * arrival instead of waiting for the schedule. A trip the traveller stopped,
- * finished, or booked stays where it is, and a run already under way is the
- * check we would have started. A run past its window needs Track, not a
- * refresh, so opening the trip leaves that to the traveller.
+ * arrival instead of waiting for the schedule. A trip the traveller stopped or
+ * finished stays where it is, and a run already under way is the check we would
+ * have started. A run past its window needs Track, not a refresh, so opening
+ * the trip leaves that to the traveller.
  */
 export function shouldAutoSearchOnOpen({
   trip,
-  watch,
-  booked = false
+  watch
 }: {
   trip: TripPayload["trip"] | null;
   watch: TripPayload["watch"] | null | undefined;
-  booked?: boolean;
 }): boolean {
-  if (!trip || booked || !watch) return false;
+  if (!trip || !watch) return false;
   if (trip.status === "paused") return false;
   if (watch.status !== "active" && watch.status !== "scheduled") return false;
   if (Date.parse(watch.runEndsAt) <= Date.now()) return false;
