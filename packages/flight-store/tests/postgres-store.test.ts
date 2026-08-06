@@ -20,7 +20,6 @@ const profileRow = {
   digest_hour_local: 9,
   price_rise_alerts_enabled: true,
   better_option_alerts_enabled: true,
-  tracking_checkins_enabled: true,
   last_digest_at: null,
   max_alerts_per_day: 2,
   quiet_hours_enabled: false,
