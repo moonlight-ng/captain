@@ -448,6 +448,17 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     return true;
   }
 
+  async claimOnboardingWelcome(userId: string, now: Date): Promise<boolean> {
+    await this.ensureProfile(userId, now);
+    const profile = this.#profiles.get(userId);
+    if (!profile || profile.onboardingCompletedAt || profile.onboardingStep !== "welcome") {
+      return false;
+    }
+    profile.onboardingStep = "currency";
+    profile.updatedAt = now.toISOString();
+    return true;
+  }
+
   async listPassengers(userId: string): Promise<Passenger[]> {
     return [...this.#passengers.values()]
       .filter((passenger) => passenger.userId === userId)

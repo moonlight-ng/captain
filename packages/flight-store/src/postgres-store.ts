@@ -457,6 +457,19 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     return rows.length === 1;
   }
 
+  async claimOnboardingWelcome(userId: string, now: Date): Promise<boolean> {
+    await this.ensureProfile(userId, now);
+    const rows = await this.#sql<Array<{ user_id: string }>>`
+      update captain.traveller_profiles
+      set onboarding_step = 'currency', updated_at = ${now}
+      where user_id = ${userId}
+        and onboarding_step = 'welcome'
+        and onboarding_completed_at is null
+      returning user_id
+    `;
+    return rows.length === 1;
+  }
+
   async listPassengers(userId: string): Promise<Passenger[]> {
     const rows = await this.#sql<PassengerRow[]>`
       select * from captain.passengers

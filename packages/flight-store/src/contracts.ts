@@ -206,6 +206,11 @@ export interface CaptainPlatformStore {
     now: Date
   ): Promise<TravellerProfile>;
   markTravellerSetupPrompted(userId: string, now: Date): Promise<boolean>;
+  /**
+   * Advances a traveller past the welcome step, returning true only for the
+   * caller that won. Two updates arriving together must not both greet.
+   */
+  claimOnboardingWelcome(userId: string, now: Date): Promise<boolean>;
   createLoginToken(
     userId: string,
     tokenHash: string,

@@ -407,7 +407,7 @@ export function App() {
         <section className="empty-hero">
           <p className="eyebrow">No active trip</p>
           <h1>Tell Captain where you want to go.</h1>
-          <p>Return to Telegram to create a trip. Captain can track up to three at once.</p>
+          <p>Return to Telegram to create a trip. Captain tracks one trip at a time.</p>
         </section>
       ) : mockBooking && mockBooking.tripId === trip.id ? (
         <BookedFlight

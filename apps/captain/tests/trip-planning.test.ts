@@ -9,7 +9,9 @@ import {
 } from "../agent/channels/telegram.js";
 import { TripPlanningService } from "../services/trip-planning/service.js";
 import {
-  telegramDashboardMessage
+  formatActiveTripList,
+  telegramDashboardMessage,
+  type ActiveTripFormatInput
 } from "../services/trip-planning/format.js";
 import { TripService } from "../services/trips/service.js";
 import { defaultTestBrief } from "./support.js";
@@ -35,6 +37,26 @@ async function setup(clock = now) {
       `https://captain.example/t#test-${tripId}`
   });
   return { store, user, trips, planning };
+}
+
+function legacyTripListEntry(
+  destination: string,
+  departureDate: string,
+  dashboardUrl: string
+): ActiveTripFormatInput {
+  return {
+    originAirports: ["LOS"],
+    destinationAirports: [destination],
+    departureDate,
+    returnDate: null,
+    stayNights: null,
+    travellers: 1,
+    cabin: "economy",
+    maxStops: 2,
+    currency: "USD",
+    status: "tracking",
+    dashboardUrl
+  };
 }
 
 describe("Captain trip planning", () => {

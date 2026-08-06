@@ -10,7 +10,9 @@ import {
   CAPTAIN_PAYMENT_INTRO,
   CAPTAIN_PREFERENCES_INTRO,
   CAPTAIN_PROFILE_COMMAND,
+  CAPTAIN_RETURNING_TRAVELLER_WELCOME,
   CAPTAIN_TRAVELLER_SETUP_PROMPT,
+  CAPTAIN_TRIP_COMMAND,
   explainNotification,
   explainRecommendation,
   parseAirlinePreferences,
@@ -25,6 +27,18 @@ describe("Telegram profile onboarding", () => {
       "Hi, I'm Captain! I can help you prepare for a flight by tracking suitable options and reporting price changes."
     );
     expect(CAPTAIN_PREFERENCES_INTRO).toBe("Let's start with your preferences");
+  });
+
+  it("introduces Captain once and welcomes returning travellers differently", () => {
+    expect(CAPTAIN_NEW_USER_GREETING).toContain("I'm Captain");
+    expect(CAPTAIN_RETURNING_TRAVELLER_WELCOME).not.toMatch(/I['’]m Captain/u);
+    expect(CAPTAIN_RETURNING_TRAVELLER_WELCOME).toBe(
+      "Welcome back. Tell me where and roughly when you want to fly, and I’ll watch it for you. I track one trip at a time."
+    );
+  });
+
+  it("uses trip as the single user-facing trip command", () => {
+    expect(CAPTAIN_TRIP_COMMAND).toBe("/trip");
   });
 
   it("exports fixed handoff copy for travellers and payment", () => {

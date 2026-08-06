@@ -19,7 +19,7 @@ export function Home({ trips, displayName }: { trips: Trip[]; displayName: strin
         <section className="empty-hero">
           <p className="eyebrow">No trips</p>
           <h1>Tell Captain where you want to go.</h1>
-          <p>Create a trip from Telegram. Captain tracks up to three at once.</p>
+          <p>Create a trip from Telegram. Captain tracks one trip at a time.</p>
         </section>
       ) : (
         <section className="trip-list" aria-label="Your trips">

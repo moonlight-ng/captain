@@ -766,6 +766,31 @@ export function describeCaptainPlatformStore(
       });
     });
 
+    it("hands the welcome greeting to one caller only", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const now = new Date("2026-08-01T13:00:00Z");
+      await expect(store.ensureProfile(ada.id, now)).resolves.toMatchObject({
+        onboardingStep: "welcome"
+      });
+      const results = await Promise.all([
+        store.claimOnboardingWelcome(ada.id, now),
+        store.claimOnboardingWelcome(ada.id, now),
+        store.claimOnboardingWelcome(ada.id, now)
+      ]);
+      expect(results.filter(Boolean)).toHaveLength(1);
+      await expect(store.getProfile(ada.id)).resolves.toMatchObject({
+        onboardingStep: "currency"
+      });
+      // A traveller who has finished onboarding is never greeted again.
+      await store.updateProfile(
+        ada.id,
+        { onboardingStep: "welcome", onboardingCompletedAt: now.toISOString() },
+        now
+      );
+      await expect(store.claimOnboardingWelcome(ada.id, now)).resolves.toBe(false);
+    });
+
     it("stores passengers with one default and an eight-row cap", async () => {
       const store = await createStore();
       const ada = await user(store, 1);

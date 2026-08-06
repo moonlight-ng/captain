@@ -67,6 +67,10 @@ const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. 
 export const CAPTAIN_NEW_USER_GREETING =
   "Hi, I'm Captain! I can help you prepare for a flight by tracking suitable options and reporting price changes.";
 export const CAPTAIN_PREFERENCES_INTRO = "Let's start with your preferences";
+// Captain introduces itself once, at the welcome step. A traveller who has
+// already onboarded gets this instead.
+export const CAPTAIN_RETURNING_TRAVELLER_WELCOME =
+  "Welcome back. Tell me where and roughly when you want to fly, and I’ll watch it for you. I track one trip at a time.";
 export const CAPTAIN_PROFILE_COMMAND = "/profile";
 export const CAPTAIN_TRIP_COMMAND = "/trip";
 export const CAPTAIN_TRAVELLER_SETUP_PROMPT =
@@ -129,7 +133,12 @@ export default telegramChannel({
       if (content) {
         await services.platformStore.appendMessage(user.id, "user", content, new Date());
       }
-      await postNewUserOnboarding(ctx, user.id);
+      // Two updates can land on the welcome step together—Telegram's own
+      // /start plus whatever the traveller typed next. Only the update that
+      // claims the step introduces Captain; the other stays quiet.
+      if (await services.platformStore.claimOnboardingWelcome(user.id, new Date())) {
+        await postNewUserOnboarding(ctx, user.id);
+      }
       return null;
     }
     if (content === "/start") {
@@ -142,7 +151,7 @@ export default telegramChannel({
         );
         await postCurrencyQuestion(ctx);
       } else {
-        const welcome = "I’m Captain. I can watch one trip at a time and let you know when prices or better options change.";
+        const welcome = CAPTAIN_RETURNING_TRAVELLER_WELCOME;
         await services.platformStore.appendMessage(user.id, "assistant", welcome, new Date());
         await postWithLink(
           ctx,
@@ -602,12 +611,8 @@ async function postNewUserOnboarding(
     CAPTAIN_PREFERENCES_INTRO,
     new Date()
   );
+  // The caller already advanced the step by claiming it.
   await postCurrencyQuestion(ctx);
-  await services.platformStore.updateProfile(
-    userId,
-    { onboardingStep: "currency" },
-    new Date()
-  );
 }
 
 async function postCurrencyQuestion(ctx: TelegramContext): Promise<void> {

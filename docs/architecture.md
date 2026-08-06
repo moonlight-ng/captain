@@ -12,8 +12,9 @@ shared credentials, redirects, or access to Captain profiles and trips.
 
 ## Profile, trip, and authentication flow
 
-Each Telegram traveller has one `TravellerProfile` (preferences) and up to three
-active or paused trips. Passenger identity lives in `captain.passengers` and is
+Each Telegram traveller has one `TravellerProfile` (preferences) and one active
+or paused trip at a time (`MAX_ACTIVE_TRIPS_PER_USER`); a new trip needs the
+current one stopped or completed. Passenger identity lives in `captain.passengers` and is
 assigned to trips via `captain.trip_passengers`. Payment processing is outside
 the prototype boundary: the UI always uses one display-only test-card fixture,
 the service reports payments disabled, and environment configuration cannot
