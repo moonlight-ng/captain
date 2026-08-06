@@ -121,6 +121,32 @@ export type Recommendation = {
   observedAt: string;
 };
 
+export type PriceVerdict = "book_now" | "good_price" | "holding" | "wait";
+
+export type PricePoint = {
+  day: string;
+  price: number;
+  observedAt: string;
+};
+
+/** The watched flight's price series, with Captain's read on it. */
+export type TrackedPriceHistory = {
+  itineraryKey: string;
+  currency: string;
+  points: PricePoint[];
+  current: number;
+  low: number;
+  high: number;
+  average: number;
+  changeSinceStart: number;
+  changeSinceLastCheck: number;
+  positionInRange: number;
+  daysTracked: number;
+  daysToDeparture: number | null;
+  verdict: PriceVerdict;
+  headline: string;
+};
+
 export type TripPayload = {
   trips: Trip[];
   trip: Trip | null;
@@ -129,6 +155,8 @@ export type TripPayload = {
   recommendation: Recommendation | null;
   selections: Array<{ itineraryKey: string; selectedBy: "agent" | "person" }>;
   activity: TripActivity[];
+  /** Present only once a flight is being watched. */
+  priceHistory: TrackedPriceHistory | null;
 };
 
 export type TripActivity = {

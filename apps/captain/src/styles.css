@@ -178,6 +178,144 @@ h2 { margin-bottom: 7px; font-size: var(--type-title); font-weight: var(--weight
   background: rgba(55, 76, 48, .62);
   color: rgba(224, 239, 217, .88);
 }
+/* The watched flight. One at a time, and always above the results. */
+.tracked-card {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: calc(100% - 40px);
+  margin: 0 20px 13px;
+  padding: 15px 17px 13px;
+  border: 1px solid rgba(167, 196, 154, .3);
+  border-radius: var(--radius-card);
+  background: linear-gradient(rgba(167, 196, 154, .07), rgba(167, 196, 154, .02)), var(--panel);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .18);
+  text-align: left;
+  transition: transform var(--duration-ui) var(--ease-out);
+}
+.tracked-card:active { transform: scale(.992); }
+.tracked-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.tracked-top .eyebrow { margin: 0; color: var(--green); }
+
+.verdict-pill {
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .07);
+  color: var(--muted);
+  font-size: var(--type-caption);
+  font-weight: var(--weight-bold);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.verdict-pill.book_now { background: rgba(167, 196, 154, .2); color: #cfe3c4; }
+.verdict-pill.wait { background: rgba(220, 130, 116, .18); color: #f0bdb2; }
+
+.tracked-headline {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 11px 0 3px;
+}
+.tracked-headline .price {
+  font-size: 27px;
+  font-weight: var(--weight-medium);
+  letter-spacing: -.035em;
+  font-variant-numeric: tabular-nums;
+}
+.tracked-change {
+  color: var(--muted);
+  font-size: var(--type-body);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tracked-change.down { color: var(--green); }
+.tracked-change.up { color: rgba(242, 176, 163, .9); }
+.tracked-change small { color: var(--quiet); font-weight: var(--weight-regular); }
+
+.tracked-chart { margin: 9px 0 0; }
+.tracked-chart-plot { position: relative; }
+.tracked-chart svg { display: block; width: 100%; height: 100%; }
+.tracked-chart-line {
+  fill: none;
+  stroke: var(--green);
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.tracked-chart-fill { fill: rgba(167, 196, 154, .11); stroke: none; }
+.tracked-chart-now {
+  position: absolute;
+  right: 0;
+  width: 7px;
+  height: 7px;
+  border: 2px solid #000;
+  border-radius: 50%;
+  background: var(--green);
+  transform: translate(50%, -50%);
+}
+.tracked-chart figcaption {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  color: var(--quiet);
+  font-size: var(--type-caption);
+  font-variant-numeric: tabular-nums;
+}
+.tracked-chart-empty {
+  margin: 11px 0 0;
+  color: var(--quiet);
+  font-size: var(--type-body);
+  line-height: 1.45;
+}
+
+.tracked-read {
+  margin: 11px 0 0;
+  color: rgba(255, 255, 255, .78);
+  font-size: var(--type-body);
+  line-height: 1.45;
+}
+.tracked-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--quiet);
+  font-size: var(--type-body);
+}
+.tracked-more { color: var(--muted); font-weight: var(--weight-medium); }
+
+.tracked-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin: 14px 0 0;
+}
+.tracked-stats div { display: flex; flex-direction: column; gap: 3px; }
+.tracked-stats dt {
+  color: var(--quiet);
+  font-size: var(--type-caption);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.tracked-stats dd {
+  margin: 0;
+  font-size: var(--type-body);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
 .tabs {
   position: relative;
   z-index: 1;

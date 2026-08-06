@@ -100,6 +100,17 @@ export type RecommendationSnapshot = {
   } | null;
 };
 
+/**
+ * The one flight a traveller chose to watch, with every price Captain has
+ * observed for it. This is what the dashboard charts and what the agent reads
+ * when it decides whether a change is worth mentioning.
+ */
+export type TrackedFlightPrices = {
+  itineraryKey: string;
+  currency: string;
+  observations: Array<{ price: number; observedAt: string }>;
+};
+
 export type TripFlightSelection = {
   tripId: string;
   itineraryKey: string;
@@ -230,5 +241,10 @@ export interface CaptainPlatformStore {
     telegramMessageId: number
   ): Promise<CaptainNotification | null>;
   getRecommendation(userId: string, tripId: string): Promise<TripRecommendation | null>;
+  /**
+   * Price history for the watched flight, oldest first. Null when the
+   * traveller has not picked one yet — there is nothing to chart until then.
+   */
+  getTrackedFlightPrices(userId: string, tripId: string): Promise<TrackedFlightPrices | null>;
   close(): Promise<void>;
 }

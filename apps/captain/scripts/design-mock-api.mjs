@@ -226,8 +226,41 @@ const tripPayload = {
     eventType: "trip_created",
     payload: {},
     createdAt: NOW
-  }]
+  }],
+  priceHistory: mockPriceHistory()
 };
+
+/** Three weeks of daily checks on the watched flight, dipping then recovering. */
+function mockPriceHistory() {
+  const prices = [
+    504, 511, 519, 515, 493, 483, 480, 488, 521, 544,
+    535, 516, 498, 477, 463, 470, 485, 507, 526, 517, 486
+  ];
+  const start = Date.parse(NOW) - (prices.length - 1) * 86_400_000;
+  const points = prices.map((price, index) => {
+    const observedAt = new Date(start + index * 86_400_000).toISOString();
+    return { day: observedAt.slice(0, 10), price, observedAt };
+  });
+  const current = prices.at(-1);
+  const low = Math.min(...prices);
+  const high = Math.max(...prices);
+  return {
+    itineraryKey: offers[0].itineraryKey,
+    currency: "GBP",
+    points,
+    current,
+    low,
+    high,
+    average: prices.reduce((total, price) => total + price, 0) / prices.length,
+    changeSinceStart: current - prices[0],
+    changeSinceLastCheck: current - prices.at(-2),
+    positionInRange: (current - low) / (high - low),
+    daysTracked: points.length,
+    daysToDeparture: 27,
+    verdict: "good_price",
+    headline: "Below its average, down £18 since tracking started."
+  };
+}
 
 const noStore = { "cache-control": "no-store", "content-type": "application/json" };
 
