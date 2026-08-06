@@ -50,6 +50,29 @@ export function stageLabel(
   return "Tracking";
 }
 
+/**
+ * Opening a trip should show current prices, so Captain starts a check on
+ * arrival instead of waiting for the schedule. A trip the traveller stopped,
+ * finished, or booked stays where it is, and a run already under way is the
+ * check we would have started. A run past its window needs Track, not a
+ * refresh, so opening the trip leaves that to the traveller.
+ */
+export function shouldAutoSearchOnOpen({
+  trip,
+  watch,
+  booked = false
+}: {
+  trip: TripPayload["trip"] | null;
+  watch: TripPayload["watch"] | null | undefined;
+  booked?: boolean;
+}): boolean {
+  if (!trip || booked || !watch) return false;
+  if (trip.status === "paused") return false;
+  if (watch.status !== "active" && watch.status !== "scheduled") return false;
+  if (Date.parse(watch.runEndsAt) <= Date.now()) return false;
+  return !isWatchSearching(watch, trip);
+}
+
 export function isWatchSearching(
   watch: TripPayload["watch"] | null | undefined,
   trip: TripPayload["trip"] | null
