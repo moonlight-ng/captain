@@ -1,6 +1,5 @@
 export * from "./captain-access.js";
 export * from "./date-intent.js";
-export * from "./passenger.js";
 export * from "./profile.js";
 export * from "./provider.js";
 export * from "./search-spec.js";

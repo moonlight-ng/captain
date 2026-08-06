@@ -73,13 +73,8 @@ export const CAPTAIN_RETURNING_TRAVELLER_WELCOME =
   "Welcome back. Tell me where and roughly when you want to fly, and I’ll watch it for you. I track one trip at a time.";
 export const CAPTAIN_PROFILE_COMMAND = "/profile";
 export const CAPTAIN_TRIP_COMMAND = "/trip";
-export const CAPTAIN_TRAVELLER_SETUP_PROMPT =
-  "Save your traveller details so Captain is ready for the booking prototype.";
-export const CAPTAIN_PAYMENT_INTRO =
-  "Captain uses one fixed test card for the prototype. No payment will be processed.";
 export const CAPTAIN_CLEAR_COMMAND = "/clear";
-export const CAPTAIN_CLEAR_CONFIRMATION =
-  "Your travellers and preferences have been cleared.";
+export const CAPTAIN_CLEAR_CONFIRMATION = "Your preferences have been reset.";
 
 export default telegramChannel({
   route: "/eve/v1/telegram",
@@ -170,7 +165,7 @@ export default telegramChannel({
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       await postWithLink(
         ctx,
-        "Manage your traveller details, prototype test card, flight preferences, and notifications in one place.",
+        "Choose how Captain notifies you, and how it ranks the flights it finds.",
         "Open profile",
         await services.auth.createLoginLink(user.id, "/profile")
       );
@@ -185,16 +180,6 @@ export default telegramChannel({
       }
       await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
       await postTelegramDashboardMessage(ctx, response);
-      return null;
-    }
-    if (content === "/payment") {
-      await services.platformStore.appendMessage(user.id, "user", content, new Date());
-      await postWithLink(
-        ctx,
-        CAPTAIN_PAYMENT_INTRO,
-        "Open profile",
-        await services.auth.createLoginLink(user.id, "/profile", { tab: "payment" })
-      );
       return null;
     }
     if (content === CAPTAIN_CLEAR_COMMAND) {
@@ -576,9 +561,6 @@ export default telegramChannel({
         const grounded = await services.tripPlanning.groundAssistantMessage(userId, message);
         message = grounded.message;
         await services.platformStore.appendMessage(userId, "assistant", message, new Date());
-        if (grounded.createdTrip) {
-          await maybePostTravellerSetup(channel.telegram, userId);
-        }
       }
       await channel.telegram.post(message);
     },
@@ -1107,26 +1089,9 @@ async function postTripPlanResult(
   await services.platformStore.appendMessage(userId, "assistant", message, new Date());
   if (result.status === "started") {
     await postTelegramDashboardMessage(ctx, message);
-    await maybePostTravellerSetup(ctx.telegram, userId);
     return;
   }
   await ctx.telegram.post(message);
-}
-
-async function maybePostTravellerSetup(
-  telegram: Pick<TelegramContext["telegram"], "post">,
-  userId: string
-): Promise<void> {
-  const services = await getCaptainServices();
-  const prompted = await services.platformStore.markTravellerSetupPrompted(userId, new Date());
-  if (!prompted) return;
-  await services.platformStore.appendMessage(userId, "assistant", CAPTAIN_TRAVELLER_SETUP_PROMPT, new Date());
-  await postWithLink(
-    telegram,
-    CAPTAIN_TRAVELLER_SETUP_PROMPT,
-    "Add traveller details",
-    await services.auth.createLoginLink(userId, "/profile", { tab: "travellers" })
-  );
 }
 
 async function recoverUndeliveredTripConfirmation(

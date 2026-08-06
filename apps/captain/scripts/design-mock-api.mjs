@@ -208,7 +208,6 @@ const profile = {
   quietHoursEnd: 7,
   onboardingCompletedAt: NOW,
   onboardingStep: "complete",
-  travellerSetupPromptedAt: NOW,
   createdAt: NOW,
   updatedAt: NOW
 };

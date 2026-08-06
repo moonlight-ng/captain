@@ -7,11 +7,9 @@ import {
   CAPTAIN_CLEAR_COMMAND,
   CAPTAIN_CLEAR_CONFIRMATION,
   CAPTAIN_NEW_USER_GREETING,
-  CAPTAIN_PAYMENT_INTRO,
   CAPTAIN_PREFERENCES_INTRO,
   CAPTAIN_PROFILE_COMMAND,
   CAPTAIN_RETURNING_TRAVELLER_WELCOME,
-  CAPTAIN_TRAVELLER_SETUP_PROMPT,
   CAPTAIN_TRIP_COMMAND,
   explainNotification,
   explainRecommendation,
@@ -41,24 +39,13 @@ describe("Telegram profile onboarding", () => {
     expect(CAPTAIN_TRIP_COMMAND).toBe("/trip");
   });
 
-  it("exports fixed handoff copy for travellers and payment", () => {
-    expect(CAPTAIN_TRAVELLER_SETUP_PROMPT).toBe(
-      "Save your traveller details so Captain is ready for the booking prototype."
-    );
-    expect(CAPTAIN_PAYMENT_INTRO).toBe(
-      "Captain uses one fixed test card for the prototype. No payment will be processed."
-    );
-  });
-
   it("uses profile as the single user-facing account command", () => {
     expect(CAPTAIN_PROFILE_COMMAND).toBe("/profile");
   });
 
-  it("uses the clear command to wipe travellers and preferences", () => {
+  it("uses the clear command to reset preferences", () => {
     expect(CAPTAIN_CLEAR_COMMAND).toBe("/clear");
-    expect(CAPTAIN_CLEAR_CONFIRMATION).toBe(
-      "Your travellers and preferences have been cleared."
-    );
+    expect(CAPTAIN_CLEAR_CONFIRMATION).toBe("Your preferences have been reset.");
   });
 
   it("parses currency, ranking, and preferred/avoided airlines deterministically", () => {

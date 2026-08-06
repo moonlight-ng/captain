@@ -1,14 +1,4 @@
-import type { PassengerFormValues } from "./components/PassengerForm";
-
 const MOCK_ACCESS = "design";
-
-const FAKE_PEOPLE = [
-  { givenName: "Ada", familyName: "Lovelace", title: "ms" as const, gender: "f" as const },
-  { givenName: "Alan", familyName: "Turing", title: "mr" as const, gender: "m" as const },
-  { givenName: "Grace", familyName: "Hopper", title: "ms" as const, gender: "f" as const },
-  { givenName: "Katherine", familyName: "Johnson", title: "ms" as const, gender: "f" as const },
-  { givenName: "Tim", familyName: "Berners-Lee", title: "mr" as const, gender: "m" as const }
-];
 
 /** Local design / prototype mode (`#access=design`). */
 export function isMockMode(): boolean {
@@ -35,28 +25,4 @@ export function ensureMockAccess(): boolean {
   url.hash = hash.toString();
   window.history.replaceState(null, "", url.toString());
   return true;
-}
-
-/** Complete booking-ready traveller details for mock / design flows. */
-export function fakeTravellerDetails(index = 0): PassengerFormValues {
-  const person = FAKE_PEOPLE[index % FAKE_PEOPLE.length]!;
-  const stamp = String(1000 + (index % 9000)).padStart(4, "0");
-  const slug = `${person.givenName}.${person.familyName}`
-    .toLowerCase()
-    .replace(/[^a-z.]+/gu, "");
-  return {
-    givenName: person.givenName,
-    middleName: "",
-    familyName: person.familyName,
-    title: person.title,
-    gender: person.gender,
-    bornOn: "1990-01-15",
-    email: `${slug}@example.com`,
-    phoneNumber: `+44770090${stamp}`,
-    nationality: "GB",
-    countryOfResidence: "GB",
-    passportNumber: `GB${stamp}${String(100000 + index).slice(-6)}`,
-    passportIssuingCountry: "GB",
-    passportExpiresOn: "2032-06-01"
-  };
 }

@@ -1,17 +1,10 @@
 import type {
   CaptainSessionPath,
-  CreatePassengerInput,
   CreateTripInput,
   OfferSnapshot,
-  Passenger,
-  PaymentCardDeletion,
-  PaymentCardSetupIntent,
-  PaymentMethod,
-  SavePaymentMethodInput,
   SearchSpec,
   SearchSpecRequest,
   TravellerProfile,
-  UpdatePassengerInput,
   UpdateTravellerProfile,
   Trip,
   TripAction,
@@ -44,34 +37,6 @@ export class BetaLaunchGateError extends Error {
   constructor() {
     super("Captain's public beta has not opened yet");
     this.name = "BetaLaunchGateError";
-  }
-}
-
-export class PaymentSetupInProgressError extends Error {
-  constructor() {
-    super("A payment card setup is already in progress");
-    this.name = "PaymentSetupInProgressError";
-  }
-}
-
-export class PaymentMethodLimitError extends Error {
-  constructor(readonly limit = 20) {
-    super(`A traveller may have at most ${limit} payment method records`);
-    this.name = "PaymentMethodLimitError";
-  }
-}
-
-export class PaymentSetupConflictError extends Error {
-  constructor(
-    readonly code:
-      | "setup_intent_mismatch"
-      | "card_pending_deletion"
-      | "card_unavailable"
-      | "setup_intent_invalid"
-      | "setup_intent_completed"
-  ) {
-    super(code);
-    this.name = "PaymentSetupConflictError";
   }
 }
 
@@ -183,11 +148,6 @@ export type LoginTokenRecord = {
   redirectPath: CaptainSessionPath;
 };
 
-export type TripPassengerAssignment = {
-  passengerId: string;
-  ordinal: number;
-};
-
 export interface CaptainPlatformStore {
   ensureTelegramUser(input: TelegramUserInput, now: Date): Promise<CaptainUser>;
   getUser(userId: string): Promise<CaptainUser | null>;
@@ -205,7 +165,6 @@ export interface CaptainPlatformStore {
     },
     now: Date
   ): Promise<TravellerProfile>;
-  markTravellerSetupPrompted(userId: string, now: Date): Promise<boolean>;
   /**
    * Advances a traveller past the welcome step, returning true only for the
    * caller that won. Two updates arriving together must not both greet.
@@ -223,80 +182,6 @@ export interface CaptainPlatformStore {
   resolveWebSession(tokenHash: string, now: Date): Promise<string | null>;
   revokeWebSession(tokenHash: string, now: Date): Promise<void>;
   revokeUserSessions(userId: string, now: Date): Promise<void>;
-  listPassengers(userId: string): Promise<Passenger[]>;
-  getPassenger(userId: string, passengerId: string): Promise<Passenger | null>;
-  createPassenger(userId: string, input: CreatePassengerInput, now: Date): Promise<Passenger>;
-  updatePassenger(
-    userId: string,
-    passengerId: string,
-    input: UpdatePassengerInput,
-    now: Date
-  ): Promise<Passenger>;
-  deletePassenger(userId: string, passengerId: string): Promise<void>;
-  setDefaultPassenger(userId: string, passengerId: string, now: Date): Promise<Passenger>;
-  listTripPassengers(userId: string, tripId: string): Promise<Passenger[]>;
-  setTripPassengers(userId: string, tripId: string, passengerIds: string[]): Promise<void>;
-  listPaymentMethods(userId: string): Promise<PaymentMethod[]>;
-  setDefaultPaymentMethod(
-    userId: string,
-    paymentMethodId: string,
-    now: Date
-  ): Promise<PaymentMethod>;
-  reservePaymentCardSetupIntent(
-    userId: string,
-    setupIntentId: string,
-    now: Date
-  ): Promise<PaymentCardSetupIntent>;
-  /** Read-only view for diagnostics and retention assertions; never mints or mutates. */
-  getPaymentCardSetupIntent(
-    userId: string,
-    setupIntentId: string
-  ): Promise<PaymentCardSetupIntent | null>;
-  /**
-   * Idempotent client-key issuance for a pending setup intent.
-   * Rejects a different ID while one is pending, never mints for completed intents,
-   * and reuses a previously stored component key for the same pending intent.
-   */
-  issuePaymentCardSetupClientKey(
-    userId: string,
-    setupIntentId: string,
-    mint: () => Promise<string>,
-    now: Date
-  ): Promise<{ setupIntentId: string; clientKey: string }>;
-  finalizePaymentMethod(
-    userId: string,
-    input: SavePaymentMethodInput,
-    now: Date
-  ): Promise<PaymentMethod>;
-  removePaymentMethod(userId: string, paymentMethodId: string, now: Date): Promise<void>;
-  claimCardDeletions(
-    workerId: string,
-    now: Date,
-    leaseMs: number,
-    limit: number
-  ): Promise<PaymentCardDeletion[]>;
-  completeCardDeletion(workerId: string, deletionId: string): Promise<boolean>;
-  /**
-   * Requeues with backoff until MAX_CARD_DELETION_ATTEMPTS, then parks the row in
-   * the terminal `failed` state and drops the local card so a card Duffel will
-   * never delete cannot consume the per-user row cap forever.
-   */
-  failCardDeletion(
-    workerId: string,
-    deletionId: string,
-    errorCode: string,
-    errorDetail: string | null,
-    retryAfterMs: number | null,
-    now: Date
-  ): Promise<boolean>;
-  countPendingCardDeletions(): Promise<{
-    queued: number;
-    running: number;
-    failed: number;
-    highAttempts: number;
-    oldestQueuedAgeMs: number | null;
-  }>;
-  cleanupPaymentCardSetupIntents(now: Date): Promise<number>;
   reserveDailyResponseBudget(now: Date, amount: number, limit: number): Promise<boolean>;
   recordWebSearchCalls(now: Date, count: number): Promise<void>;
   claimTelegramUpdate(updateKey: string, userId: string, now: Date): Promise<boolean>;

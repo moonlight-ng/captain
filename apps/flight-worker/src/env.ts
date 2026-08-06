@@ -2,7 +2,6 @@ export type WorkerEnv = {
   databaseUrl: string;
   duffelAccessToken: string;
   duffelBaseUrl: string;
-  duffelCardsBaseUrl: string;
   flysoarMcpUrl: string;
   telegramBotToken: string;
   captainPublicUrl: string;
@@ -22,9 +21,6 @@ export function loadWorkerEnv(source: NodeJS.ProcessEnv = process.env): WorkerEn
     databaseUrl: required(source, "DATABASE_URL"),
     duffelAccessToken: required(source, "DUFFEL_ACCESS_TOKEN"),
     duffelBaseUrl: (source.DUFFEL_BASE_URL?.trim() || "https://api.duffel.com").replace(/\/$/u, ""),
-    duffelCardsBaseUrl: (
-      source.DUFFEL_CARDS_BASE_URL?.trim() || "https://api.duffel.cards"
-    ).replace(/\/$/u, ""),
     flysoarMcpUrl: (source.FLYSOAR_MCP_URL?.trim() || "https://mcp.flysoar.ai/mcp").replace(/\/$/u, ""),
     telegramBotToken: required(source, "TELEGRAM_BOT_TOKEN"),
     captainPublicUrl: required(source, "CAPTAIN_PUBLIC_URL").replace(/\/$/u, ""),

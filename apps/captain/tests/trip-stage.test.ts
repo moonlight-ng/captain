@@ -5,14 +5,7 @@ import { shouldAutoSearchOnOpen, stageLabel, tripStage } from "../src/trip-stage
 
 describe("trip stage", () => {
   it("reports a stopped trip before anything else", () => {
-    expect(tripStage({ trip: null, watch: watch(), booked: true })).toBe("stopped");
-  });
-
-  it("puts a booked trip past tracking, however the watch ended", () => {
-    expect(tripStage({ trip: trip(), watch: watch({ status: "completed" }), booked: true }))
-      .toBe("booked");
-    expect(tripStage({ trip: trip({ status: "paused" }), watch: watch(), booked: true }))
-      .toBe("booked");
+    expect(tripStage({ trip: null, watch: watch() })).toBe("stopped");
   });
 
   it("prefers a pause over a stale or running watch", () => {
@@ -49,10 +42,9 @@ describe("trip stage", () => {
     })).toBe(true);
   });
 
-  it("leaves a stopped, finished, or booked trip alone on open", () => {
+  it("leaves a stopped or finished trip alone on open", () => {
     expect(shouldAutoSearchOnOpen({ trip: null, watch: watch() })).toBe(false);
     expect(shouldAutoSearchOnOpen({ trip: trip(), watch: null })).toBe(false);
-    expect(shouldAutoSearchOnOpen({ trip: trip(), watch: watch(), booked: true })).toBe(false);
     expect(shouldAutoSearchOnOpen({ trip: trip({ status: "paused" }), watch: watch() })).toBe(false);
     expect(shouldAutoSearchOnOpen({ trip: trip(), watch: watch({ status: "paused" }) })).toBe(false);
     expect(shouldAutoSearchOnOpen({ trip: trip(), watch: watch({ status: "completed" }) })).toBe(false);

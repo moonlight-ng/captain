@@ -10,14 +10,12 @@ import {
   initializeAccessToken,
   setTripFlightSelection,
   tripAction,
-  tripHref,
-  type ProfileTab
+  tripHref
 } from "./api";
 import {
   EMPTY_BROWSE_PREFERENCES,
   sortAndFilterOffers,
   type BrowsePreferences,
-  type Passenger,
   type RankingMode,
   type Segment,
   type TravellerProfile,
@@ -55,16 +53,7 @@ import {
 } from "./format";
 import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./components/icons";
 import { FilterSheet } from "./components/FilterSheet";
-import { TripTravellerPicker } from "./components/TripTravellerPicker";
-import {
-  createMockBooking,
-  readMockBooking,
-  removeMockBooking,
-  writeMockBooking,
-  type MockBooking
-} from "./mock-booking";
 import { isWatchSearching, shouldAutoSearchOnOpen } from "./trip-stage";
-import { BookedFlight } from "./screens/BookedFlight";
 import { Home } from "./screens/Home";
 import { Profile } from "./screens/Profile";
 import { TripSettings } from "./screens/TripSettings";
@@ -78,17 +67,11 @@ const tabLabels: Record<Tab, string> = {
 
 type Page = "home" | "trip" | "trip-settings" | "profile";
 
-/** Paths already sent to Telegram, and the profile tab each one meant. */
-const profileAliasTabs: Record<string, ProfileTab | ""> = {
-  "/profile": "",
-  "/settings": "preferences",
-  "/preferences": "preferences",
-  "/travellers": "travellers",
-  "/payment": "payment"
-};
+/** Account paths already sent to Telegram. They all land on the one profile page. */
+const profileAliases = new Set(["/profile", "/settings", "/preferences", "/travellers", "/payment"]);
 
 function currentPage(): Page {
-  if (window.location.pathname in profileAliasTabs) return "profile";
+  if (profileAliases.has(window.location.pathname)) return "profile";
   if (window.location.pathname === "/trips") return "home";
   return /^\/trip\/[^/]+\/settings\/?$/u.test(window.location.pathname)
     ? "trip-settings"
@@ -123,7 +106,6 @@ export function App() {
   const [profile, setProfile] = useState<TravellerProfile | null>(null);
   const [tripData, setTripData] = useState<TripPayload | null>(null);
   const [displayName, setDisplayName] = useState("");
-  const [credential, setCredential] = useState<"session" | "legacy-bearer" | null>(null);
   const [loading, setLoading] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
   const [error, setError] = useState("");
@@ -135,7 +117,6 @@ export function App() {
   const [dismissedItineraryKeys, setDismissedItineraryKeys] = useState<string[]>([]);
   const [watchedOfferCache, setWatchedOfferCache] = useState<Record<string, VerifiedOffer>>({});
   const [searchBusy, setSearchBusy] = useState(false);
-  const [mockBooking, setMockBooking] = useState<MockBooking | null>(null);
   /** Trips already checked on arrival, so a reload of state can't re-fire it. */
   const autoSearchedTripIds = useRef(new Set<string>());
   const page = currentPage();
@@ -147,7 +128,6 @@ export function App() {
       initializeAccessToken();
       const session = await getSession();
       setDisplayName(session.displayName);
-      setCredential(session.credential);
       setAuthenticated(true);
       const requestedTripId = currentTripId();
       const [nextProfile, nextTrip] = await Promise.all([
@@ -174,11 +154,10 @@ export function App() {
   }
 
   useEffect(() => {
-    const aliasTab = profileAliasTabs[window.location.pathname];
-    if (aliasTab) {
+    if (profileAliases.has(window.location.pathname) && window.location.pathname !== "/profile") {
       const url = new URL(window.location.href);
       url.pathname = "/profile";
-      if (!url.searchParams.has("tab")) url.searchParams.set("tab", aliasTab);
+      url.search = "";
       window.history.replaceState(null, "", url.toString());
     }
     void load();
@@ -193,10 +172,6 @@ export function App() {
   const trip = tripData?.trip ?? null;
   const watch = tripData?.watch ?? null;
   const searching = searchBusy || isWatchSearching(watch, trip);
-
-  useEffect(() => {
-    setMockBooking(trip?.id ? readMockBooking(trip.id) : null);
-  }, [trip?.id]);
 
   useEffect(() => {
     if ((!searching && watch?.status !== "active") || !trip) return;
@@ -317,7 +292,7 @@ export function App() {
   // behind them and the poller swaps in whatever comes back.
   useEffect(() => {
     if (page !== "trip" || !trip || autoSearchedTripIds.current.has(trip.id)) return;
-    if (!shouldAutoSearchOnOpen({ trip, watch, booked: readMockBooking(trip.id) !== null })) return;
+    if (!shouldAutoSearchOnOpen({ trip, watch })) return;
     autoSearchedTripIds.current.add(trip.id);
     void searchFlights({ background: offers.length > 0 });
   }, [page, trip?.id, trip?.status, watch?.status]);
@@ -336,7 +311,6 @@ export function App() {
       <Profile
         profile={profile}
         displayName={displayName}
-        sessionCredential={credential === "session"}
         onSaved={setProfile}
         onBack={() => { window.location.href = homeHref(); }}
       />
@@ -351,15 +325,9 @@ export function App() {
     return (
       <TripSettings
         tripData={tripData}
-        booking={mockBooking}
         trackingError={error}
-        sessionCredential={credential === "session"}
         onTripChanged={load}
         onTripError={setError}
-        onBookingChange={(next) => {
-          setMockBooking(next);
-          writeMockBooking(next);
-        }}
         onBack={() => { window.location.href = tripHref(trip?.id); }}
       />
     );
@@ -429,18 +397,6 @@ export function App() {
           <h1>Tell Captain where you want to go.</h1>
           <p>Return to Telegram to create a trip. Captain tracks one trip at a time.</p>
         </section>
-      ) : mockBooking && mockBooking.tripId === trip.id ? (
-        <BookedFlight
-          booking={mockBooking}
-          onChange={(next) => {
-            setMockBooking(next);
-            writeMockBooking(next);
-          }}
-          onReset={() => {
-            removeMockBooking(trip.id);
-            setMockBooking(null);
-          }}
-        />
       ) : watchlistFocus ? (
         <>
           {error && <div className="notice">{error}</div>}
@@ -450,24 +406,13 @@ export function App() {
             offers={offers}
             watch={tripData?.watch ?? null}
             activity={tripData?.activity ?? []}
-            travellers={tripData?.travellers ?? []}
             tripId={trip.id}
-            sessionCredential={credential === "session"}
             watching={focusWatching}
             refreshBusy={searchBusy}
             onBack={closeFlight}
             onRefresh={() => {
               if (watch?.status === "completed") void trackPrices();
               else void searchFlights();
-            }}
-            onBook={(offer) => {
-              const booking = createMockBooking(trip.id, offer);
-              writeMockBooking(booking);
-              setMockBooking(booking);
-              closeFlight();
-            }}
-            onTravellersChange={(nextTravellers) => {
-              setTripData((current) => current ? { ...current, travellers: nextTravellers } : current);
             }}
             onSelectionChange={(itineraryKey, selected) => {
               setTripData((current) => {
@@ -734,15 +679,11 @@ function WatchlistDetail({
   offers,
   watch,
   activity,
-  travellers,
   tripId,
-  sessionCredential,
   watching,
   refreshBusy,
   onBack,
   onRefresh,
-  onBook,
-  onTravellersChange,
   onSelectionChange,
   onRemoved,
   onError
@@ -752,15 +693,11 @@ function WatchlistDetail({
   offers: VerifiedOffer[];
   watch: Watch | null;
   activity: TripPayload["activity"];
-  travellers: Passenger[];
   tripId: string;
-  sessionCredential: boolean;
   watching: boolean;
   refreshBusy: boolean;
   onBack: () => void;
   onRefresh: () => void;
-  onBook: (offer: VerifiedOffer) => void;
-  onTravellersChange: (travellers: TripPayload["travellers"]) => void;
   onSelectionChange: (itineraryKey: string, selected: boolean) => void;
   onRemoved: (itineraryKey: string) => void;
   onError: (message: string) => void;
@@ -837,15 +774,6 @@ function WatchlistDetail({
           <span>{stops(offer)}</span>
         </div>
       </div>
-
-      <TripTravellerPicker
-        tripId={tripId}
-        assigned={travellers}
-        sessionCredential={sessionCredential}
-        onChanged={onTravellersChange}
-        onError={onError}
-        onBook={() => onBook(offer)}
-      />
 
       {outbound.length > 0 && (
         <div className="watchlist-panel">

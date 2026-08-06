@@ -4,16 +4,13 @@ export type CaptainEnv = {
   databaseUrl: string | null;
   telegramBotToken: string | null;
   telegramWebhookSecretToken: string | null;
-  piiEncryptionKey: string | null;
   aiModel: string;
   tripInterpreterModel: string;
   aiGatewayApiKey: string | null;
   betaUserLimit: number;
   publicBetaEnabled: boolean;
-  paymentsEnabled: boolean;
   duffelAccessToken: string | null;
   duffelBaseUrl: string;
-  duffelCardsBaseUrl: string;
 };
 
 export function loadEnv(): CaptainEnv {
@@ -24,7 +21,6 @@ export function loadEnv(): CaptainEnv {
     databaseUrl: optional("DATABASE_URL"),
     telegramBotToken: optional("TELEGRAM_BOT_TOKEN"),
     telegramWebhookSecretToken: optional("TELEGRAM_WEBHOOK_SECRET_TOKEN"),
-    piiEncryptionKey: optional("CAPTAIN_PII_ENCRYPTION_KEY"),
     aiModel: process.env.AI_MODEL?.trim() || "openai/gpt-5.6-terra",
     tripInterpreterModel: process.env.TRIP_INTERPRETER_MODEL?.trim() || "openai/gpt-5.6-luna",
     aiGatewayApiKey: optional("AI_GATEWAY_API_KEY"),
@@ -33,20 +29,14 @@ export function loadEnv(): CaptainEnv {
       process.env.CAPTAIN_PUBLIC_BETA_ENABLED,
       mode !== "production"
     ),
-    // Prototype invariant: no environment override may enable real card collection.
-    paymentsEnabled: false,
     duffelAccessToken: optional("DUFFEL_ACCESS_TOKEN"),
-    duffelBaseUrl: (process.env.DUFFEL_BASE_URL?.trim() || "https://api.duffel.com").replace(/\/$/u, ""),
-    duffelCardsBaseUrl: (
-      process.env.DUFFEL_CARDS_BASE_URL?.trim() || "https://api.duffel.cards"
-    ).replace(/\/$/u, "")
+    duffelBaseUrl: (process.env.DUFFEL_BASE_URL?.trim() || "https://api.duffel.com").replace(/\/$/u, "")
   };
   if (mode === "production") {
     for (const [name, value] of [
       ["DATABASE_URL", env.databaseUrl],
       ["TELEGRAM_BOT_TOKEN", env.telegramBotToken],
-      ["TELEGRAM_WEBHOOK_SECRET_TOKEN", env.telegramWebhookSecretToken],
-      ["CAPTAIN_PII_ENCRYPTION_KEY", env.piiEncryptionKey]
+      ["TELEGRAM_WEBHOOK_SECRET_TOKEN", env.telegramWebhookSecretToken]
     ] as const) {
       if (!value) throw new Error(`Missing required production environment variable: ${name}`);
     }
