@@ -6,6 +6,7 @@ import {
   TripLimitError,
   TripNotFoundError,
   TripVersionConflictError,
+  summarizePriceHistory,
   tripActionSchema,
   updateTripBriefSchema,
   updateTravellerProfileSchema
@@ -246,21 +247,33 @@ async function getTrip(
         offers: [],
         recommendation: null,
         selections: [],
-        activity: []
+        activity: [],
+        priceHistory: null
       },
       { headers: noStore() }
     );
   }
   await services.platformStore.markTripActivity(userId, trip.id, new Date());
-  const [watch, offers, recommendation, selections, activity] = await Promise.all([
+  const [watch, offers, recommendation, selections, activity, tracked] = await Promise.all([
     services.platformStore.getWatch(userId, trip.id),
     services.trips.offers(userId, trip.id),
     services.platformStore.getRecommendation(userId, trip.id),
     services.platformStore.listTripFlightSelections(userId, trip.id),
-    services.platformStore.listTripActivity(userId, trip.id)
+    services.platformStore.listTripActivity(userId, trip.id),
+    services.platformStore.getTrackedFlightPrices(userId, trip.id)
   ]);
+  const priceHistory = tracked
+    ? {
+        itineraryKey: tracked.itineraryKey,
+        ...summarizePriceHistory({
+          observations: tracked.observations,
+          currency: tracked.currency,
+          departureDate: trip.brief.departureWindow.start
+        })
+      }
+    : null;
   return Response.json(
-    { trips, trip, watch, offers, recommendation, selections, activity },
+    { trips, trip, watch, offers, recommendation, selections, activity, priceHistory },
     { headers: noStore() }
   );
 }

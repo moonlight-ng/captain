@@ -19,6 +19,7 @@ import {
   type RankingMode,
   type Segment,
   type TravellerProfile,
+  type TrackedPriceHistory,
   type TripPayload,
   type VerifiedOffer,
   type Watch
@@ -53,6 +54,7 @@ import {
 } from "./format";
 import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./components/icons";
 import { FilterSheet } from "./components/FilterSheet";
+import { PriceChart, TrackedFlightCard } from "./components/TrackedFlight";
 import { isWatchSearching, shouldAutoSearchOnOpen } from "./trip-stage";
 import { Home } from "./screens/Home";
 import { Profile } from "./screens/Profile";
@@ -240,6 +242,8 @@ export function App() {
     return items;
   }, [personSelectionKeys, watchedOfferCache, offers]);
 
+  const trackedHistory = tripData?.priceHistory ?? null;
+
   const needsManualSearch = Boolean(
     trip && trip.status !== "paused" && watch?.status === "scheduled"
   );
@@ -406,6 +410,9 @@ export function App() {
             offers={offers}
             watch={tripData?.watch ?? null}
             activity={tripData?.activity ?? []}
+            history={
+              trackedHistory?.itineraryKey === watchlistFocus.itineraryKey ? trackedHistory : null
+            }
             tripId={trip.id}
             watching={focusWatching}
             refreshBusy={searchBusy}
@@ -483,6 +490,22 @@ export function App() {
           )}
           {error && <div className="notice">{error}</div>}
 
+          {trackedHistory && (
+            <TrackedFlightCard
+              history={trackedHistory}
+              offer={
+                offers.find((item) => item.itineraryKey === trackedHistory.itineraryKey)
+                ?? watchedOfferCache[trackedHistory.itineraryKey]
+                ?? null
+              }
+              onOpen={() => {
+                const offer = offers.find((item) => item.itineraryKey === trackedHistory.itineraryKey)
+                  ?? watchedOfferCache[trackedHistory.itineraryKey];
+                if (offer) openFlight(offer);
+              }}
+            />
+          )}
+
           <nav className="tabs" aria-label="Trip results">
             {(["flights", "airlines", "browse"] as Tab[]).map((item) => (
               <button
@@ -500,7 +523,7 @@ export function App() {
             {tab === "flights" && (
               <FlightsTab
                 offers={offers}
-                watchedOffers={watchedOffers}
+                watchedKey={trackedHistory?.itineraryKey ?? null}
                 profile={profile!}
                 dismissedItineraryKeys={dismissedItineraryKeys}
                 emptySearch={emptySearch}
@@ -558,34 +581,26 @@ type EmptySearchProps = {
   onSearch: () => void;
 };
 
+/**
+ * Captain's picks. The flight being watched is not repeated here — it has the
+ * card above the tabs, which says far more about it than a row could.
+ */
 function FlightsTab({
   offers,
-  watchedOffers,
+  watchedKey,
   profile,
   dismissedItineraryKeys,
   emptySearch,
   onOpen
 }: {
   offers: VerifiedOffer[];
-  watchedOffers: VerifiedOffer[];
+  watchedKey: string | null;
   profile: TravellerProfile;
   dismissedItineraryKeys: string[];
   emptySearch: EmptySearchProps;
   onOpen: (offer: VerifiedOffer, mode?: RankingMode) => void;
 }) {
   const dismissed = useMemo(() => new Set(dismissedItineraryKeys), [dismissedItineraryKeys]);
-  const watched = useMemo(() => {
-    const seen = new Set<string>();
-    return watchedOffers.filter((offer) => {
-      if (seen.has(offer.itineraryKey)) return false;
-      seen.add(offer.itineraryKey);
-      return true;
-    });
-  }, [watchedOffers]);
-  const watchedKeys = useMemo(
-    () => new Set(watched.map((offer) => offer.itineraryKey)),
-    [watched]
-  );
   const recommendations = useMemo(() => ({
     cheapest: rankOffers(offers, "cheapest", profile.preferredAirlineCodes)[0],
     balanced: rankOffers(offers, "balanced", profile.preferredAirlineCodes)[0],
@@ -596,37 +611,28 @@ function FlightsTab({
   const suggested = modes
     .map((mode) => {
       const offer = recommendations[mode];
-      if (!offer || dismissed.has(offer.itineraryKey) || watchedKeys.has(offer.itineraryKey)) {
+      if (!offer || dismissed.has(offer.itineraryKey) || offer.itineraryKey === watchedKey) {
         return null;
       }
       return { mode, offer };
     })
     .filter((item): item is { mode: RankingMode; offer: VerifiedOffer } => item !== null);
-  if (offers.length === 0 && watched.length === 0) return <ResultsEmpty {...emptySearch} />;
-  if (watched.length === 0 && suggested.length === 0) {
+  if (offers.length === 0) return <ResultsEmpty {...emptySearch} />;
+  if (suggested.length === 0) {
     return (
       <div className="results-empty compact">
         <span>⌁</span>
-        <h2>Watchlist is clear</h2>
-        <p>Watch a flight from the Flights tab to keep an eye on it here.</p>
+        <h2>Nothing to add</h2>
+        <p>
+          {watchedKey
+            ? "Captain has no pick better than the flight you're watching."
+            : "No standout options in the latest results. Try All flights."}
+        </p>
       </div>
     );
   }
   return (
     <div className="recommendation-grid">
-      {watched.map((offer) => (
-        <OfferRow
-          key={`watched-${offer.itineraryKey}`}
-          offer={offer}
-          watching
-          onOpen={() => onOpen(offer)}
-        />
-      ))}
-      {watched.length > 0 && suggested.length > 0 ? (
-        <div className="watchlist-divider" role="separator">
-          <span>Recommendations</span>
-        </div>
-      ) : null}
       {suggested.map(({ mode, offer }) => (
         <RecommendationCard
           key={`${mode}-${offer.id}`}
@@ -679,6 +685,7 @@ function WatchlistDetail({
   offers,
   watch,
   activity,
+  history,
   tripId,
   watching,
   refreshBusy,
@@ -693,6 +700,8 @@ function WatchlistDetail({
   offers: VerifiedOffer[];
   watch: Watch | null;
   activity: TripPayload["activity"];
+  /** Set only when this flight is the one being watched. */
+  history: TrackedPriceHistory | null;
   tripId: string;
   watching: boolean;
   refreshBusy: boolean;
@@ -790,6 +799,32 @@ function WatchlistDetail({
             </p>
           </div>
           <FlightTimeline segments={outbound} />
+        </div>
+      )}
+
+      {history && (
+        <div className="watchlist-panel">
+          <h2>Price since you started watching</h2>
+          <PriceChart history={history} height={110} />
+          <dl className="tracked-stats">
+            <div>
+              <dt>Now</dt>
+              <dd>{formatMoney(history.current, history.currency)}</dd>
+            </div>
+            <div>
+              <dt>Lowest</dt>
+              <dd>{formatMoney(history.low, history.currency)}</dd>
+            </div>
+            <div>
+              <dt>Highest</dt>
+              <dd>{formatMoney(history.high, history.currency)}</dd>
+            </div>
+            <div>
+              <dt>Average</dt>
+              <dd>{formatMoney(history.average, history.currency)}</dd>
+            </div>
+          </dl>
+          <p className="set-note">{history.headline}</p>
         </div>
       )}
 

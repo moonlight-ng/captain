@@ -32,6 +32,7 @@ import type {
   TelegramUserInput,
   TrackingMaintenance,
   TripFlightSelection,
+  TrackedFlightPrices,
   TripActivity,
   TripRecommendation
 } from "./contracts.js";
@@ -749,6 +750,26 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       .filter((offer) => specIds.has(offer.searchSpecId) && (!offer.expiresAt || offer.expiresAt > now.toISOString()))
       .sort((a, b) => a.price - b.price)
       .map(clone);
+  }
+
+  async getTrackedFlightPrices(userId: string, tripId: string): Promise<TrackedFlightPrices | null> {
+    this.#requiredTrip(userId, tripId);
+    const watched = [...(this.#personSelections.get(tripId) ?? new Map<string, string>())]
+      .sort((left, right) => right[1].localeCompare(left[1]))[0]?.[0];
+    if (!watched) return null;
+    const observations = this.#priceHistory
+      .filter((observation) => observation.itineraryKey === watched)
+      .sort((left, right) => left.observedAt.localeCompare(right.observedAt));
+    const currency = observations.at(-1)?.currency
+      ?? this.#recommendations.get(tripId)?.currency
+      ?? "USD";
+    return {
+      itineraryKey: watched,
+      currency,
+      observations: observations
+        .filter((observation) => observation.currency === currency)
+        .map((observation) => ({ price: observation.price, observedAt: observation.observedAt }))
+    };
   }
 
   async listTripFlightSelections(userId: string, tripId: string): Promise<TripFlightSelection[]> {

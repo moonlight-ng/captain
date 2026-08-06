@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "captain-design",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@agents/captain", "dev"],
+      "port": 4178
+    }
+  ]
+}

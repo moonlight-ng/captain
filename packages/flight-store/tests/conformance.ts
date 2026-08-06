@@ -757,6 +757,55 @@ export function describeCaptainPlatformStore(
       await expect(store.claimOnboardingWelcome(ada.id, now)).resolves.toBe(false);
     });
 
+    it("returns the watched flight's whole price series, and nothing before it is watched", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const input = inputFor("Berlin", "BER", "2026-11-20");
+      const specs = buildSearchSpecs(input.brief, false);
+      const created = await store.createTrip(ada.id, input, specs, new Date("2026-08-01T00:00:00Z"));
+      for (const [index, price] of [200, 180, 240].entries()) {
+        await runSearch(
+          store,
+          specs[0]!.id,
+          new Date(Date.parse("2026-08-01T00:00:00Z") + index * 86_400_000),
+          "BA982|LHR|BER",
+          price,
+          "BER"
+        );
+      }
+
+      // Nothing is charted until the traveller picks the flight to watch.
+      await expect(store.getTrackedFlightPrices(ada.id, created.trip.id)).resolves.toBeNull();
+
+      await store.setTripFlightSelection(
+        ada.id,
+        created.trip.id,
+        "BA982|LHR|BER",
+        true,
+        new Date("2026-08-04T00:00:00Z")
+      );
+      // Watching starts now, but the history already collected is what makes
+      // the card useful on the very first render.
+      await expect(store.getTrackedFlightPrices(ada.id, created.trip.id)).resolves.toEqual({
+        itineraryKey: "BA982|LHR|BER",
+        currency: "GBP",
+        observations: [
+          { price: 200, observedAt: "2026-08-01T00:00:00.000Z" },
+          { price: 180, observedAt: "2026-08-02T00:00:00.000Z" },
+          { price: 240, observedAt: "2026-08-03T00:00:00.000Z" }
+        ]
+      });
+
+      await store.setTripFlightSelection(
+        ada.id,
+        created.trip.id,
+        "BA982|LHR|BER",
+        false,
+        new Date("2026-08-05T00:00:00Z")
+      );
+      await expect(store.getTrackedFlightPrices(ada.id, created.trip.id)).resolves.toBeNull();
+    });
+
     it("clears travellers and resets preferences without deleting the account", async () => {
       const store = await createStore();
       const ada = await user(store, 1);

@@ -37,6 +37,7 @@ import type {
   TelegramUserInput,
   TrackingMaintenance,
   TripFlightSelection,
+  TrackedFlightPrices,
   TripActivity,
   TripRecommendation
 } from "./contracts.js";
@@ -876,6 +877,45 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       order by offer.itinerary_key, offer.observed_at desc, offer.price asc
     `;
     return rows.map(toOffer).sort((left, right) => left.price - right.price);
+  }
+
+  async getTrackedFlightPrices(userId: string, tripId: string): Promise<TrackedFlightPrices | null> {
+    const watched = await this.#sql<Array<{ itinerary_key: string }>>`
+      select selection.itinerary_key
+      from captain.trip_flight_selections selection
+      join captain.trips trip on trip.id = selection.trip_id
+      where selection.trip_id = ${tripId}
+        and trip.user_id = ${userId}
+        and selection.selected_by = 'person'
+      order by selection.selected_at desc
+      limit 1
+    `;
+    const itineraryKey = watched[0]?.itinerary_key;
+    if (!itineraryKey) return null;
+    // Currency is fixed for a trip, but a provider swap could still leave two
+    // in the table; the newest observation decides which series to return.
+    const latest = await this.#sql<Array<{ currency: string }>>`
+      select currency from captain.price_observations
+      where itinerary_key = ${itineraryKey}
+      order by observed_at desc
+      limit 1
+    `;
+    const currency = latest[0]?.currency;
+    if (!currency) return { itineraryKey, currency: "USD", observations: [] };
+    const rows = await this.#sql<Array<{ price: string | number; observed_at: Date }>>`
+      select price, observed_at
+      from captain.price_observations
+      where itinerary_key = ${itineraryKey} and currency = ${currency}
+      order by observed_at asc
+    `;
+    return {
+      itineraryKey,
+      currency,
+      observations: rows.map((row) => ({
+        price: Number(row.price),
+        observedAt: iso(row.observed_at)
+      }))
+    };
   }
 
   async listTripFlightSelections(userId: string, tripId: string): Promise<TripFlightSelection[]> {
