@@ -4,8 +4,6 @@ import type { FlightSearchProviderId } from "./provider.js";
 
 export const MAX_ACTIVE_TRIPS_PER_USER = 1;
 export const MAX_SEARCH_COMBINATIONS = 1;
-export const TRACKING_CADENCE_HOURS = 6;
-export const DEFAULT_TRACKING_DURATION_HOURS = 72;
 
 const iataCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/);
 const airlineCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,3}$/);
@@ -96,10 +94,7 @@ export type TripStatus = z.infer<typeof tripStatusSchema>;
 
 export const createTripSchema = z.object({
   title: z.string().trim().min(1).max(120),
-  brief: tripBriefSchema,
-  cadenceHours: z.literal(TRACKING_CADENCE_HOURS).default(TRACKING_CADENCE_HOURS),
-  trackingDurationHours: z.literal(DEFAULT_TRACKING_DURATION_HOURS)
-    .default(DEFAULT_TRACKING_DURATION_HOURS)
+  brief: tripBriefSchema
 }).strict();
 export type CreateTripInput = z.infer<typeof createTripSchema>;
 
@@ -132,8 +127,6 @@ export type Watch = {
   id: string;
   tripId: string;
   status: "active" | "scheduled" | "paused" | "completed";
-  cadenceHours: number;
-  trackingDurationHours: 72;
   runStartedAt: string;
   runEndsAt: string;
   completedAt: string | null;
@@ -145,8 +138,6 @@ export type Watch = {
   baselineCompletedAt: string | null;
   activatedAt: string | null;
   lastUserActivityAt: string;
-  checkInSentAt: string | null;
-  autoPauseAt: string | null;
   priceRiseItineraryKey: string | null;
   priceRiseArmed: boolean;
   delayedAt: string | null;

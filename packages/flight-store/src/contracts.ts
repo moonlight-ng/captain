@@ -128,8 +128,6 @@ export type CaptainNotification = {
     | "daily_digest"
     | "price_rise"
     | "tracking_activation"
-    | "tracking_checkin"
-    | "tracking_paused"
     | "tracking_summary";
   payload: Record<string, unknown>;
   attempts: number;
@@ -138,8 +136,6 @@ export type CaptainNotification = {
 
 export type TrackingMaintenance = {
   activated: number;
-  checkInsQueued: number;
-  autoPaused: number;
   completed: number;
 };
 
@@ -207,12 +203,6 @@ export interface CaptainPlatformStore {
     now: Date
   ): Promise<void>;
   markTripActivity(userId: string, tripId: string, now: Date): Promise<void>;
-  respondToTrackingCheckIn(
-    userId: string,
-    tripId: string,
-    action: "keep" | "pause",
-    now: Date
-  ): Promise<Trip>;
   hasDueWorkerWork(now: Date): Promise<boolean>;
   createTripPlanDraft(userId: string, request: string, sourceMessageId: string | null, now: Date): Promise<TripPlanDraft>;
   getTripPlanDraft(userId: string, draftId: string, now: Date): Promise<TripPlanDraft | null>;

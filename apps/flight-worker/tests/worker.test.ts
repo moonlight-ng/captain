@@ -58,7 +58,7 @@ describe("flight worker orchestration", () => {
       quietHoursEnabled: false
     }, new Date("2026-08-01T12:00:00Z"));
     const input: CreateTripInput = {
-      title: "Berlin", cadenceHours: 6, trackingDurationHours: 72,
+      title: "Berlin",
       brief: {
         originAirports: ["LHR"], destinationAirports: ["BER"], tripType: "one_way",
         departureWindow: { start: "2026-09-10", end: "2026-09-10" }, stayNights: null,
@@ -259,8 +259,6 @@ describe("flight worker orchestration", () => {
     }, new Date("2026-08-01T12:00:00Z"));
     const input: CreateTripInput = {
       title: "Lagos to Abuja",
-      cadenceHours: 6,
-      trackingDurationHours: 72,
       brief: {
         originAirports: ["LOS"],
         destinationAirports: ["ABV"],

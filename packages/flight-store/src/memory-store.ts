@@ -43,14 +43,12 @@ import {
   recommendationSummary
 } from "./ranking.js";
 import {
-  adaptiveWatchIntervalMs,
   CURRENT_OFFER_RETENTION_MS,
   DIGEST_TRIP_LIMIT,
   DISCOVERY_SEARCH_SPEC_LIMIT,
-  INACTIVITY_AUTO_PAUSE_MS,
-  INACTIVITY_CHECKIN_MS,
   retainSearchOffers,
   TRACKING_SEARCH_SPEC_LIMIT,
+  TRACKING_CHECK_INTERVAL_MS,
   trackingRunEndsAt
 } from "./watch-policy.js";
 
@@ -274,9 +272,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       ...(input.betterOptionAlertsEnabled !== undefined
         ? { betterOptionAlertsEnabled: input.betterOptionAlertsEnabled }
         : {}),
-      ...(input.trackingCheckinsEnabled !== undefined
-        ? { trackingCheckinsEnabled: input.trackingCheckinsEnabled }
-        : {}),
       ...(input.maxAlertsPerDay !== undefined ? { maxAlertsPerDay: input.maxAlertsPerDay } : {}),
       ...(input.quietHoursEnabled !== undefined
         ? { quietHoursEnabled: input.quietHoursEnabled }
@@ -290,29 +285,11 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       updatedAt: now.toISOString()
     };
     this.#profiles.set(userId, updated);
-    if (updated.notificationMode === "off" || !updated.trackingCheckinsEnabled) {
-      for (const [watchId, watch] of this.#watches) {
-        if (this.#trips.get(watch.tripId)?.userId !== userId) continue;
-        this.#watches.set(watchId, {
-          ...watch,
-          checkInSentAt: null,
-          autoPauseAt: null,
-          updatedAt: now.toISOString()
-        });
-      }
+    // Turning notifications off retires anything already queued for delivery.
+    if (updated.notificationMode === "off") {
       for (const [notificationId, notification] of this.#notifications) {
-        if (
-          notification.userId === userId
-          && notification.status === "pending"
-          && (
-            updated.notificationMode === "off"
-            || notification.kind === "tracking_checkin"
-          )
-        ) {
-          this.#notifications.set(notificationId, {
-            ...notification,
-            status: "superseded"
-          });
+        if (notification.userId === userId && notification.status === "pending") {
+          this.#notifications.set(notificationId, { ...notification, status: "superseded" });
         }
       }
     }
@@ -481,15 +458,14 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const active = [...this.#trips.values()].filter((trip) => trip.userId === userId && isActiveTripStatus(trip.status));
     if (active.length >= MAX_ACTIVE_TRIPS_PER_USER) throw new TripLimitError();
     const timestamp = now.toISOString();
-    const runEndsAt = trackingRunEndsAt(now);
+    const runEndsAt = trackingRunEndsAt(now, input.brief.departureWindow.start);
     const trip: Trip = {
       id: randomUUID(), userId, title: input.title, status: "tracking", version: 1,
       brief: clone(input.brief), archivedAt: null, archiveReason: null,
       createdAt: timestamp, updatedAt: timestamp
     };
     const watch: Watch = {
-      id: randomUUID(), tripId: trip.id, status: "active", cadenceHours: input.cadenceHours,
-      trackingDurationHours: input.trackingDurationHours,
+      id: randomUUID(), tripId: trip.id, status: "active",
       runStartedAt: timestamp,
       runEndsAt: runEndsAt.toISOString(),
       completedAt: null,
@@ -499,8 +475,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       baselineCompletedAt: null,
       activatedAt: timestamp,
       lastUserActivityAt: timestamp,
-      checkInSentAt: null,
-      autoPauseAt: null,
       priceRiseItineraryKey: null,
       priceRiseArmed: true,
       delayedAt: null, delayReason: null,
@@ -544,14 +518,12 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     this.#recommendations.delete(tripId);
     const watch = [...this.#watches.values()].find((candidate) => candidate.tripId === tripId);
     if (watch) {
-      const durationHours = 72 as const;
       this.#setSpecs(watch.id, specs);
       this.#watches.set(watch.id, {
         ...watch,
         status: "active",
-        trackingDurationHours: durationHours,
         runStartedAt: now.toISOString(),
-        runEndsAt: trackingRunEndsAt(now).toISOString(),
+        runEndsAt: trackingRunEndsAt(now, updated.brief.departureWindow.start).toISOString(),
         completedAt: null,
         checksCompleted: 0,
         nextCheckAt: now.toISOString(),
@@ -559,8 +531,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         baselineCompletedAt: null,
         activatedAt: now.toISOString(),
         lastUserActivityAt: now.toISOString(),
-        checkInSentAt: null,
-        autoPauseAt: null,
         priceRiseItineraryKey: null,
         priceRiseArmed: true,
         delayedAt: null,
@@ -739,14 +709,12 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         : ["cancelled", "completed"].includes(status)
           ? "completed"
           : "active";
-      const durationHours = 72 as const;
       this.#watches.set(watch.id, {
         ...watch, status: watchStatus,
         ...(action.type === "track"
           ? {
-              trackingDurationHours: durationHours,
               runStartedAt: now.toISOString(),
-              runEndsAt: trackingRunEndsAt(now).toISOString(),
+              runEndsAt: trackingRunEndsAt(now, updated.brief.departureWindow.start).toISOString(),
               completedAt: null,
               checksCompleted: 0,
               nextCheckAt: now.toISOString(),
@@ -761,8 +729,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
             : {}),
         ...(action.type === "refresh" ? { lastManualRefreshAt: now.toISOString() } : {}),
         lastUserActivityAt: now.toISOString(),
-        checkInSentAt: null,
-        autoPauseAt: null,
         updatedAt: now.toISOString()
       });
     }
@@ -840,60 +806,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     this.#watches.set(watch.id, {
       ...watch,
       lastUserActivityAt: now.toISOString(),
-      checkInSentAt: null,
-      autoPauseAt: null,
       updatedAt: now.toISOString()
     });
-    for (const [notificationId, notification] of this.#notifications) {
-      if (
-        notification.tripId === tripId
-        && notification.kind === "tracking_checkin"
-        && notification.status === "pending"
-      ) {
-        this.#notifications.set(notificationId, {
-          ...notification,
-          status: "superseded"
-        });
-      }
-    }
-  }
-
-  async respondToTrackingCheckIn(
-    userId: string,
-    tripId: string,
-    action: "keep" | "pause",
-    now: Date
-  ): Promise<Trip> {
-    const trip = this.#requiredTrip(userId, tripId);
-    const watch = [...this.#watches.values()].find((candidate) => candidate.tripId === tripId);
-    if (!watch) throw new Error("Trip Watch not found");
-    const futureScheduled = Boolean(
-      watch.trackingStartsAt
-      && Date.parse(watch.trackingStartsAt) > now.getTime()
-      && watch.baselineCompletedAt
-    );
-    const nextTrip: Trip = {
-      ...trip,
-      status: action === "pause"
-        ? "paused"
-        : this.#recommendations.has(tripId) ? "recommended" : "tracking",
-      version: trip.version + 1,
-      updatedAt: now.toISOString()
-    };
-    this.#trips.set(tripId, nextTrip);
-    this.#watches.set(watch.id, {
-      ...watch,
-      status: action === "pause" ? "paused" : futureScheduled ? "scheduled" : "active",
-      nextCheckAt: action === "pause"
-        ? watch.nextCheckAt
-        : futureScheduled ? watch.trackingStartsAt : now.toISOString(),
-      lastUserActivityAt: now.toISOString(),
-      checkInSentAt: null,
-      autoPauseAt: null,
-      updatedAt: now.toISOString()
-    });
-    this.#recordTripActivity(tripId, action === "pause" ? "tracking_checkin_paused" : "tracking_checkin_kept", {}, now);
-    return clone(nextTrip);
   }
 
   async hasDueWorkerWork(now: Date): Promise<boolean> {
@@ -911,19 +825,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         watch.status === "scheduled"
         && watch.trackingStartsAt
         && Date.parse(watch.trackingStartsAt) <= nowMs
-      ) return true;
-      if (
-        watch.status === "active"
-        && watch.autoPauseAt
-        && Date.parse(watch.autoPauseAt) <= nowMs
-      ) return true;
-      const profile = this.#profiles.get(trip.userId);
-      if (
-        watch.status === "active"
-        && profile?.notificationMode !== "off"
-        && profile?.trackingCheckinsEnabled
-        && !watch.checkInSentAt
-        && Date.parse(watch.lastUserActivityAt) <= nowMs - INACTIVITY_CHECKIN_MS
       ) return true;
     }
     for (const run of this.#runs.values()) {
@@ -959,8 +860,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
 
   async maintainTracking(now: Date): Promise<TrackingMaintenance> {
     let activated = 0;
-    let checkInsQueued = 0;
-    let autoPaused = 0;
     let completed = 0;
     for (const [watchId, watch] of this.#watches) {
       const trip = this.#trips.get(watch.tripId);
@@ -978,8 +877,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
           status: "completed",
           nextCheckAt: null,
           completedAt: timestamp,
-          checkInSentAt: null,
-          autoPauseAt: null,
           updatedAt: timestamp
         });
         this.#trips.set(trip.id, {
@@ -990,7 +887,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         });
         const recommendation = this.#recommendations.get(trip.id);
         this.#recordTripActivity(trip.id, "tracking_completed", {
-          durationHours: watch.trackingDurationHours,
           checksCompleted: watch.checksCompleted,
           recommendationSummary: recommendation?.summary ?? null
         }, now);
@@ -1001,7 +897,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
             `${trip.id}:tracking_summary:${watch.runStartedAt}`,
             {
               tripTitle: trip.title,
-              durationHours: watch.trackingDurationHours,
               checksCompleted: watch.checksCompleted,
               summary: recommendation?.summary ?? "The latest verified options are ready to review."
             },
@@ -1023,8 +918,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
           nextCheckAt: now.toISOString(),
           activatedAt: now.toISOString(),
           lastUserActivityAt: now.toISOString(),
-          checkInSentAt: null,
-          autoPauseAt: null,
           updatedAt: now.toISOString()
         });
         if (profile.notificationMode !== "off") {
@@ -1040,66 +933,9 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
           this.#lastDigestAt.set(trip.userId, now.toISOString());
         }
         activated += 1;
-        continue;
-      }
-      if (watch.status !== "active") continue;
-      if (watch.autoPauseAt && Date.parse(watch.autoPauseAt) <= now.getTime()) {
-        this.#watches.set(watchId, {
-          ...watch,
-          status: "paused",
-          checkInSentAt: null,
-          autoPauseAt: null,
-          updatedAt: now.toISOString()
-        });
-        this.#trips.set(trip.id, {
-          ...trip,
-          status: "paused",
-          version: trip.version + 1,
-          updatedAt: now.toISOString()
-        });
-        if (profile.notificationMode !== "off") {
-          this.#enqueueSimpleNotification(
-            trip,
-            "tracking_paused",
-            `${trip.id}:tracking_paused:${watch.autoPauseAt}`,
-            { tripTitle: trip.title },
-            now
-          );
-        }
-        autoPaused += 1;
-        continue;
-      }
-      if (
-        profile.notificationMode !== "off"
-        && profile.trackingCheckinsEnabled
-        && !watch.checkInSentAt
-        && Date.parse(watch.lastUserActivityAt) <= now.getTime() - INACTIVITY_CHECKIN_MS
-      ) {
-        const checkInSentAt = now.toISOString();
-        const user = [...this.#usersByTelegram.values()]
-          .find((candidate) => candidate.id === trip.userId);
-        const deliveryAt = user ? deliveryTime(now, user.timezone, profile) : now;
-        this.#watches.set(watchId, {
-          ...watch,
-          checkInSentAt,
-          autoPauseAt: new Date(
-            deliveryAt.getTime() + INACTIVITY_AUTO_PAUSE_MS
-          ).toISOString(),
-          updatedAt: checkInSentAt
-        });
-        if (this.#enqueueSimpleNotification(
-          trip,
-          "tracking_checkin",
-          `${trip.id}:tracking_checkin:${checkInSentAt.slice(0, 10)}`,
-          {
-            tripTitle: trip.title,
-            departureDate: trip.brief.departureWindow.start
-          },
-          now
-        )) checkInsQueued += 1;
       }
     }
-    return { activated, checkInsQueued, autoPaused, completed };
+    return { activated, completed };
   }
 
   async finalizeFarFutureBaseline(searchSpecId: string, now: Date): Promise<void> {
@@ -1214,11 +1050,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         ...watch,
         nextCheckAt: new Date(Math.min(
           Date.parse(watch.runEndsAt),
-          now.getTime() + adaptiveWatchIntervalMs(
-          watch.cadenceHours,
-          trip?.brief.departureWindow.start ?? now.toISOString().slice(0, 10),
-          now
-          )
+          now.getTime() + TRACKING_CHECK_INTERVAL_MS
         )).toISOString(),
         updatedAt: now.toISOString()
       });

@@ -1,6 +1,4 @@
 import {
-  DEFAULT_TRACKING_DURATION_HOURS,
-  TRACKING_CADENCE_HOURS,
   EMPTY_TRIP_DRAFT_STATE,
   MAX_ACTIVE_TRIPS_PER_USER,
   SUPPORTED_CURRENCY_MESSAGE,
@@ -528,9 +526,7 @@ function completePlan(
       preferredAirlines: state.preferredAirlines,
       excludedAirlines: state.excludedAirlines,
       context: ""
-    },
-    cadenceHours: TRACKING_CADENCE_HOURS,
-    trackingDurationHours: DEFAULT_TRACKING_DURATION_HOURS
+    }
   });
   return {
     input,

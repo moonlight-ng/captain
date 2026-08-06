@@ -13,7 +13,6 @@ export type TravellerProfile = {
   digestHourLocal: number;
   priceRiseAlertsEnabled: boolean;
   betterOptionAlertsEnabled: boolean;
-  trackingCheckinsEnabled: boolean;
   maxAlertsPerDay: 1 | 2;
   quietHoursEnabled: boolean;
   quietHoursStart: number;
@@ -63,8 +62,6 @@ export type Trip = {
 
 export type Watch = {
   status: "active" | "scheduled" | "paused" | "completed";
-  cadenceHours: number;
-  trackingDurationHours: 72;
   runStartedAt: string;
   runEndsAt: string;
   completedAt: string | null;
@@ -76,8 +73,6 @@ export type Watch = {
   baselineCompletedAt: string | null;
   activatedAt: string | null;
   lastUserActivityAt: string;
-  checkInSentAt: string | null;
-  autoPauseAt: string | null;
   priceRiseItineraryKey: string | null;
   priceRiseArmed: boolean;
   delayedAt: string | null;

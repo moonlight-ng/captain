@@ -74,8 +74,6 @@ const trip = {
 
 const watch = {
   status: "active",
-  cadenceHours: 6,
-  trackingDurationHours: 72,
   runStartedAt: NOW,
   runEndsAt: "2026-08-07T08:00:00.000Z",
   completedAt: null,
@@ -87,8 +85,6 @@ const watch = {
   baselineCompletedAt: NOW,
   activatedAt: NOW,
   lastUserActivityAt: NOW,
-  checkInSentAt: null,
-  autoPauseAt: null,
   priceRiseItineraryKey: null,
   priceRiseArmed: false,
   delayedAt: null,
@@ -201,7 +197,6 @@ const profile = {
   digestHourLocal: 9,
   priceRiseAlertsEnabled: true,
   betterOptionAlertsEnabled: true,
-  trackingCheckinsEnabled: true,
   maxAlertsPerDay: 2,
   quietHoursEnabled: false,
   quietHoursStart: 22,
