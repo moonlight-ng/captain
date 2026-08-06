@@ -1,8 +1,8 @@
 # Captain
 
-Captain is a Telegram-first flight tracker for one traveller profile and one
-active trip. It researches and tracks fares; it does not place orders or
-process payments. Traveller details are collected only on Captain’s secure web pages.
+Captain is a Telegram-first flight price tracker. You describe a trip, it finds
+flights, you pick one to watch, and it tells you how the price moves and when
+to buy. It does not book, take payments, or collect any traveller identity.
 
 ## Product contract
 
@@ -12,30 +12,35 @@ process payments. Traveller details are collected only on Captain’s secure web
   requires stopping or completing the existing one.
 - Captain currently supports USD and GBP trips. The confirmed display
   currency stays fixed; Duffel and Flysoar USD/GBP results are normalized into it.
-- The dashboard has **Flights**, **Airlines**, and **Browse** views. It only
-  displays verified provider offers and never describes the set as exhaustive.
-- `/profile` is the single web destination for traveller details, the fixed
-  prototype test card, flight preferences, notifications, and trip controls. `/preferences`,
-  `/settings`, `/travellers`, and `/payment` are compatibility aliases. Passenger,
-  trip-traveller assignment, and account deletion mutations require a revocable
-  HttpOnly session cookie (via single-use login tokens). The test card is a
-  display-only fixture; Captain ignores payment feature flags and does not
-  expose card capture.
-- Booking and post-booking management are currently a labelled client-side
-  prototype. The Book, seat, baggage, and cancellation actions never call an
-  airline or payment API. Mock booking state stays in the browser and can be
-  reset from the flight activity screen.
-- Archived trips and their evidence are retained for 90 days. `/clear`
-  removes saved travellers and resets preferences to defaults. Account
-  deletion via the API queues remote Duffel card deletions, then removes the
-  traveller, trip, sessions, passengers, payment methods, and retained evidence.
+- **One flight is watched at a time.** Captain finds and ranks options; the
+  traveller picks which one to track. The watched flight leads the dashboard,
+  with its price history, its low and high, and a read on whether to buy now.
+  The result tabs below — **Top picks**, **Airlines**, **All flights** — are
+  the alternatives to it, and only ever show verified provider offers.
+- Prices are checked once a day, and tracking runs until the day the trip
+  departs. There is no cadence or duration to choose.
+- `/profile` is notification and flight-ranking preferences, and nothing else.
+  `/preferences`, `/settings`, `/travellers`, and `/payment` redirect to it.
+  Account deletion requires a revocable HttpOnly session cookie (via a
+  single-use login token).
+- Captain has no booking flow, no card, and no passenger record. When a
+  traveller wants to buy, it points them at whoever is selling the fare.
+- Archived trips and their evidence are retained for 90 days; price history is
+  kept long enough to cover a full tracking run. `/clear` resets preferences to
+  defaults. Account deletion removes the traveller, trip, sessions, and
+  retained evidence.
 
 ## Architecture
 
 `apps/captain` owns Telegram onboarding, trip setup, authenticated profile and
-trip APIs, and the dashboard. `apps/flight-worker` owns scheduled searches,
-notifications, and the leased Duffel card-deletion queue. Both use
-`@agents/flight-store` and share `@agents/provider-duffel` for Duffel access.
+trip APIs, and the dashboard. `apps/flight-worker` owns scheduled searches and
+notifications. Both use `@agents/flight-store` and share
+`@agents/provider-duffel` for Duffel access.
+
+`summarizePriceHistory` in `@agents/flight-domain` is the single read of the
+watched flight's price series. The dashboard card, the flight detail chart, and
+the `get_trip` agent tool all render from it, so Captain cannot say one thing on
+the web and another in Telegram.
 
 trip setup uses a versioned turn interpreter. It keeps one ordered list of
 dated legs, records the pending question and field provenance, and applies
@@ -72,9 +77,13 @@ pnpm --filter @agents/captain db:migrate
 pnpm --filter @agents/captain dev:agent
 ```
 
-After pulling schema changes (for example `004_traveller_records_and_payments`),
-run `db:migrate` again before starting the agent. Production applies pending
+After pulling schema changes (for example `012_price_tracker_only`), run
+`db:migrate` again before starting the agent. Production applies pending
 migrations automatically via Fly `release_command` on deploy.
+
+`012_price_tracker_only` is destructive: it drops the passenger and payment
+tables and deletes any card token still queued for deletion without sending it
+to Duffel. Drain that queue before deploying it.
 
 Build the web dashboard separately with:
 
@@ -104,9 +113,7 @@ onboarding without interrupting existing travellers.
 ## Public beta limits
 
 - Maximum 25 travellers.
-- Checks every 12 hours when departure is over 30 days away, every 6 hours at
-  7–30 days, and every 3 hours in the final week.
-- Manual refresh once every 6 hours.
+- One check a day per trip, until the day the trip departs.
 - At most two improvement alerts in a rolling 24-hour period.
 - Deferred searches keep the last verified results and show delayed tracking.
 
