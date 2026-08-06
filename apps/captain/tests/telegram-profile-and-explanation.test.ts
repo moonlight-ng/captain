@@ -15,7 +15,6 @@ import {
   explainRecommendation,
   parseAirlinePreferences,
   parseProfileCallback,
-  parseTrackingCallback,
   repliedToTelegramMessageId
 } from "../agent/channels/telegram.js";
 
@@ -65,22 +64,6 @@ describe("Telegram profile onboarding", () => {
       preferredAirlineCodes: [],
       excludedAirlineCodes: []
     });
-  });
-
-  it("parses inactivity callbacks without accepting malformed Trip IDs", () => {
-    expect(parseTrackingCallback(
-      "captain-watch:keep:00000000-0000-4000-8000-000000000001"
-    )).toEqual({
-      action: "keep",
-      tripId: "00000000-0000-4000-8000-000000000001"
-    });
-    expect(parseTrackingCallback(
-      "captain-watch:pause:00000000-0000-4000-8000-000000000001"
-    )).toEqual({
-      action: "pause",
-      tripId: "00000000-0000-4000-8000-000000000001"
-    });
-    expect(parseTrackingCallback("captain-watch:pause:not-a-trip")).toBeNull();
   });
 });
 

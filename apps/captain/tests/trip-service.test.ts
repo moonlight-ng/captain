@@ -12,10 +12,10 @@ describe("Trip service", () => {
     const owner = await store.ensureTelegramUser({ telegramUserId: 1, telegramChatId: 1, username: null, firstName: "Ada", lastName: null }, now);
     const other = await store.ensureTelegramUser({ telegramUserId: 2, telegramChatId: 2, username: null, firstName: "Grace", lastName: null }, now);
     const service = new TripService({ store, now: () => now });
-    const created = await service.create(owner.id, { title: "New York", brief: defaultTestBrief(), cadenceHours: 6, trackingDurationHours: 72 });
+    const created = await service.create(owner.id, { title: "New York", brief: defaultTestBrief() });
     expect(created.created).toBe(true);
     expect(created.searchCombinations).toBe(1);
-    const duplicate = await service.create(owner.id, { title: "New York", brief: defaultTestBrief(), cadenceHours: 6, trackingDurationHours: 72 });
+    const duplicate = await service.create(owner.id, { title: "New York", brief: defaultTestBrief() });
     expect(duplicate.created).toBe(false);
     expect(duplicate.trip.id).toBe(created.trip.id);
     expect(await service.get(other.id, created.trip.id)).toBeNull();
@@ -37,9 +37,7 @@ describe("Trip service", () => {
     const service = new TripService({ store, now: () => now });
     const created = await service.create(owner.id, {
       title: "New York",
-      brief: defaultTestBrief(),
-      cadenceHours: 6,
-      trackingDurationHours: 72
+      brief: defaultTestBrief()
     });
     const refreshed = await service.action(owner.id, created.trip.id, {
       type: "refresh",
@@ -64,9 +62,7 @@ describe("Trip service", () => {
     const service = new TripService({ store, now: () => now });
     const created = await service.create(owner.id, {
       title: "New York",
-      brief: defaultTestBrief(),
-      cadenceHours: 6,
-      trackingDurationHours: 72
+      brief: defaultTestBrief()
     });
     const updated = await service.update(owner.id, created.trip.id, {
       expectedVersion: created.trip.version,
@@ -113,17 +109,13 @@ describe("Trip service", () => {
     const service = new TripService({ store, now: () => now });
     await service.create(owner.id, {
       title: "Anambra",
-      brief: defaultTestBrief({ destinationAirports: ["ANA"] }),
-      cadenceHours: 6,
-      trackingDurationHours: 72
+      brief: defaultTestBrief({ destinationAirports: ["ANA"] })
     });
     expect((await service.list(owner.id)).filter((trip) => trip.status === "tracking"))
       .toHaveLength(1);
     await expect(service.create(owner.id, {
       title: "Nairobi",
-      brief: defaultTestBrief({ destinationAirports: ["NBO"] }),
-      cadenceHours: 6,
-      trackingDurationHours: 72
+      brief: defaultTestBrief({ destinationAirports: ["NBO"] })
     })).rejects.toBeInstanceOf(TripLimitError);
     const tracked = (await service.list(owner.id)).filter((trip) => trip.status === "tracking");
     await service.action(owner.id, tracked[0]!.id, {
@@ -132,9 +124,7 @@ describe("Trip service", () => {
     });
     await expect(service.create(owner.id, {
       title: "Nairobi",
-      brief: defaultTestBrief({ destinationAirports: ["NBO"] }),
-      cadenceHours: 6,
-      trackingDurationHours: 72
+      brief: defaultTestBrief({ destinationAirports: ["NBO"] })
     })).resolves.toMatchObject({ created: true });
   });
 });

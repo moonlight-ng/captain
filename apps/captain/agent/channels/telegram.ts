@@ -327,11 +327,6 @@ export default telegramChannel({
       }
       return;
     }
-    const trackingAction = parseTrackingCallback(query.data);
-    if (trackingAction) {
-      await handleTrackingCallback(ctx, query, trackingAction);
-      return;
-    }
     const action = parseTripPlanCallback(query.data);
     if (!action) return;
     const telegramUserId = safeId(query.from.id);
@@ -739,80 +734,6 @@ export function parseProfileCallback(
   return ranking?.[1]
     ? { type: "ranking", value: ranking[1] as TravellerProfile["rankingMode"] }
     : null;
-}
-
-export function parseTrackingCallback(data: string | undefined): {
-  action: "keep" | "pause";
-  tripId: string;
-} | null {
-  const match = /^captain-watch:(keep|pause):([0-9a-f-]{36})$/u.exec(data ?? "");
-  return match?.[1] && match[2]
-    ? { action: match[1] as "keep" | "pause", tripId: match[2] }
-    : null;
-}
-
-async function handleTrackingCallback(
-  ctx: TelegramContext,
-  query: TelegramCallbackQuery,
-  action: { action: "keep" | "pause"; tripId: string }
-): Promise<void> {
-  const telegramUserId = safeId(query.from.id);
-  const telegramChatId = safeId(query.message?.chat.id ?? "");
-  if (telegramUserId === null || telegramChatId === null) return;
-  const services = await getCaptainServices();
-  let user: CaptainUser;
-  try {
-    user = await services.platformStore.ensureTelegramUser({
-      telegramUserId,
-      telegramChatId,
-      username: query.from.username ?? null,
-      firstName: query.from.firstName ?? null,
-      lastName: query.from.lastName ?? null
-    }, new Date());
-  } catch (error) {
-    if (!(error instanceof BetaCapacityError || error instanceof BetaLaunchGateError)) throw error;
-    await ctx.telegram.answerCallbackQuery({
-      callbackQueryId: query.id,
-      text: "Captain isn’t available for this account right now."
-    });
-    return;
-  }
-  const claimed = await services.platformStore.claimTelegramUpdate(
-    `captain:callback:${query.id}`,
-    user.id,
-    new Date()
-  );
-  if (!claimed) {
-    await ctx.telegram.answerCallbackQuery({
-      callbackQueryId: query.id,
-      text: "Already updated."
-    });
-    return;
-  }
-  try {
-    const trip = await services.platformStore.respondToTrackingCheckIn(
-      user.id,
-      action.tripId,
-      action.action,
-      new Date()
-    );
-    await clearCallbackButtons(ctx, query);
-    const route = trip.title.replace(/\s+to\s+/giu, " → ");
-    const message = action.action === "keep"
-      ? `Got it — I’ll keep watching ${route}.`
-      : `Okay — I paused ${route}. You can resume it from Profile.`;
-    await ctx.telegram.answerCallbackQuery({
-      callbackQueryId: query.id,
-      text: action.action === "keep" ? "Tracking continues." : "Tracking paused."
-    });
-    await services.platformStore.appendMessage(user.id, "assistant", message, new Date());
-    await ctx.telegram.post(message);
-  } catch {
-    await ctx.telegram.answerCallbackQuery({
-      callbackQueryId: query.id,
-      text: "I couldn’t update that trip."
-    });
-  }
 }
 
 export function parseAirlinePreferences(content: string): {

@@ -103,8 +103,6 @@ export class FlightWorker {
         worker_id: this.#workerId,
         provider: this.#provider.provider,
         tracking_activated: maintenance.activated,
-        tracking_checkins_queued: maintenance.checkInsQueued,
-        tracking_auto_paused: maintenance.autoPaused,
         tracking_runs_completed: maintenance.completed,
         digests_queued: digestsQueued
       });
@@ -241,20 +239,6 @@ export class FlightWorker {
   #notificationReplyMarkup(notification: CaptainNotification): {
     inline_keyboard: Array<Array<{ text: string; url?: string; callback_data?: string }>>;
   } {
-    if (notification.kind === "tracking_checkin") {
-      return {
-        inline_keyboard: [[
-          {
-            text: "Keep tracking",
-            callback_data: `captain-watch:keep:${notification.tripId}`
-          },
-          {
-            text: "Pause tracking",
-            callback_data: `captain-watch:pause:${notification.tripId}`
-          }
-        ]]
-      };
-    }
     if (notification.kind === "daily_digest") {
       const trips = arrayField(notification.payload, "trips");
       const buttons = trips.slice(0, 3).flatMap((value) => {
@@ -328,14 +312,6 @@ export function notificationText(notification: CaptainNotification): string {
   }
   if (notification.kind === "tracking_activation") {
     return `I’m starting regular tracking for ${route} now.\nI’ll keep an eye on prices and better options.`;
-  }
-  if (notification.kind === "tracking_checkin") {
-    const departureDate = stringField(notification.payload, "departureDate");
-    const dateText = departureDate ? ` on ${formatDate(departureDate)}` : "";
-    return `Are you still planning ${route}${dateText}?\nI can keep watching, or pause it for now.`;
-  }
-  if (notification.kind === "tracking_paused") {
-    return `I paused tracking for ${route} because I didn’t hear back.\nYour trip is saved whenever you want to resume.`;
   }
   if (notification.kind === "tracking_summary") {
     const checksCompleted = numericField(notification.payload, "checksCompleted");

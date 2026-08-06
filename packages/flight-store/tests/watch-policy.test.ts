@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { CompletedProviderOffer } from "../src/contracts.js";
 import {
-  adaptiveWatchIntervalMs,
   MAX_RETAINED_OFFERS_PER_SEARCH,
+  MAX_TRACKING_RUN_MS,
   retainSearchOffers,
+  TRACKING_CHECK_INTERVAL_MS,
   trackingRunEndsAt
 } from "../src/watch-policy.js";
 
@@ -30,17 +31,30 @@ describe("efficient watch policy", () => {
       .toBe(5);
   });
 
-  it("uses predictable six-hour checks throughout a bounded run", () => {
-    const now = new Date("2026-08-01T00:00:00Z");
-    expect(adaptiveWatchIntervalMs(1, "2026-08-20", now)).toBe(6 * 3_600_000);
-    expect(adaptiveWatchIntervalMs(1, "2026-08-09", now)).toBe(6 * 3_600_000);
-    expect(adaptiveWatchIntervalMs(1, "2026-08-05", now)).toBe(6 * 3_600_000);
-    expect(adaptiveWatchIntervalMs(12, "2026-08-05", now)).toBe(6 * 3_600_000);
+  it("checks once a day", () => {
+    expect(TRACKING_CHECK_INTERVAL_MS).toBe(24 * 3_600_000);
   });
 
-  it("ends the fixed run at its three-day boundary", () => {
+  it("tracks a distant departure right up to the day of the flight", () => {
     const start = new Date("2026-08-01T12:00:00Z");
-    expect(trackingRunEndsAt(start).toISOString()).toBe("2026-08-04T12:00:00.000Z");
+    expect(trackingRunEndsAt(start, "2027-03-14").toISOString())
+      .toBe("2027-03-14T23:59:59.999Z");
+    expect(trackingRunEndsAt(start, "2026-08-20").toISOString())
+      .toBe("2026-08-20T23:59:59.999Z");
+  });
+
+  it("still earns one check when the departure is past or unreadable", () => {
+    const start = new Date("2026-08-01T12:00:00Z");
+    expect(trackingRunEndsAt(start, "2026-07-01").toISOString())
+      .toBe("2026-08-02T12:00:00.000Z");
+    expect(trackingRunEndsAt(start, "").getTime())
+      .toBe(start.getTime() + MAX_TRACKING_RUN_MS);
+  });
+
+  it("caps a run whose departure is implausibly far out", () => {
+    const start = new Date("2026-08-01T12:00:00Z");
+    expect(trackingRunEndsAt(start, "2099-01-01").getTime())
+      .toBe(start.getTime() + MAX_TRACKING_RUN_MS);
   });
 });
 

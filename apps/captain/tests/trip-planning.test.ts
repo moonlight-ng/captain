@@ -689,9 +689,7 @@ describe("Captain trip planning", () => {
         destinationAirports: ["LHR"],
         tripType: "one_way",
         stayNights: null
-      }),
-      cadenceHours: 6,
-      trackingDurationHours: 72
+      })
     });
     const blocked = await planning.prepare(
       user.id,
@@ -799,9 +797,7 @@ describe("Captain trip planning", () => {
         destinationAirports: ["ANA"],
         departureWindow: { start: "2025-08-01", end: "2025-08-01" },
         currency: "NGN"
-      }),
-      cadenceHours: 6,
-      trackingDurationHours: 72
+      })
     });
 
     const message = await planning.activeTripsLocation(user.id);

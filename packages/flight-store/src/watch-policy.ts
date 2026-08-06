@@ -3,14 +3,15 @@ import type { CompletedProviderOffer } from "./contracts.js";
 export const DISCOVERY_SEARCH_SPEC_LIMIT = 1;
 export const TRACKING_SEARCH_SPEC_LIMIT = 1;
 export const CURRENT_OFFER_RETENTION_MS = 7 * 86_400_000;
-export const PRICE_HISTORY_RETENTION_MS = 90 * 86_400_000;
+export const PRICE_HISTORY_RETENTION_MS = 400 * 86_400_000;
 export const WATCH_DATA_PRUNE_INTERVAL_MS = 24 * 3_600_000;
 export const MAX_RETAINED_OFFERS_PER_SEARCH = 60;
 /** Trips carried in one daily digest, newest-updated first. */
 export const DIGEST_TRIP_LIMIT = 3;
-export const INACTIVITY_CHECKIN_MS = 7 * 86_400_000;
-export const INACTIVITY_AUTO_PAUSE_MS = 48 * 3_600_000;
-export const TRACKING_CHECK_INTERVAL_MS = 6 * 3_600_000;
+/** One search a day. Fares move day to day, not hour to hour. */
+export const TRACKING_CHECK_INTERVAL_MS = 24 * 3_600_000;
+/** A backstop for a trip whose departure never arrives. */
+export const MAX_TRACKING_RUN_MS = 400 * 86_400_000;
 
 export function retainSearchOffers(offers: CompletedProviderOffer[]): CompletedProviderOffer[] {
   const bestByItinerary = new Map<string, CompletedProviderOffer>();
@@ -56,15 +57,21 @@ export function compactOfferSnapshot(snapshot: Record<string, unknown>): Record<
   };
 }
 
-export function adaptiveWatchIntervalMs(cadenceHours: number, departureStart: string, now: Date): number {
-  void cadenceHours;
-  void departureStart;
-  void now;
-  return TRACKING_CHECK_INTERVAL_MS;
-}
-
-export function trackingRunEndsAt(startedAt: Date): Date {
-  return new Date(startedAt.getTime() + 72 * 3_600_000);
+/**
+ * Tracking runs until the trip departs. The question Captain answers — when is
+ * the right moment to book — is only settled on the day of the flight, and for
+ * a trip months out a fixed multi-day run would stop watching long before then.
+ */
+export function trackingRunEndsAt(startedAt: Date, departureStart: string): Date {
+  const ceiling = startedAt.getTime() + MAX_TRACKING_RUN_MS;
+  const departure = Date.parse(`${departureStart}T23:59:59.999Z`);
+  if (!Number.isFinite(departure)) return new Date(ceiling);
+  // A departure already in the past still earns one check, so that asking
+  // Captain to track does something visible rather than completing instantly.
+  return new Date(Math.min(
+    ceiling,
+    Math.max(departure, startedAt.getTime() + TRACKING_CHECK_INTERVAL_MS)
+  ));
 }
 
 function compareOffers(left: CompletedProviderOffer, right: CompletedProviderOffer): number {

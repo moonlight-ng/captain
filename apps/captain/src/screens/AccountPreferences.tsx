@@ -37,7 +37,6 @@ function saveProfile(
     digestHourLocal: next.digestHourLocal,
     priceRiseAlertsEnabled: next.priceRiseAlertsEnabled,
     betterOptionAlertsEnabled: next.betterOptionAlertsEnabled,
-    trackingCheckinsEnabled: next.trackingCheckinsEnabled,
     maxAlertsPerDay: next.maxAlertsPerDay,
     quietHoursEnabled: next.quietHoursEnabled,
     quietHoursStart: next.quietHoursStart,

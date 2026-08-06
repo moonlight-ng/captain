@@ -71,7 +71,6 @@ export async function updateProfile(
     | "digestHourLocal"
     | "priceRiseAlertsEnabled"
     | "betterOptionAlertsEnabled"
-    | "trackingCheckinsEnabled"
     | "maxAlertsPerDay"
     | "quietHoursEnabled"
     | "quietHoursStart"

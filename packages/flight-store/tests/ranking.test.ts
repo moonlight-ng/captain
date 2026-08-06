@@ -101,7 +101,6 @@ function profile(
     digestHourLocal: 9,
     priceRiseAlertsEnabled: true,
     betterOptionAlertsEnabled: true,
-    trackingCheckinsEnabled: true,
     maxAlertsPerDay: 1,
     quietHoursEnabled: true,
     quietHoursStart: 22,

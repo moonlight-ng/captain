@@ -108,9 +108,7 @@ function watch(overrides: Partial<Watch> = {}): Watch {
   const hourAway = new Date(Date.now() + 60 * 60 * 1000).toISOString();
   return {
     status: "active",
-    cadenceHours: 6,
-    trackingDurationHours: 72,
-    runStartedAt: "2026-08-04T00:00:00.000Z",
+        runStartedAt: "2026-08-04T00:00:00.000Z",
     runEndsAt: dayAway(),
     completedAt: null,
     checksCompleted: 2,
@@ -121,9 +119,7 @@ function watch(overrides: Partial<Watch> = {}): Watch {
     baselineCompletedAt: null,
     activatedAt: "2026-08-04T00:00:00.000Z",
     lastUserActivityAt: "2026-08-04T00:00:00.000Z",
-    checkInSentAt: null,
-    autoPauseAt: null,
-    priceRiseItineraryKey: null,
+        priceRiseItineraryKey: null,
     priceRiseArmed: false,
     delayedAt: null,
     delayReason: null,
