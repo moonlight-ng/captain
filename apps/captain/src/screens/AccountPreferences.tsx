@@ -85,7 +85,7 @@ function NotificationsCard({
   }
 
   return (
-    <details className="settings-card settings-disclosure">
+    <details className="settings-card settings-disclosure" open>
       <summary>
         <span><strong>Notifications</strong></span>
         <em>{notificationModeLabel(mode)}</em>
@@ -218,7 +218,7 @@ function FlightPreferencesCard({
   }
 
   return (
-    <details className="settings-card settings-disclosure">
+    <details className="settings-card settings-disclosure" open>
       <summary>
         <span><strong>Flights</strong></span>
         <em>{label(ranking)}</em>
