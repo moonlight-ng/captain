@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildSearchSpecs,
@@ -10,6 +10,22 @@ import { MemoryCaptainPlatformStore } from "@agents/flight-store";
 import { FlightWorker, notificationText } from "../src/worker.js";
 
 describe("flight worker orchestration", () => {
+  // A tick clamps its own clock forward to real time, so the date a test hands
+  // it is only honoured while it is the later of the two. Delivery and digests
+  // read that clamped clock, so an unpinned suite decides what is due from the
+  // wall clock: it passed by day and failed between 22:00 and 07:00, when the
+  // default quiet hours hold notifications back and `notified` comes out zero.
+  // Pinning the system clock to the date the tests already inject makes the
+  // clamp a no-op and leaves what they exercise unchanged.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-01T12:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("uses only the due-work gate while the worker is idle", async () => {
     const store = new MemoryCaptainPlatformStore();
     const prune = vi.spyOn(store, "pruneWatchData");
