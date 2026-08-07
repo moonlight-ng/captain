@@ -7,7 +7,6 @@ import {
   TripNotFoundError,
   TripVersionConflictError,
   formatTripGoal,
-  summarizePriceHistory,
   tripActionSchema,
   updateTripBriefSchema,
   updateTravellerProfileSchema
@@ -19,6 +18,7 @@ import {
   legacyBearerAllowed,
   type ResolvedAuth
 } from "../../services/auth/legacy-bearer.js";
+import { toTrackedPriceHistory } from "../../services/trips/tracked-price-history.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 export default defineChannel({
@@ -265,16 +265,7 @@ async function getTrip(
     services.platformStore.listTripActivity(userId, trip.id),
     services.platformStore.getTrackedFlightPrices(userId, trip.id)
   ]);
-  const priceHistory = tracked
-    ? {
-        itineraryKey: tracked.itineraryKey,
-        ...summarizePriceHistory({
-          observations: tracked.observations,
-          currency: tracked.currency,
-          departureDate: trip.brief.departureWindow.start
-        })
-      }
-    : null;
+  const priceHistory = toTrackedPriceHistory(tracked, trip.brief.departureWindow.start);
   const profile = await services.platformStore.ensureProfile(userId, new Date());
   return Response.json(
     {
