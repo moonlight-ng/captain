@@ -1291,13 +1291,60 @@ function CenteredState({ title, detail }: { title: string; detail: string }) {
   return <main className="centered"><span className="brand-mark">C</span><h1>{title}</h1><p>{detail}</p></main>;
 }
 
+/*
+  A search takes minutes, not seconds, so this line does two jobs at once: it
+  says what Captain is working on, and — on every other message — that nobody
+  has to sit and watch it happen. Alternating is what makes the second point
+  land; as a permanent line of instruction it reads once and is never read
+  again. Each message is written to fit one line on a phone.
+*/
+const SEARCH_STATUS_MESSAGES = [
+  "Checking fares across airlines",
+  "You can close this page",
+  "Comparing routes, times and stops",
+  "Captain messages you in Telegram",
+  "Verifying today’s prices",
+  "No need to wait here"
+] as const;
+
+const SEARCH_STATUS_ROTATION_MS = 3_200;
+
+function SearchStatusLine() {
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    const id = window.setInterval(
+      () => setIndex((current) => (current + 1) % SEARCH_STATUS_MESSAGES.length),
+      SEARCH_STATUS_ROTATION_MS
+    );
+    return () => window.clearInterval(id);
+  }, []);
+
+  return (
+    <>
+      {/*
+        Rotating text in a live region would interrupt a screen reader every
+        few seconds, so the animation is hidden from one and the whole point
+        is stated once instead.
+      */}
+      <p className="searching-status" aria-hidden="true">
+        <span key={index}>{SEARCH_STATUS_MESSAGES[index]}</span>
+      </p>
+      <p className="visually-hidden">
+        Captain is searching for flights. You can close this page — it sends the
+        results to you in Telegram.
+      </p>
+    </>
+  );
+}
+
 function ResultsEmpty({ needsManualSearch, searching, completed, busy, onSearch }: EmptySearchProps) {
   if (searching) {
     return (
       <div className="results-empty searching">
         <span aria-hidden="true"><SearchRadarIcon /></span>
         <h2>Searching for flights</h2>
-        <p>Captain is checking the internet for flights. You’ll get a notification in Telegram when options come up.</p>
+        <SearchStatusLine />
       </div>
     );
   }

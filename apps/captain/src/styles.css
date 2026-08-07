@@ -998,6 +998,29 @@ textarea {
 .results-empty.searching > span > svg {
   animation: empty-search-sweep 2.4s linear infinite;
 }
+/*
+  Two lines of height are reserved so a longer message never nudges the block
+  as the text rotates.
+*/
+.searching-status {
+  min-height: 2.9em;
+}
+.searching-status > span {
+  display: inline-block;
+  animation: searching-status-in 300ms var(--ease-out) both;
+}
+@keyframes searching-status-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.visually-hidden {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 @keyframes empty-search-pulse {
   0%, 100% { border-color: rgba(255, 255, 255, .12); box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
   50% { border-color: rgba(255, 255, 255, .28); box-shadow: 0 0 0 8px rgba(255, 255, 255, .03); }
@@ -1521,4 +1544,7 @@ legend { margin-bottom: 11px; color: var(--quiet); font-size: var(--type-body); 
   .form-grid.two { grid-template-columns: 1fr; }}
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { transition: none !important; }}
+  *, *::before, *::after { transition: none !important; }
+  /* The words still change — only the movement between them stops. */
+  .searching-status > span { animation: none; }
+}
