@@ -12,9 +12,12 @@ import {
   CAPTAIN_READY_PROMPT,
   CAPTAIN_RETURNING_TRAVELLER_WELCOME,
   CAPTAIN_TRIP_COMMAND,
+  CAPTAIN_TRIPS_COMMAND,
   explainNotification,
   explainRecommendation,
-  repliedToTelegramMessageId
+  repliedToTelegramMessageId,
+  returningTravellerWelcome,
+  telegramCommandName
 } from "../agent/channels/telegram.js";
 
 describe("Telegram profile onboarding", () => {
@@ -50,17 +53,37 @@ describe("Telegram profile onboarding", () => {
     );
   });
 
-  it("uses trip as the single user-facing trip command", () => {
+  it("welcomes a returning traveller back to an existing trip", () => {
+    const trip = "Your trip is tracking.\n\n• LOS → LHR\n\nOpen trip: https://captain.example/trip";
+    const welcome = returningTravellerWelcome(trip);
+    expect(welcome).toBe(`Welcome back. Here’s what I’m watching for you.\n\n${trip}`);
+    expect(welcome).not.toContain("Tell me where");
+    expect(returningTravellerWelcome(null)).toBe(CAPTAIN_RETURNING_TRAVELLER_WELCOME);
+  });
+
+  it("accepts the singular and plural trip commands", () => {
     expect(CAPTAIN_TRIP_COMMAND).toBe("/trip");
+    expect(CAPTAIN_TRIPS_COMMAND).toBe("/trips");
+    expect(telegramCommandName("/trip")).toBe("trip");
+    expect(telegramCommandName(" /trips ")).toBe("trips");
+    expect(telegramCommandName("/trips@CaptainBot")).toBe("trips");
+  });
+
+  it("only parses complete Telegram commands", () => {
+    expect(telegramCommandName("/trips please")).toBeNull();
+    expect(telegramCommandName("show /trips")).toBeNull();
+    expect(telegramCommandName("September 6")).toBeNull();
   });
 
   it("uses profile as the single user-facing account command", () => {
     expect(CAPTAIN_PROFILE_COMMAND).toBe("/profile");
   });
 
-  it("uses the clear command to reset preferences", () => {
+  it("says that clear removes trips as well as resetting preferences", () => {
     expect(CAPTAIN_CLEAR_COMMAND).toBe("/clear");
-    expect(CAPTAIN_CLEAR_CONFIRMATION).toBe("Your preferences have been reset.");
+    expect(CAPTAIN_CLEAR_CONFIRMATION).toBe(
+      "Your trips and preferences have been cleared. Tell me where and roughly when you want to fly, and I’ll start watching again."
+    );
   });
 });
 

@@ -198,6 +198,14 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           updated_at = ${now}
         where user_id = ${userId}
       `;
+      // Trips cascade into watches, recommendations, flight selections, trip
+      // events and notifications, and the conversation's active trip nulls
+      // itself. Drafts are owned by the traveller rather than by a trip, so an
+      // unfinished one has to be deleted on its own or it would come straight
+      // back the next time they typed. Shared search data—specs, runs, offers,
+      // price history—belongs to every traveller on the route, so it stays.
+      await tx`delete from captain.trips where user_id = ${userId}`;
+      await tx`delete from captain.trip_plan_drafts where user_id = ${userId}`;
     });
   }
 

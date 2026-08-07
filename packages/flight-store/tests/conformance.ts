@@ -736,6 +736,7 @@ export function describeCaptainPlatformStore(
     it("clears travellers and resets preferences without deleting the account", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
+      const grace = await user(store, 2);
       const now = new Date("2026-08-01T12:00:00Z");
       await store.updateProfile(ada.id, {
         defaultCurrency: "NGN",
@@ -745,7 +746,10 @@ export function describeCaptainPlatformStore(
         notificationMode: "off",
         quietHoursEnabled: false
       }, now);
+      const sourceMessageId = await store.appendMessage(ada.id, "user", "Clear this", now);
+      const draft = await store.createTripPlanDraft(ada.id, "Plan a trip", sourceMessageId, now);
       await store.createTrip(ada.id, tripInput, buildSearchSpecs(tripInput.brief), now);
+      await store.createTrip(grace.id, tripInput, buildSearchSpecs(tripInput.brief), now);
       await store.clearTravellerData(ada.id, now);
       const profile = await store.getProfile(ada.id);
       expect(profile).toMatchObject({
@@ -757,7 +761,14 @@ export function describeCaptainPlatformStore(
         quietHoursEnabled: true
       });
       await expect(store.getUser(ada.id)).resolves.toMatchObject({ id: ada.id });
-      await expect(store.listTrips(ada.id)).resolves.toHaveLength(1);
+      // Clearing takes every trip, not just the tracked one, and the half-typed
+      // draft behind it—otherwise the next message would resume the old plan.
+      await expect(store.listTrips(ada.id)).resolves.toEqual([]);
+      await expect(store.getActiveTrip(ada.id)).resolves.toBeNull();
+      await expect(store.getTripPlanDraft(ada.id, draft.id, now)).resolves.toBeNull();
+      await expect(store.getConversation(ada.id)).resolves.toMatchObject({ activeTripId: null });
+      // One traveller clearing their own data leaves everyone else's alone.
+      await expect(store.listTrips(grace.id)).resolves.toHaveLength(1);
     });
 
     it("clears all user-owned data when a user is deleted", async () => {

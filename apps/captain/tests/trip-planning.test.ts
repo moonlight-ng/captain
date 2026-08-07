@@ -703,6 +703,8 @@ describe("Captain trip planning", () => {
     expect(blocked.status).toBe("needs_input");
     if (blocked.status !== "needs_input") throw new Error("Expected the trip limit prompt");
     expect(blocked.prompt).toContain("You’re already tracking a trip.");
+    expect(blocked.prompt).toContain("Open /trip");
+    expect(blocked.prompt).not.toContain("/profile");
     expect(blocked.draft.confirmationSnapshot).toBeNull();
 
     const saved = await trips.list(user.id);
