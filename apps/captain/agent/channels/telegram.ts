@@ -68,21 +68,21 @@ const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. 
 // traveller learns what Captain is and can start tracking without answering
 // anything first.
 export const CAPTAIN_NEW_USER_GREETING =
-  "Hi, I’m Captain. Tell me a flight you’re thinking about and I’ll follow its price every day until it departs, so you know when it’s a good moment to book.\n\n"
-  + "I’m an early test version, so I keep things small: one trip at a time, and I never book or pay for anything myself.";
+  "Hi, I’m Captain. I track your flight price and help you decide when to book.\n\n"
+  + "I’m still in early testing, so I can only watch one trip at a time. I never book or pay for anything.";
 export const CAPTAIN_DEFAULTS_INTRO =
-  "I’ve already set you up with sensible defaults — fares in USD, a balanced pick between price and travel time, and one update a day. You can see and change any of it here.";
+  "You’re set up for USD fares, a balance of price and travel time, and at most one alert a day. You can change these anytime.";
 export const CAPTAIN_READY_PROMPT =
-  "That’s it. Whenever you’re ready, tell me where you’re going and roughly when — typed or as a voice note.";
+  "Where to first? Type it or send a voice note.";
 // Captain introduces itself once, at the welcome step. A traveller who has
 // already onboarded gets this instead.
 export const CAPTAIN_RETURNING_TRAVELLER_WELCOME =
-  "Welcome back. Tell me where and roughly when you want to fly, and I’ll watch it for you. I track one trip at a time.";
+  "Welcome back. Where to next?";
 // Someone who is already tracking something is not being asked for a trip
 // again—the welcome hands straight over to the one they have. Worded for one
 // trip or several, since the summary below it counts them itself.
 export const CAPTAIN_RETURNING_TRAVELLER_TRIP_WELCOME =
-  "Welcome back. Here’s what I’m watching for you.";
+  "Welcome back. Here’s what I’m watching.";
 export const CAPTAIN_PROFILE_COMMAND = "/profile";
 export const CAPTAIN_TRIP_COMMAND = "/trip";
 export const CAPTAIN_TRIPS_COMMAND = "/trips";
@@ -91,7 +91,7 @@ export const CAPTAIN_CLEAR_COMMAND = "/clear";
 // confirmation has to name both—otherwise the next /trip comes back empty
 // and reads as Captain having lost something.
 export const CAPTAIN_CLEAR_CONFIRMATION =
-  "Your trips and preferences have been cleared. Tell me where and roughly when you want to fly, and I’ll start watching again.";
+  "Your trips and preferences have been cleared. Looking forward to your next trip.";
 
 export default telegramChannel({
   route: "/eve/v1/telegram",
@@ -196,7 +196,7 @@ export default telegramChannel({
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       const response = await services.tripPlanning.activeTripsLocation(user.id);
       if (!response) {
-        await ctx.telegram.post("You don’t have a trip yet. Tell me where and when you want to fly.");
+        await ctx.telegram.post("No trip yet. Where to next?");
         return null;
       }
       await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
@@ -258,8 +258,8 @@ export default telegramChannel({
     if (isCaptainGreeting(content)) {
       const draft = await services.tripPlanning.findOpen(user.id);
       const response = draft
-        ? "Hi! Your trip draft is still here, and we can continue whenever you’re ready."
-        : "Hi! Tell me where you’re flying from, where you want to go, and roughly when.";
+        ? "Hi! Your trip draft is still here. Ready to continue?"
+        : "Hi! Where to next?";
       await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
       await ctx.telegram.post(response);
       return null;
