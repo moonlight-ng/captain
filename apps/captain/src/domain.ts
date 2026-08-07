@@ -1,5 +1,5 @@
 export type RankingMode = "cheapest" | "balanced" | "fastest";
-export type NotificationMode = "smart" | "daily" | "changes_only" | "off";
+export type NotificationMode = "changes_only" | "off";
 
 export type TravellerProfile = {
   userId: string;
@@ -10,7 +10,6 @@ export type TravellerProfile = {
   excludedAirlineCodes: string[];
   alertsEnabled: boolean;
   notificationMode: NotificationMode;
-  digestHourLocal: number;
   priceRiseAlertsEnabled: boolean;
   betterOptionAlertsEnabled: boolean;
   maxAlertsPerDay: 1 | 2;
@@ -18,7 +17,7 @@ export type TravellerProfile = {
   quietHoursStart: number;
   quietHoursEnd: number;
   onboardingCompletedAt: string | null;
-  onboardingStep: "welcome" | "currency" | "ranking" | "airlines" | "complete";
+  onboardingStep: "welcome" | "complete";
   createdAt: string;
   updatedAt: string;
 };
@@ -157,6 +156,8 @@ export type TripPayload = {
   activity: TripActivity[];
   /** Present only once a flight is being watched. */
   priceHistory: TrackedPriceHistory | null;
+  /** One sentence naming what Captain is trying to do for this trip. */
+  goal: string | null;
 };
 
 export type TripActivity = {

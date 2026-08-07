@@ -141,6 +141,11 @@ describe("Captain trip planning", () => {
       stayNights: 7
     });
     expect(started.message).toContain("Send /trip");
+    // A trip states what it is for the moment it exists.
+    expect(started.receipt.goal)
+      .toBe("Get you LOS → NYC and back on 17 Aug for the best balance of fare and "
+        + "journey time, and tell you when it's the moment to buy.");
+    expect(started.message).toContain(`Goal: ${started.receipt.goal}`);
     expect(started.message).toContain(`Open trip: https://captain.example/t#test-${started.receipt.tripId}`);
     expect(started.message).not.toContain("Trip reference");
     const renderedReceipt = telegramDashboardMessage(started.message);

@@ -67,12 +67,26 @@ Eligible offers are ranked deterministically as Cheapest, Balanced, or
 Fastest. Any itinerary using an excluded carrier is removed. Journey duration
 is the sum of each leg's elapsed flight time, excluding destination stays.
 
+Captain speaks only when something has changed. There is no digest and no
+cadence to configure: `notification_mode` is `changes_only` or `off`. The one
+exception is a trip's first search, which always sends an overview — the
+route's price range, the trip's goal, and an invitation to adjust it — because
+a traveller who has just described a journey needs to know what Captain
+understood.
+
 Improvement alerts require a 5% price reduction, 10% journey-time reduction,
 or 10% Balanced-score improvement, with at most one improvement alert per
 traveller in a rolling 24 hours. That cap is the default; a traveller can raise
-it to two in Profile, which is the ceiling. Each sent Telegram message ID
-points to an immutable recommendation snapshot so a quoted reply explains that
-exact historical comparison.
+it to two in Profile, which is the ceiling. It counts change alerts only: the
+opening overview is never superseded by a later one. Each sent Telegram message
+ID points to an immutable recommendation snapshot so a quoted reply explains
+that exact historical comparison.
+
+Every trip has a goal, derived by `formatTripGoal` from its route, departure
+date, ranking mode, and any maximum fare. It is never stored or authored, so
+it cannot drift from the trip. The creation receipt, the dashboard, the
+`get_trip` tool, and every automatic message render from it, which is what
+lets an alert say what its news means rather than just quoting a number.
 
 `summarizePriceHistory` in `@agents/flight-domain` turns the watched flight's
 observations into the current price, its range, and a verdict. The dashboard,

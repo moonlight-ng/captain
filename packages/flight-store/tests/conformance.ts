@@ -138,7 +138,7 @@ export function describeCaptainPlatformStore(
         expiresAt: "2026-08-01T12:30:00Z", observedAt: "2026-08-01T12:00:01Z",
         snapshot: { route: "LHR → BER", airlineCodes: ["BA"], stops: 0, durationSeconds: 7_200, segments: [] }
       }], new Date("2026-08-01T12:00:01Z"));
-      expect(await store.evaluateTripsForSearchSpec(run.searchSpecId, new Date("2026-08-01T12:00:02Z"))).toBe(0);
+      expect(await store.evaluateTripsForSearchSpec(run.searchSpecId, new Date("2026-08-01T12:00:02Z"))).toBe(1);
       const trip = (await store.listTrips(ada.id))[0]!;
       const [offer] = await store.listTripOffers(ada.id, trip.id, new Date("2026-08-01T12:00:03Z"));
       await store.setTripFlightSelection(
@@ -162,8 +162,16 @@ export function describeCaptainPlatformStore(
           selectedAt: "2026-08-01T12:00:01.000Z"
         })
       ]);
+      // The first search always earns the overview: the route's spread, and
+      // the goal Captain is now chasing.
       const notifications = await store.listPendingNotifications(new Date("2026-08-01T12:00:03Z"), 10);
-      expect(notifications).toHaveLength(0);
+      expect(notifications).toEqual([expect.objectContaining({
+        kind: "initial_results",
+        payload: expect.objectContaining({
+          tripGoal: expect.stringContaining("Get you LHR → BER"),
+          range: { count: 1, low: 100, high: 100, currency: "GBP" }
+        })
+      })]);
     });
 
     it("recovers an expired lease without duplicating a live claim", async () => {
@@ -196,8 +204,11 @@ export function describeCaptainPlatformStore(
       const created = await store.createTrip(grace.id, tripInput, specs, new Date("2026-08-01T12:05:00Z"));
       expect(created.trip.status).toBe("recommended");
       expect(await store.scheduleDueSearchRuns(new Date("2026-08-01T12:05:00Z"), 900_000, 100)).toBe(0);
+      // Grace pays for no search of her own, but the results are new to her,
+      // so she still gets the overview that opens every trip.
       const notifications = await store.listPendingNotifications(new Date("2026-08-01T12:05:01Z"), 10);
-      expect(notifications.some((notification) => notification.userId === grace.id)).toBe(false);
+      expect(notifications.filter((notification) => notification.userId === grace.id))
+        .toEqual([expect.objectContaining({ kind: "initial_results" })]);
     });
 
     it("checks daily and keeps tracking until the day of departure", async () => {
@@ -288,6 +299,7 @@ export function describeCaptainPlatformStore(
         new Date("2026-08-03T08:00:00Z"),
         10
       )).toEqual([
+        expect.objectContaining({ kind: "initial_results" }),
         expect.objectContaining({
           kind: "new_best",
           payload: expect.objectContaining({
@@ -382,11 +394,13 @@ export function describeCaptainPlatformStore(
         changes.push(await store.evaluateTripsForSearchSpec(run.searchSpecId, now));
       }
 
-      expect(changes).toEqual([0, 1, 0, 0]);
-      expect(await store.listPendingNotifications(
+      // The opening overview is not a change alert, so it is not what the cap
+      // is counting: exactly one price move gets through after it.
+      expect(changes).toEqual([1, 1, 0, 0]);
+      expect((await store.listPendingNotifications(
         new Date("2026-08-01T22:00:00Z"),
         10
-      )).toHaveLength(1);
+      )).map((notification) => notification.kind)).toEqual(["initial_results", "new_best"]);
     });
 
     it("tracks every new trip through to the day it departs", async () => {
@@ -458,7 +472,7 @@ export function describeCaptainPlatformStore(
       const store = await createStore();
       const ada = await user(store, 1);
       await store.updateProfile(ada.id, {
-        notificationMode: "smart",
+        notificationMode: "changes_only",
         quietHoursEnabled: false
       }, new Date("2026-08-01T12:00:00Z"));
       const input = inputFor("Berlin", "BER", "2026-09-10");
@@ -489,101 +503,11 @@ export function describeCaptainPlatformStore(
       });
     });
 
-    it("digests the one active Trip and leaves a cancelled one out", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      const now = new Date("2026-08-01T12:00:00Z");
-      await store.updateProfile(ada.id, {
-        notificationMode: "daily",
-        digestHourLocal: 9,
-        quietHoursEnabled: false
-      }, now);
-      // A traveller tracks one trip at a time, so the earlier trip has to be
-      // cancelled before the next one can start.
-      for (const [index, destination] of ["BER", "CDG"].entries()) {
-        const input = inputFor(destination, destination, "2026-08-20");
-        const specs = buildSearchSpecs(input.brief, false);
-        const created = await store.createTrip(ada.id, input, specs, now);
-        await runSearch(
-          store,
-          specs[0]!.id,
-          new Date(now.getTime() + index * 1_000),
-          `${destination}100|LHR|${destination}`,
-          100 + index * 25,
-          destination
-        );
-        if (destination === "BER") {
-          await store.applyTripAction(
-            ada.id,
-            created.trip.id,
-            {
-              type: "cancel",
-              expectedVersion: (await store.getTrip(ada.id, created.trip.id))!.version
-            },
-            now
-          );
-        }
-      }
-
-      expect(await store.enqueueDueDigests(new Date("2026-08-01T12:05:00Z"))).toBe(1);
-      const notifications = await store.listPendingNotifications(
-        new Date("2026-08-01T12:05:00Z"),
-        10
-      );
-      expect(notifications).toEqual([
-        expect.objectContaining({
-          kind: "daily_digest",
-          payload: expect.objectContaining({
-            trips: [expect.objectContaining({ tripTitle: "CDG" })]
-          })
-        })
-      ]);
-      expect((notifications[0]!.payload.trips as unknown[])).toHaveLength(1);
-    });
-
-    it("carries a meaningful improvement into the digest after a later unchanged check", async () => {
-      const store = await createStore();
-      const ada = await user(store, 1);
-      await store.updateProfile(ada.id, {
-        notificationMode: "daily",
-        digestHourLocal: 9,
-        quietHoursEnabled: false
-      }, new Date("2026-08-01T00:00:00Z"));
-      const input = inputFor("Berlin", "BER", "2026-08-20");
-      const specs = buildSearchSpecs(input.brief, false);
-      await store.createTrip(ada.id, input, specs, new Date("2026-08-01T00:00:00Z"));
-      await runSearch(store, specs[0]!.id, new Date("2026-08-01T00:00:00Z"), "BA982|LHR|BER", 200, "BER");
-      await runSearch(store, specs[0]!.id, new Date("2026-08-02T00:00:00Z"), "BA982|LHR|BER", 150, "BER");
-      await runSearch(store, specs[0]!.id, new Date("2026-08-03T00:00:00Z"), "BA982|LHR|BER", 150, "BER");
-
-      expect(await store.enqueueDueDigests(new Date("2026-08-03T12:05:00Z"))).toBe(1);
-      const [digest] = await store.listPendingNotifications(
-        new Date("2026-08-03T12:05:00Z"),
-        10
-      );
-      // Telegram renders the digest from this shape, so it is part of the
-      // contract: the snapshot sits directly on each trip entry.
-      const trips = digest!.payload.trips as Array<{
-        tripId: string;
-        snapshot: TripRecommendation["snapshot"];
-      }>;
-      expect(trips[0]?.snapshot.pendingDigestChange).toMatchObject({
-        current: { price: 150 },
-        previous: { price: 200 },
-        reasonCodes: ["better_balance"]
-      });
-      // Sending the digest clears the pending change by removing the key.
-      expect((await store.getRecommendation(
-        ada.id,
-        trips[0]!.tripId
-      ))?.snapshot.pendingDigestChange).toBeUndefined();
-    });
-
     it("keeps tracking through a long silence, right up to departure", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
       await store.updateProfile(ada.id, {
-        notificationMode: "smart",
+        notificationMode: "changes_only",
         quietHoursEnabled: false
       }, new Date("2026-08-01T12:00:00Z"));
       const input = inputFor("Berlin", "BER", "2026-11-20");
@@ -726,8 +650,9 @@ export function describeCaptainPlatformStore(
         new Date("2026-08-02T00:03:00Z"),
         10
       );
-      expect(pending).toHaveLength(2);
+      // One overview per trip, and one improvement worth interrupting for.
       expect(pending.map((notification) => notification.kind).sort()).toEqual([
+        "initial_results",
         "initial_results",
         "new_best"
       ]);
@@ -745,8 +670,10 @@ export function describeCaptainPlatformStore(
         store.claimOnboardingWelcome(ada.id, now)
       ]);
       expect(results.filter(Boolean)).toHaveLength(1);
+      // Onboarding asks nothing, so claiming the greeting finishes it outright.
       await expect(store.getProfile(ada.id)).resolves.toMatchObject({
-        onboardingStep: "currency"
+        onboardingStep: "complete",
+        onboardingCompletedAt: now.toISOString()
       });
       // A traveller who has finished onboarding is never greeted again.
       await store.updateProfile(
@@ -826,7 +753,7 @@ export function describeCaptainPlatformStore(
         rankingMode: "balanced",
         preferredAirlineCodes: [],
         excludedAirlineCodes: [],
-        notificationMode: "smart",
+        notificationMode: "changes_only",
         quietHoursEnabled: true
       });
       await expect(store.getUser(ada.id)).resolves.toMatchObject({ id: ada.id });

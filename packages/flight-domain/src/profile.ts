@@ -2,7 +2,12 @@ import { z } from "zod";
 
 export const rankingModeSchema = z.enum(["cheapest", "balanced", "fastest"]);
 export type RankingMode = z.infer<typeof rankingModeSchema>;
-export const notificationModeSchema = z.enum(["smart", "daily", "changes_only", "off"]);
+/**
+ * Captain speaks when something changed, or not at all. There is no digest and
+ * no cadence to choose: a message that says a fare did nothing today is a
+ * message nobody wanted.
+ */
+export const notificationModeSchema = z.enum(["changes_only", "off"]);
 export type NotificationMode = z.infer<typeof notificationModeSchema>;
 
 export const airlineCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,3}$/u);
@@ -16,7 +21,6 @@ export const travellerProfileSchema = z.object({
   excludedAirlineCodes: z.array(airlineCodeSchema).max(12),
   alertsEnabled: z.boolean(),
   notificationMode: notificationModeSchema,
-  digestHourLocal: z.number().int().min(0).max(23),
   priceRiseAlertsEnabled: z.boolean(),
   betterOptionAlertsEnabled: z.boolean(),
   maxAlertsPerDay: z.number().int().min(1).max(2),
@@ -24,7 +28,7 @@ export const travellerProfileSchema = z.object({
   quietHoursStart: z.number().int().min(0).max(23),
   quietHoursEnd: z.number().int().min(0).max(23),
   onboardingCompletedAt: z.iso.datetime().nullable(),
-  onboardingStep: z.enum(["welcome", "currency", "ranking", "airlines", "complete"]),
+  onboardingStep: z.enum(["welcome", "complete"]),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime()
 }).strict();
@@ -37,7 +41,6 @@ export const updateTravellerProfileSchema = z.object({
   excludedAirlineCodes: z.array(airlineCodeSchema).max(12).optional(),
   alertsEnabled: z.boolean().optional(),
   notificationMode: notificationModeSchema.optional(),
-  digestHourLocal: z.number().int().min(0).max(23).optional(),
   priceRiseAlertsEnabled: z.boolean().optional(),
   betterOptionAlertsEnabled: z.boolean().optional(),
   maxAlertsPerDay: z.number().int().min(1).max(2).optional(),
@@ -55,8 +58,7 @@ export const DEFAULT_PROFILE = {
   preferredAirlineCodes: [],
   excludedAirlineCodes: [],
   alertsEnabled: true,
-  notificationMode: "smart",
-  digestHourLocal: 9,
+  notificationMode: "changes_only",
   priceRiseAlertsEnabled: true,
   betterOptionAlertsEnabled: true,
   maxAlertsPerDay: 1,

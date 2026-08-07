@@ -86,9 +86,6 @@ export class FlightWorker {
           processed += 1;
         }
       }
-      const digestsQueued = await this.#store.enqueueDueDigests(
-        new Date(Math.max(now.getTime(), Date.now()))
-      );
       const deliveryNow = new Date(Math.max(now.getTime(), Date.now()));
       const notifications = await this.#store.listPendingNotifications(deliveryNow, 20);
       let notified = 0;
@@ -103,8 +100,7 @@ export class FlightWorker {
         worker_id: this.#workerId,
         provider: this.#provider.provider,
         tracking_activated: maintenance.activated,
-        tracking_runs_completed: maintenance.completed,
-        digests_queued: digestsQueued
+        tracking_runs_completed: maintenance.completed
       });
       return { scheduled, processed, notified };
     } finally {
@@ -236,22 +232,14 @@ export class FlightWorker {
     }
   }
 
+  /**
+   * One trip is tracked at a time, so the button never needs to name a route
+   * to disambiguate. "Open trip" reads the same in every message, which is the
+   * point: the traveller learns one button rather than reading each one.
+   */
   #notificationReplyMarkup(notification: CaptainNotification): {
     inline_keyboard: Array<Array<{ text: string; url?: string; callback_data?: string }>>;
   } {
-    if (notification.kind === "daily_digest") {
-      const trips = arrayField(notification.payload, "trips");
-      const buttons = trips.slice(0, 3).flatMap((value) => {
-        if (!recordValue(value)) return [];
-        const tripId = stringField(value, "tripId");
-        if (!tripId) return [];
-        return [[{
-          text: `Open ${shortRoute(stringField(value, "tripTitle") || "trip")}`,
-          url: this.#createTripAccessLink(notification.userId, tripId)
-        }]];
-      });
-      if (buttons.length > 0) return { inline_keyboard: buttons };
-    }
     return {
       inline_keyboard: [[{
         text: "Open trip",
@@ -273,45 +261,25 @@ export class FlightWorker {
   }
 }
 
+/**
+ * Captain only writes when something happened, so every message here has news
+ * in it. Each one names the goal it is reporting against: an alert that does
+ * not say what a fare means for the thing the traveller asked for is just a
+ * number.
+ */
 export function notificationText(notification: CaptainNotification): string {
   const title = stringField(notification.payload, "tripTitle") || "your trip";
   const route = shortRoute(title);
-  if (notification.kind === "daily_digest") {
-    const trips = arrayField(notification.payload, "trips");
-    const lines = trips.slice(0, 3).flatMap((value) => {
-      if (!recordValue(value)) return [];
-      const tripTitle = shortRoute(stringField(value, "tripTitle") || "trip");
-      const snapshot = digestSnapshot(value);
-      if (!snapshot) {
-        const summary = stringField(value, "summary");
-        return summary ? [`${tripTitle}: ${summary}`] : [];
-      }
-      const current = snapshot.current;
-      const rise = recordField(value, "priceRise");
-      const riseAmount = numericField(rise, "increase");
-      const risePercent = numericField(rise, "percent");
-      if (riseAmount >= 20 && risePercent >= 5) {
-        return [
-          `${tripTitle}: ${formatAmount(current.price, current.currency)}, up `
-          + `${formatAmount(riseAmount, current.currency)} (${Math.round(risePercent)}%) this week.`
-        ];
-      }
-      if (
-        snapshot.previous
-        && snapshot.reasonCodes.some((code) =>
-          ["lower_price", "shorter_duration", "better_balance"].includes(code)
-        )
-      ) {
-        return [
-          `${tripTitle}: ${airlineName(snapshot.current)} is now ${improvementText(snapshot)}.`
-        ];
-      }
-      return [`${tripTitle}: ${formatAmount(current.price, current.currency)}, no meaningful change.`];
-    });
-    return ["Here’s today’s flight update.", ...lines].join("\n");
+  const goal = stringField(notification.payload, "tripGoal");
+  if (notification.kind === "initial_results") {
+    return firstUpdateText(notification, route, goal);
   }
   if (notification.kind === "tracking_activation") {
-    return `I’m starting regular tracking for ${route} now.\nI’ll keep an eye on prices and better options.`;
+    return withGoal(
+      `I’m starting regular tracking for ${route} now.\n`
+      + "I’ll check the fare once a day and only write when something moves.",
+      goal
+    );
   }
   if (notification.kind === "tracking_summary") {
     const checksCompleted = numericField(notification.payload, "checksCompleted");
@@ -320,7 +288,8 @@ export function notificationText(notification: CaptainNotification): string {
     const checks = checksCompleted > 0
       ? ` I checked ${checksCompleted} time${checksCompleted === 1 ? "" : "s"}.`
       : "";
-    return `Your three-day price watch for ${route} is complete.${checks}\n${summary}\nThese prices are now stale. Open the trip and choose Track.`;
+    return `Your price watch for ${route} is complete.${checks}\n${summary}\n`
+      + "These prices are now stale. Open the trip and choose Track.";
   }
   if (notification.kind === "price_rise") {
     const current = offerSnapshot(notification.payload.current);
@@ -328,25 +297,67 @@ export function notificationText(notification: CaptainNotification): string {
     const percent = numericField(notification.payload, "percent");
     const airline = current ? airlineName(current) : "flight";
     const currency = current?.currency || stringField(notification.payload, "currency") || "USD";
-    return `Heads up — the ${airline} option you’re watching is up `
+    return withGoal(
+      `Heads up — the ${airline} option you’re watching is up `
       + `${formatAmount(increase, currency)} (${Math.round(percent)}%) this week.\n`
-      + "It may be worth checking now.";
+      + "It may be worth checking now.",
+      goal
+    );
   }
   const snapshot = recommendationSnapshot(notification.payload.snapshot);
   const current = snapshot?.current ?? offerSnapshot(notification.payload.current);
   const details = current ? offerLine(current) : stringField(notification.payload, "summary");
-  const departureDate = current ? offerDepartureDate(current) : "";
-  const dateText = departureDate ? ` for ${formatDate(departureDate)}` : "";
-  if (notification.kind === "initial_results" || !snapshot?.previous) {
-    const trackingStartsAt = stringField(notification.payload, "trackingStartsAt");
-    if (trackingStartsAt) {
-      return `I checked ${route}${dateText}. Best match right now is ${details}.\n`
-        + `I’ll start regular tracking on ${formatDate(trackingStartsAt)}, 30 days before departure.`;
-    }
-    return `I checked ${route}${dateText}.\nBest match right now is ${details}.`;
+  if (!snapshot?.previous) {
+    return firstUpdateText(notification, route, goal);
   }
-  const improvement = improvementText(snapshot);
-  return `Good news — I found a better option for ${route}: ${improvement}.\n${details}.`;
+  return withGoal(
+    `Good news — I found a better option for ${route}: ${improvementText(snapshot)}.\n${details}.`,
+    goal
+  );
+}
+
+/**
+ * The first thing Captain ever says about a trip. It is an overview, not a
+ * quote: the traveller has just described a journey and wants to know Captain
+ * understood it, what the route costs today, and that the conversation is
+ * still open. A single fare answers none of that.
+ */
+function firstUpdateText(
+  notification: CaptainNotification,
+  route: string,
+  goal: string
+): string {
+  const range = recordField(notification.payload, "range");
+  const count = numericField(range, "count");
+  const low = numericField(range, "low");
+  const high = numericField(range, "high");
+  const currency = stringField(range ?? {}, "currency") || "USD";
+  const trackingStartsAt = stringField(notification.payload, "trackingStartsAt");
+  const spread = count > 0 && high > low
+    ? `${count} fare${count === 1 ? "" : "s"} today, `
+      + `${formatAmount(low, currency)}–${formatAmount(high, currency)}.`
+    : count > 0
+      ? `${count} fare${count === 1 ? "" : "s"} today, around ${formatAmount(low, currency)}.`
+      : "No fares came back on this first look. I’ll keep checking.";
+  // The blank lines are deliberate: in Telegram they separate the three things
+  // this message does — report, state the goal, and invite a reply.
+  return [
+    `${route} is set up. Here’s the first look.`,
+    "",
+    spread,
+    ...(goal ? [`My goal: ${goal}`] : []),
+    trackingStartsAt
+      ? `Daily tracking starts ${formatDate(trackingStartsAt)}, 30 days before departure.`
+      : "I’ll check once a day and only message you when something moves.",
+    "",
+    "Open the trip to pick the flight you want me to watch, or just reply here "
+    + "to change the dates, airports, or anything else."
+  ].join("\n");
+}
+
+/** Closes a message on the goal it is reporting against. */
+function withGoal(body: string, goal: string): string {
+  return goal ? `${body}\nGoal: ${goal}` : body;
 }
 
 function duffelOfferId(url: string | undefined): string | null {
@@ -389,16 +400,6 @@ function offerSnapshot(value: unknown): RecommendationSnapshot["current"] | null
     && Number.isFinite(Number(value.price))
     ? value as RecommendationSnapshot["current"]
     : null;
-}
-
-function digestSnapshot(value: Record<string, unknown>): RecommendationSnapshot | null {
-  const direct = recommendationSnapshot(value.snapshot);
-  const recommendation = recordField(value, "recommendation");
-  const snapshot = direct
-    ?? recommendationSnapshot(recommendation?.snapshot)
-    ?? recommendationSnapshot(recommendation)
-    ?? recommendationSnapshot(value.recommendation);
-  return recommendationSnapshot(snapshot?.pendingDigestChange) ?? snapshot;
 }
 
 function offerLine(offer: RecommendationSnapshot["current"]): string {

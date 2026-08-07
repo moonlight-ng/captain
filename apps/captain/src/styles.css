@@ -687,23 +687,112 @@ a.recommendation-card:active { transform: scale(.99); }
   border-top: 1px solid var(--line);
 }
 .watch-checks div:first-child { border-top: 0; padding-top: 0; }
-.watchlist-toggle {
-  padding: 6px 10px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: rgba(255, 255, 255, .04);
-  color: rgba(255, 255, 255, .8);
+.book-link {
+  padding: 8px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .06);
+  color: rgba(255, 255, 255, .82);
   font-size: var(--type-body);
   font-weight: var(--weight-medium);
-  transition: transform var(--duration-press-out) var(--ease-out), border-color var(--duration-sheet-exit) var(--ease-out), background var(--duration-sheet-exit) var(--ease-out);
+  transition: transform var(--duration-press-out) var(--ease-out);
 }
-.watchlist-toggle:active { transform: scale(.99); }
-.watchlist-toggle.watching {
+.book-link:active { transform: scale(.99); }
+
+/*
+  Watching is the decision this screen exists to get, so it is a card with its
+  own copy and a full-width control, sitting above the itinerary rather than
+  competing with Back in the header.
+*/
+.watch-cta {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-card);
+  background: rgba(255, 255, 255, .05);
+  transition: border-color var(--duration-sheet-exit) var(--ease-out), background var(--duration-sheet-exit) var(--ease-out);
+}
+.watch-cta.watching {
   border-color: rgba(167, 196, 154, .34);
-  background: rgba(167, 196, 154, .09);
-  color: rgba(255, 255, 255, .88);
+  background: rgba(167, 196, 154, .08);
 }
-.watchlist-toggle:disabled { opacity: .65; }
+.watch-cta-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.watch-cta-copy strong {
+  color: var(--ink);
+  font-size: var(--type-body);
+  font-weight: var(--weight-medium);
+}
+.watch-cta.watching .watch-cta-copy strong { color: var(--accent); }
+.watch-cta-copy span {
+  color: var(--muted);
+  font-size: var(--type-body);
+  line-height: 1.5;
+}
+.watch-cta-button {
+  min-height: 44px;
+  width: 100%;
+  padding: 12px 18px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--ink);
+  color: #000000;
+  font-size: var(--type-body);
+  font-weight: var(--weight-medium);
+  transition: transform var(--duration-press-out) var(--ease-out);
+}
+.watch-cta-button:active { transform: scale(.99); }
+.watch-cta.watching .watch-cta-button {
+  border-color: var(--line-strong);
+  background: transparent;
+  color: rgba(255, 255, 255, .78);
+}
+.watch-cta-button:disabled { opacity: .6; }
+
+.booking-panel h2 { color: var(--ink); font-size: var(--type-body); }
+.booking-panel p { margin: 0; }
+.booking-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.booking-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .05);
+  color: var(--ink);
+  text-decoration: none;
+  transition: transform var(--duration-press-out) var(--ease-out);
+}
+.booking-link:active { transform: scale(.995); }
+.booking-link span {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+.booking-link strong { font-size: var(--type-body); font-weight: var(--weight-medium); }
+.booking-link small {
+  overflow: hidden;
+  color: var(--quiet);
+  font-size: var(--type-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.booking-link svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--quiet); }
 
 .airline-card {
   width: 100%;

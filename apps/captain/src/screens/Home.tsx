@@ -1,8 +1,17 @@
 import { profileHref, tripHref } from "../api";
 import type { Trip } from "../domain";
 import { dateRangeLabel, label, routeLabel } from "../format";
+import { inPageLink } from "../navigation";
 
-export function Home({ trips, displayName }: { trips: Trip[]; displayName: string }) {
+export function Home({
+  trips,
+  displayName,
+  onNavigate
+}: {
+  trips: Trip[];
+  displayName: string;
+  onNavigate: (href: string) => void;
+}) {
   return (
     <main className="shell">
       <header className="topbar">
@@ -11,20 +20,32 @@ export function Home({ trips, displayName }: { trips: Trip[]; displayName: strin
           <span>Captain</span>
         </span>
         <div className="top-actions">
-          <a className="quiet-link" href={profileHref()}>{displayName || "Profile"}</a>
+          <a
+            className="quiet-link"
+            href={profileHref()}
+            onClick={inPageLink(profileHref(), onNavigate)}
+          >
+            {displayName || "Profile"}
+          </a>
         </div>
       </header>
 
       {trips.length === 0 ? (
+        // Two levels and nothing else. There is one thing to know here and one
+        // thing to do, and a third line of explanation only buries both.
         <section className="empty-hero">
-          <p className="eyebrow">No trips</p>
-          <h1>Tell Captain where you want to go.</h1>
-          <p>Create a trip from Telegram. Captain tracks one trip at a time.</p>
+          <h1>Track flight prices</h1>
+          <p>Text or send a voice note in Telegram to start a new trip</p>
         </section>
       ) : (
         <section className="trip-list" aria-label="Your trips">
           {trips.map((trip) => (
-            <a className="trip-list-item" key={trip.id} href={tripHref(trip.id)}>
+            <a
+              className="trip-list-item"
+              key={trip.id}
+              href={tripHref(trip.id)}
+              onClick={inPageLink(tripHref(trip.id), onNavigate)}
+            >
               <span>
                 <strong>{routeLabel(trip)}</strong>
                 <small>

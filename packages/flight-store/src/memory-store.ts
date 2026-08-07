@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   DEFAULT_PROFILE,
+  formatTripGoal,
   MAX_ACTIVE_TRIPS_PER_USER,
   TripLimitError,
   TripNotFoundError,
@@ -38,6 +39,11 @@ import type {
 } from "./contracts.js";
 import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
 import {
+  notificationGoalPayload,
+  offerRangeSummary,
+  type OfferRangeSummary
+} from "./notification-payload.js";
+import {
   meetsAlertThreshold,
   rankOffers,
   recommendationReasonCodes,
@@ -45,7 +51,6 @@ import {
 } from "./ranking.js";
 import {
   CURRENT_OFFER_RETENTION_MS,
-  DIGEST_TRIP_LIMIT,
   DISCOVERY_SEARCH_SPEC_LIMIT,
   retainSearchOffers,
   TRACKING_SEARCH_SPEC_LIMIT,
@@ -108,7 +113,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   readonly #recommendations = new Map<string, TripRecommendation>();
   readonly #personSelections = new Map<string, Map<string, string>>();
   readonly #notifications = new Map<string, StoredNotification>();
-  readonly #lastDigestAt = new Map<string, string>();
   readonly #tripActivity = new Map<string, TripActivity[]>();
   readonly #tripPlanDrafts = new Map<string, TripPlanDraft>();
   readonly #tripPlanConfirmations = new Map<
@@ -172,7 +176,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     }
     this.#profiles.delete(userId);
     this.#conversations.delete(userId);
-    this.#lastDigestAt.delete(userId);
     for (const [updateKey, ownerId] of this.#updates) {
       if (ownerId === userId) this.#updates.delete(updateKey);
     }
@@ -260,13 +263,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       ...(input.notificationMode !== undefined
         ? { alertsEnabled: input.notificationMode !== "off" }
         : input.alertsEnabled !== undefined
-          ? {
-              notificationMode: input.alertsEnabled
-                ? current.notificationMode === "off" ? "smart" : current.notificationMode
-                : "off"
-            }
+          ? { notificationMode: input.alertsEnabled ? "changes_only" as const : "off" as const }
         : {}),
-      ...(input.digestHourLocal !== undefined ? { digestHourLocal: input.digestHourLocal } : {}),
       ...(input.priceRiseAlertsEnabled !== undefined
         ? { priceRiseAlertsEnabled: input.priceRiseAlertsEnabled }
         : {}),
@@ -359,7 +357,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     if (!profile || profile.onboardingCompletedAt || profile.onboardingStep !== "welcome") {
       return false;
     }
-    profile.onboardingStep = "currency";
+    profile.onboardingStep = "complete";
+    profile.onboardingCompletedAt = now.toISOString();
     profile.updatedAt = now.toISOString();
     return true;
   }
@@ -860,22 +859,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     if ([...this.#notifications.values()].some((notification) =>
       notification.status === "pending" && Date.parse(notification.availableAt) <= nowMs
     )) return true;
-    for (const [userId, profile] of this.#profiles) {
-      if (!["smart", "daily"].includes(profile.notificationMode)) continue;
-      const user = [...this.#usersByTelegram.values()]
-        .find((candidate) => candidate.id === userId);
-      if (
-        !user
-        || !digestDue(now, user.timezone, profile.digestHourLocal, this.#lastDigestAt.get(userId))
-      ) continue;
-      const hasDigestTrip = [...this.#trips.values()].some((trip) => {
-        if (trip.userId !== userId || !isActiveTripStatus(trip.status)) return false;
-        const watch = [...this.#watches.values()]
-          .find((candidate) => candidate.tripId === trip.id);
-        return watch?.status === "active" && this.#recommendations.has(trip.id);
-      });
-      if (hasDigestTrip) return true;
-    }
     return false;
   }
 
@@ -950,9 +933,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
             now
           );
         }
-        if (["smart", "daily"].includes(profile.notificationMode)) {
-          this.#lastDigestAt.set(trip.userId, now.toISOString());
-        }
         activated += 1;
       }
     }
@@ -974,60 +954,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         updatedAt: now.toISOString()
       });
     }
-  }
-
-  async enqueueDueDigests(now: Date): Promise<number> {
-    let queued = 0;
-    for (const [userId, profile] of this.#profiles) {
-      if (!["smart", "daily"].includes(profile.notificationMode)) continue;
-      const user = [...this.#usersByTelegram.values()].find((candidate) => candidate.id === userId);
-      if (!user || !digestDue(now, user.timezone, profile.digestHourLocal, this.#lastDigestAt.get(userId))) {
-        continue;
-      }
-      const trips = [...this.#trips.values()].filter((trip) => {
-        if (trip.userId !== userId || !isActiveTripStatus(trip.status)) return false;
-        const watch = [...this.#watches.values()].find((candidate) => candidate.tripId === trip.id);
-        return watch?.status === "active" && this.#recommendations.has(trip.id);
-      })
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-        .slice(0, DIGEST_TRIP_LIMIT);
-      if (trips.length === 0) continue;
-      const recentImmediate = [...this.#notifications.values()].some((notification) =>
-        notification.userId === userId
-        && ["price_rise", "price_drop", "new_best"].includes(notification.kind)
-        && Date.parse(notification.createdAt) >= now.getTime() - 3 * 3_600_000
-      );
-      if (recentImmediate) {
-        this.#lastDigestAt.set(userId, now.toISOString());
-        this.#clearPendingDigestChanges(trips);
-        continue;
-      }
-      const primary = trips[0]!;
-      const inserted = this.#enqueueSimpleNotification(
-        primary,
-        "daily_digest",
-        `${userId}:daily_digest:${localDateKey(now, user.timezone)}`,
-        {
-          // The filter above guarantees a recommendation for every trip here.
-          // This shape is the contract Telegram renders from; keep it aligned
-          // with the Postgres digest query.
-          trips: trips.map((trip) => ({
-            tripId: trip.id,
-            tripTitle: trip.title,
-            price: this.#recommendations.get(trip.id)!.price,
-            currency: this.#recommendations.get(trip.id)!.currency,
-            summary: this.#recommendations.get(trip.id)!.summary,
-            snapshot: this.#recommendations.get(trip.id)!.snapshot,
-            priceRise: this.#digestPriceRise(trip.id, now)
-          }))
-        },
-        now
-      );
-      if (inserted) queued += 1;
-      this.#lastDigestAt.set(userId, now.toISOString());
-      this.#clearPendingDigestChanges(trips);
-    }
-    return queued;
   }
 
   async scheduleDueSearchRuns(now: Date, freshnessMs: number, limit: number): Promise<number> {
@@ -1289,17 +1215,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
             best.offer,
             previous?.snapshot.current ?? null
           );
-      const pendingDigestChange = ["smart", "daily"].includes(profile.notificationMode)
-        ? previous && qualifies
-          ? {
-              current: clone(best.offer),
-              previous: clone(previous.snapshot.current),
-              rankingMode: profile.rankingMode,
-              reasonCodes,
-              createdAt: now.toISOString()
-            }
-          : previous?.snapshot.pendingDigestChange ?? null
-        : null;
       const recommendation: TripRecommendation = {
         tripId: trip.id, offerId: best.offer.id, searchSpecId: best.offer.searchSpecId,
         itineraryKey: best.offer.itineraryKey,
@@ -1311,33 +1226,28 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
           previous: previous?.snapshot.current ? clone(previous.snapshot.current) : null,
           rankingMode: profile.rankingMode,
           reasonCodes,
-          createdAt: now.toISOString(),
-          pendingDigestChange
+          createdAt: now.toISOString()
         }
       };
       this.#recommendations.set(trip.id, recommendation);
-      const farBaseline = Boolean(
-        watch?.trackingStartsAt
-        && Date.parse(watch.trackingStartsAt) > now.getTime()
-        && !watch.baselineCompletedAt
-      );
-      const finalWeek = daysUntilDeparture(trip.brief.departureWindow.start, now) <= 7;
-      const immediateInitial = farBaseline || profile.notificationMode === "changes_only";
-      const immediateImprovement = profile.betterOptionAlertsEnabled && (
-        profile.notificationMode === "changes_only"
-        || (profile.notificationMode === "smart" && finalWeek)
-      );
+      // The first search always earns a message: it is the overview that tells
+      // the traveller what Captain found and what it is now chasing. After
+      // that, only a change worth the interruption speaks.
       const kind = profile.notificationMode === "off"
         ? null
         : !previous
-          ? immediateInitial ? "initial_results" : null
-          : qualifies && immediateImprovement && profile.rankingMode === "cheapest"
-            ? "price_drop"
-            : qualifies && immediateImprovement
-              ? "new_best"
-              : null;
+          ? "initial_results"
+          : qualifies && profile.betterOptionAlertsEnabled
+            ? profile.rankingMode === "cheapest" ? "price_drop" : "new_best"
+            : null;
       if (kind) {
-        if (this.#enqueueNotification(trip, kind, recommendation, previous, now)) changed += 1;
+        const context = {
+          tripGoal: formatTripGoal({ brief: trip.brief, rankingMode: profile.rankingMode }),
+          range: offerRangeSummary(offers)
+        };
+        if (this.#enqueueNotification(trip, kind, recommendation, previous, context, now)) {
+          changed += 1;
+        }
       }
       if (watch && this.#evaluatePriceRise(trip, watch, profile, offers, best.offer, now)) {
         changed += 1;
@@ -1357,7 +1267,10 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         this.#notifications.set(notification.id, { ...notification, status: "superseded" });
       }
     }
-    const resultKinds = new Set<CaptainNotification["kind"]>(["initial_results", "price_drop", "new_best"]);
+    // A stale "better option" is worth dropping for a fresher one. The
+    // opening overview is not one of those: it states the goal, and it is the
+    // only message that does, so it always gets delivered.
+    const resultKinds = new Set<CaptainNotification["kind"]>(["price_drop", "new_best"]);
     const resultGroups = new Map<string, StoredNotification[]>();
     for (const notification of [...this.#notifications.values()].filter((candidate) =>
       candidate.status === "pending" && resultKinds.has(candidate.kind)
@@ -1507,6 +1420,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     kind: "initial_results" | "price_drop" | "new_best",
     recommendation: TripRecommendation,
     previous: TripRecommendation | undefined,
+    /** What Captain is chasing, and the market it found. */
+    context: { tripGoal: string; range: OfferRangeSummary | null },
     now: Date
   ): boolean {
     const user = [...this.#usersByTelegram.values()].find((item) => item.id === trip.userId);
@@ -1529,7 +1444,9 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       kind,
       payload: {
         tripTitle: trip.title,
+        tripGoal: context.tripGoal,
         ...recommendation,
+        ...(kind === "initial_results" ? { range: context.range } : {}),
         ...(kind === "initial_results"
           && [...this.#watches.values()].find((watch) => watch.tripId === trip.id)?.trackingStartsAt
           ? {
@@ -1573,12 +1490,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const sameItinerary = watch.priceRiseItineraryKey === monitored.itineraryKey;
     const armed = sameItinerary ? watch.priceRiseArmed : true;
     const thresholdReached = percent >= 0.05 && increase >= 20;
-    const finalWeek = daysUntilDeparture(trip.brief.departureWindow.start, now) <= 7;
-    const immediate = profile.priceRiseAlertsEnabled && (
-      profile.notificationMode === "changes_only"
-      || (profile.notificationMode === "smart" && finalWeek)
-    );
-    const queued = thresholdReached && armed && immediate
+    const queued = thresholdReached && armed && profile.priceRiseAlertsEnabled
       ? this.#enqueueSimpleNotification(
           trip,
           "price_rise",
@@ -1600,43 +1512,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       updatedAt: now.toISOString()
     });
     return queued;
-  }
-
-  #digestPriceRise(
-    tripId: string,
-    now: Date
-  ): { increase: number; percent: number } | null {
-    const watch = [...this.#watches.values()].find((candidate) => candidate.tripId === tripId);
-    const itineraryKey = watch?.priceRiseItineraryKey
-      ?? this.#recommendations.get(tripId)?.itineraryKey;
-    if (!itineraryKey) return null;
-    const observations = this.#priceHistory
-      .filter((observation) =>
-        observation.itineraryKey === itineraryKey
-        && Date.parse(observation.observedAt) >= now.getTime() - 7 * 86_400_000
-      )
-      .sort((left, right) => right.observedAt.localeCompare(left.observedAt));
-    const current = observations[0];
-    if (!current) return null;
-    const low = observations.reduce(
-      (minimum, observation) => Math.min(minimum, observation.price),
-      current.price
-    );
-    const increase = current.price - low;
-    const percent = low > 0 ? increase / low * 100 : 0;
-    return increase >= 20 && percent >= 5 ? { increase, percent } : null;
-  }
-
-  #clearPendingDigestChanges(trips: Trip[]): void {
-    for (const trip of trips) {
-      const recommendation = this.#recommendations.get(trip.id);
-      if (!recommendation?.snapshot.pendingDigestChange) continue;
-      // Postgres clears this with the jsonb `-` operator, which drops the key
-      // outright. The field is optional, so drop it here too rather than
-      // leaving an explicit null the real store never returns.
-      const { pendingDigestChange: _cleared, ...snapshot } = recommendation.snapshot;
-      this.#recommendations.set(trip.id, { ...recommendation, snapshot });
-    }
   }
 
   #enqueueSimpleNotification(
@@ -1666,7 +1541,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       tripId: trip.id,
       telegramChatId: user.telegramChatId,
       kind,
-      payload,
+      // Every automatic message states the goal it is reporting against.
+      payload: { ...notificationGoalPayload(trip, profile), ...payload },
       attempts: 0,
       telegramMessageId: null,
       status: "pending",
@@ -1708,26 +1584,6 @@ function deliveryTime(
     // Invalid timezones fall back to immediate delivery.
   }
   return now;
-}
-
-function digestDue(
-  now: Date,
-  timezone: string,
-  digestHourLocal: number,
-  lastDigestAt: string | undefined
-): boolean {
-  try {
-    const parts = localParts(now, timezone);
-    if (parts.hour < digestHourLocal) return false;
-    return !lastDigestAt || localDateKey(new Date(lastDigestAt), timezone) !== parts.date;
-  } catch {
-    return now.getUTCHours() >= digestHourLocal
-      && (!lastDigestAt || lastDigestAt.slice(0, 10) !== now.toISOString().slice(0, 10));
-  }
-}
-
-function localDateKey(now: Date, timezone: string): string {
-  return localParts(now, timezone).date;
 }
 
 function localParts(now: Date, timezone: string): { date: string; hour: number } {

@@ -5,5 +5,6 @@ export * from "./profile.js";
 export * from "./provider.js";
 export * from "./search-spec.js";
 export * from "./trip.js";
+export * from "./trip-goal.js";
 export * from "./trip-planning.js";
 export * from "./verified-offer.js";

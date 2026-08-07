@@ -24,6 +24,16 @@ export function flightHref(tripId: string, itineraryKey: string, mode?: string):
   return withAccess(mode ? `${path}?${new URLSearchParams({ mode }).toString()}` : path);
 }
 
+/**
+ * The booking handoff for one flight. Captain does not sell fares, so this is
+ * a page that says so and points at whoever does.
+ */
+export function bookHref(tripId: string, itineraryKey: string): string {
+  return withAccess(
+    `/trip/${encodeURIComponent(tripId)}/flight/${encodeURIComponent(itineraryKey)}/book`
+  );
+}
+
 /** The home screen, where trips are curated. Not `/` — Eve owns that landing page. */
 export function homeHref(): string {
   return withAccess("/trips");
@@ -68,7 +78,6 @@ export async function updateProfile(
     | "excludedAirlineCodes"
     | "alertsEnabled"
     | "notificationMode"
-    | "digestHourLocal"
     | "priceRiseAlertsEnabled"
     | "betterOptionAlertsEnabled"
     | "maxAlertsPerDay"

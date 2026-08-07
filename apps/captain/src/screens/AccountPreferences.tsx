@@ -34,7 +34,6 @@ function saveProfile(
     excludedAirlineCodes: next.excludedAirlineCodes.slice(0, 12),
     alertsEnabled: next.notificationMode !== "off",
     notificationMode: next.notificationMode,
-    digestHourLocal: next.digestHourLocal,
     priceRiseAlertsEnabled: next.priceRiseAlertsEnabled,
     betterOptionAlertsEnabled: next.betterOptionAlertsEnabled,
     maxAlertsPerDay: next.maxAlertsPerDay,
@@ -52,7 +51,6 @@ function NotificationsCard({
   onSaved: (profile: TravellerProfile) => void;
 }) {
   const [mode, setMode] = useState(profile.notificationMode);
-  const [digestHour, setDigestHour] = useState(profile.digestHourLocal);
   const [priceRise, setPriceRise] = useState(profile.priceRiseAlertsEnabled);
   const [betterOption, setBetterOption] = useState(profile.betterOptionAlertsEnabled);
   const [maxAlerts, setMaxAlerts] = useState<1 | 2>(profile.maxAlertsPerDay);
@@ -71,7 +69,6 @@ function NotificationsCard({
     try {
       onSaved(await saveProfile(profile, {
         notificationMode: mode,
-        digestHourLocal: digestHour,
         priceRiseAlertsEnabled: priceRise,
         betterOptionAlertsEnabled: betterOption,
         maxAlertsPerDay: maxAlerts,
@@ -95,29 +92,20 @@ function NotificationsCard({
       </summary>
       <div className="settings-body">
         <form onSubmit={(event) => void save(event)}>
-          <label>
-            Mode
-            <select
-              value={mode}
-              onChange={(event) => setMode(
-                event.target.value as TravellerProfile["notificationMode"]
-              )}
-            >
-              <option value="smart">Smart</option>
-              <option value="daily">Daily</option>
-              <option value="changes_only">Changes only</option>
-              <option value="off">Off</option>
-            </select>
-            <small>{notificationModeDescription(mode)}</small>
-          </label>
-          <label>
-            Daily update
+          {/*
+            There is no cadence to pick. Captain either tells you when
+            something moves, or it watches in silence.
+          */}
+          <label className="switch-setting">
+            <span>
+              <strong>Tell me when prices move</strong>
+              <small>{notificationModeDescription(mode)}</small>
+            </span>
             <input
-              type="time"
-              step={3600}
-              disabled={!["smart", "daily"].includes(mode)}
-              value={`${String(digestHour).padStart(2, "0")}:00`}
-              onChange={(event) => setDigestHour(Number(event.target.value.slice(0, 2)))}
+              type="checkbox"
+              role="switch"
+              checked={mode !== "off"}
+              onChange={(event) => setMode(event.target.checked ? "changes_only" : "off")}
             />
           </label>
           <label className="switch-setting">
@@ -309,19 +297,11 @@ function FlightPreferencesCard({
 }
 
 function notificationModeLabel(mode: TravellerProfile["notificationMode"]): string {
-  return ({
-    smart: "Smart",
-    daily: "Daily",
-    changes_only: "Changes only",
-    off: "Off"
-  })[mode];
+  return mode === "off" ? "Off" : "On";
 }
 
 function notificationModeDescription(mode: TravellerProfile["notificationMode"]): string {
-  return ({
-    smart: "A daily update, plus important changes sooner near departure.",
-    daily: "One update each active day.",
-    changes_only: "Only meaningful changes.",
-    off: "Track silently."
-  })[mode];
+  return mode === "off"
+    ? "Captain tracks silently. Nothing arrives in Telegram."
+    : "Only when the price range shifts or your watched fare moves.";
 }

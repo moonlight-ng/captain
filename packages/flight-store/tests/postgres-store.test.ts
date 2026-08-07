@@ -17,7 +17,6 @@ const profileRow = {
   excluded_airline_codes: [],
   alerts_enabled: true,
   notification_mode: "smart",
-  digest_hour_local: 9,
   price_rise_alerts_enabled: true,
   better_option_alerts_enabled: true,
   last_digest_at: null,
@@ -42,7 +41,7 @@ describe("PostgresCaptainPlatformStore", () => {
           return Promise.resolve([{
             ...profileRow,
             default_currency: "GBP",
-            onboarding_step: "ranking",
+            onboarding_step: "complete",
             updated_at: now
           }]);
         }
@@ -60,11 +59,11 @@ describe("PostgresCaptainPlatformStore", () => {
 
     await expect(store.updateProfile(
       userId,
-      { defaultCurrency: "GBP", onboardingStep: "ranking" },
+      { defaultCurrency: "GBP", onboardingStep: "complete" },
       now
     )).resolves.toMatchObject({
       defaultCurrency: "GBP",
-      onboardingStep: "ranking"
+      onboardingStep: "complete"
     });
 
     expect(argumentAfter(profileUpdate!, "alerts_enabled = case")).toBe(false);

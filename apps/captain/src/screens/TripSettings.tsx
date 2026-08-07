@@ -133,7 +133,7 @@ function TrackingCard({
           </div>
           <div><dt>Flights</dt><dd>{data.offers.length}</dd></div>
         </dl>
-        <p>Three days, checked every six hours.</p>
+        <p>Checked once a day, until the day you fly.</p>
         {error && <p className="form-error" role="alert">{error}</p>}
         <TripControls
           data={data}

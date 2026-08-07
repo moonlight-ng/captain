@@ -6,6 +6,7 @@ import {
   getSession,
   flightHref,
   getTrip,
+  bookHref,
   homeHref,
   initializeAccessToken,
   setTripFlightSelection,
@@ -55,6 +56,7 @@ import {
 import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./components/icons";
 import { FilterSheet } from "./components/FilterSheet";
 import { PriceChart, TrackedFlightCard } from "./components/TrackedFlight";
+import { inPageLink } from "./navigation";
 import { isWatchSearching, shouldAutoSearchOnOpen } from "./trip-stage";
 import { Home } from "./screens/Home";
 import { Profile } from "./screens/Profile";
@@ -81,7 +83,8 @@ function currentPage(): Page {
 }
 
 function currentTripId(): string | undefined {
-  const match = /^\/trip\/([^/]+?)(?:\/settings|\/flight\/[^/]+)?\/?$/u.exec(window.location.pathname);
+  const match = /^\/trip\/([^/]+?)(?:\/settings|\/flight\/[^/]+(?:\/book)?)?\/?$/u
+    .exec(window.location.pathname);
   if (match?.[1]) return decodeURIComponent(match[1]);
   return new URLSearchParams(window.location.search).get("trip") ?? undefined;
 }
@@ -89,23 +92,34 @@ function currentTripId(): string | undefined {
 type WatchlistFocus = {
   itineraryKey: string;
   mode?: RankingMode;
+  /** "book" is the handoff page, which lives at the flight's own URL + /book. */
+  view: "detail" | "book";
 };
 
 const rankingModes: RankingMode[] = ["cheapest", "balanced", "fastest"];
 
 /** The focused flight lives in the URL, so it survives reload, share, and Back. */
 function currentFocus(): WatchlistFocus | null {
-  const match = /^\/trip\/[^/]+\/flight\/([^/]+)\/?$/u.exec(window.location.pathname);
+  const match = /^\/trip\/[^/]+\/flight\/([^/]+?)(\/book)?\/?$/u.exec(window.location.pathname);
   if (!match?.[1]) return null;
   const itineraryKey = decodeURIComponent(match[1]);
   const mode = new URLSearchParams(window.location.search).get("mode");
+  const view = match[2] ? "book" as const : "detail" as const;
   return rankingModes.includes(mode as RankingMode)
-    ? { itineraryKey, mode: mode as RankingMode }
-    : { itineraryKey };
+    ? { itineraryKey, mode: mode as RankingMode, view }
+    : { itineraryKey, view };
 }
 
 export function App() {
   const [profile, setProfile] = useState<TravellerProfile | null>(null);
+  /*
+    Every screen here renders from data this component already holds, so moving
+    between them is a state change, not a page load. Reading the path once into
+    state — rather than on each render — is what lets a link push history and
+    repaint immediately, instead of tearing the app down and showing the
+    "Opening Captain…" splash on the way into Settings.
+  */
+  const [page, setPage] = useState<Page>(currentPage);
   const [tripData, setTripData] = useState<TripPayload | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [loading, setLoading] = useState(true);
@@ -121,7 +135,6 @@ export function App() {
   const [searchBusy, setSearchBusy] = useState(false);
   /** Trips already checked on arrival, so a reload of state can't re-fire it. */
   const autoSearchedTripIds = useRef(new Set<string>());
-  const page = currentPage();
 
   async function load() {
     setLoading(true);
@@ -166,10 +179,25 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const sync = () => setWatchlistFocus(currentFocus());
+    const sync = () => {
+      setPage(currentPage());
+      setWatchlistFocus(currentFocus());
+    };
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
   }, []);
+
+  /** Moves between screens without leaving the page. */
+  function navigate(href: string) {
+    setError("");
+    window.history.pushState({ captainNavigation: true }, "", href);
+    setPage(currentPage());
+    setWatchlistFocus(currentFocus());
+    // Screens render from data already in hand, except a trip we have never
+    // fetched. That one is worth a load; the rest are instant.
+    const requestedTripId = currentTripId();
+    if (requestedTripId && requestedTripId !== tripData?.trip?.id) void load();
+  }
 
   const trip = tripData?.trip ?? null;
   const watch = tripData?.watch ?? null;
@@ -316,13 +344,19 @@ export function App() {
         profile={profile}
         displayName={displayName}
         onSaved={setProfile}
-        onBack={() => { window.location.href = homeHref(); }}
+        onBack={() => navigate(homeHref())}
       />
     );
   }
 
   if (page === "home") {
-    return <Home trips={tripData?.trips ?? []} displayName={displayName} />;
+    return (
+      <Home
+        trips={tripData?.trips ?? []}
+        displayName={displayName}
+        onNavigate={navigate}
+      />
+    );
   }
 
   if (page === "trip-settings") {
@@ -332,7 +366,7 @@ export function App() {
         trackingError={error}
         onTripChanged={load}
         onTripError={setError}
-        onBack={() => { window.location.href = tripHref(trip?.id); }}
+        onBack={() => navigate(tripHref(trip?.id))}
       />
     );
   }
@@ -354,8 +388,8 @@ export function App() {
       flightHref(trip.id, offer.itineraryKey, mode)
     );
     setWatchlistFocus(mode
-      ? { itineraryKey: offer.itineraryKey, mode }
-      : { itineraryKey: offer.itineraryKey });
+      ? { itineraryKey: offer.itineraryKey, mode, view: "detail" }
+      : { itineraryKey: offer.itineraryKey, view: "detail" });
   }
 
   function closeFlight() {
@@ -382,14 +416,25 @@ export function App() {
     <main className="shell">
       {!watchlistFocus && (
         <header className="topbar">
-          <a className="brand" href={homeHref()} aria-label="Captain home">
+          <a
+            className="brand"
+            href={homeHref()}
+            aria-label="Captain home"
+            onClick={inPageLink(homeHref(), navigate)}
+          >
             <span className="brand-mark">C</span>
             <span>Captain</span>
           </a>
           <div className="top-actions">
             {/* Profile is reached from Telegram, not from inside a trip. */}
             {trip && (
-              <a className="quiet-link" href={tripHref(trip.id, "settings")}>Settings</a>
+              <a
+                className="quiet-link"
+                href={tripHref(trip.id, "settings")}
+                onClick={inPageLink(tripHref(trip.id, "settings"), navigate)}
+              >
+                Settings
+              </a>
             )}
           </div>
         </header>
@@ -397,10 +442,14 @@ export function App() {
 
       {!trip ? (
         <section className="empty-hero">
-          <p className="eyebrow">No active trip</p>
-          <h1>Tell Captain where you want to go.</h1>
-          <p>Return to Telegram to create a trip. Captain tracks one trip at a time.</p>
+          <h1>Track flight prices</h1>
+          <p>Text or send a voice note in Telegram to start a new trip</p>
         </section>
+      ) : watchlistFocus?.view === "book" ? (
+        <BookHandoff
+          offer={focusOffer}
+          onBack={() => navigate(flightHref(trip.id, watchlistFocus.itineraryKey))}
+        />
       ) : watchlistFocus ? (
         <>
           {error && <div className="notice">{error}</div>}
@@ -416,6 +465,7 @@ export function App() {
             tripId={trip.id}
             watching={focusWatching}
             refreshBusy={searchBusy}
+            onBook={() => navigate(bookHref(trip.id, watchlistFocus.itineraryKey))}
             onBack={closeFlight}
             onRefresh={() => {
               if (watch?.status === "completed") void trackPrices();
@@ -689,6 +739,7 @@ function WatchlistDetail({
   tripId,
   watching,
   refreshBusy,
+  onBook,
   onBack,
   onRefresh,
   onSelectionChange,
@@ -705,6 +756,7 @@ function WatchlistDetail({
   tripId: string;
   watching: boolean;
   refreshBusy: boolean;
+  onBook: () => void;
   onBack: () => void;
   onRefresh: () => void;
   onSelectionChange: (itineraryKey: string, selected: boolean) => void;
@@ -750,15 +802,7 @@ function WatchlistDetail({
     <section className="watchlist-detail">
       <header className="watchlist-detail-header">
         <button type="button" className="back-link" onClick={onBack}>Back</button>
-        <button
-          type="button"
-          className={`watchlist-toggle${watching ? " watching" : ""}`}
-          aria-pressed={watching}
-          disabled={busy}
-          onClick={() => { void toggleWatchlist(); }}
-        >
-          {busy ? (watching ? "Removing…" : "Adding…") : watching ? "Watching" : "Watch"}
-        </button>
+        <button type="button" className="book-link" onClick={onBook}>Book</button>
       </header>
 
       <div className="watchlist-detail-summary">
@@ -783,6 +827,12 @@ function WatchlistDetail({
           <span>{stops(offer)}</span>
         </div>
       </div>
+
+      <WatchCallToAction
+        watching={watching}
+        busy={busy}
+        onToggle={() => { void toggleWatchlist(); }}
+      />
 
       {outbound.length > 0 && (
         <div className="watchlist-panel">
@@ -890,6 +940,114 @@ function WatchlistDetail({
           </details>
         ) : (
           <p className="set-note">Activity appears here as Captain works.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Watching is the only thing Captain asks a traveller to decide, and until
+ * they decide it there is no price history and nothing to say about timing. It
+ * gets a card of its own, above the itinerary, rather than a small toggle in a
+ * header that reads as a bookmark.
+ */
+function WatchCallToAction({
+  watching,
+  busy,
+  onToggle
+}: {
+  watching: boolean;
+  busy: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className={`watch-cta${watching ? " watching" : ""}`}>
+      <div className="watch-cta-copy">
+        <strong>{watching ? "Captain is watching this flight" : "Watch this flight"}</strong>
+        <span>
+          {watching
+            ? "Checked once a day. You’ll hear from Captain when the price moves."
+            : "Captain follows one flight at a time and charts what its price does."}
+        </span>
+      </div>
+      <button
+        type="button"
+        className="watch-cta-button"
+        aria-pressed={watching}
+        disabled={busy}
+        onClick={onToggle}
+      >
+        {busy
+          ? watching ? "Stopping…" : "Starting…"
+          : watching ? "Stop watching" : "Watch this flight"}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Captain tracks fares; it does not sell them. This says so plainly and hands
+ * the traveller to whoever does, rather than leaving a Book button that turns
+ * out to do nothing.
+ */
+function BookHandoff({
+  offer,
+  onBack
+}: {
+  offer: VerifiedOffer | null;
+  onBack: () => void;
+}) {
+  return (
+    <section className="watchlist-detail">
+      <header className="watchlist-detail-header">
+        <button type="button" className="back-link" onClick={onBack}>Back</button>
+      </header>
+
+      <div className="watchlist-panel booking-panel">
+        <h2>Booking isn’t available in Captain</h2>
+        <p className="set-note">
+          Captain researches and tracks fares. It never takes a payment and holds no
+          passport or card details, so the booking itself happens on the airline or
+          agent’s own site.
+        </p>
+        {offer ? (
+          <>
+            <p className="set-note">
+              This fare was {money(offer)} when Captain last verified it
+              {" "}({relativeTime(offer.verifiedAt)}). Prices change between checks, so
+              confirm the total before you pay.
+            </p>
+            {offer.evidence.length > 0 ? (
+              <div className="booking-links">
+                {offer.evidence.map((item) => (
+                  <a
+                    key={item.url}
+                    className="booking-link"
+                    href={item.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <span>
+                      <strong>Continue on {item.domain}</strong>
+                      <small>{item.title}</small>
+                    </span>
+                    <ChevronRightIcon />
+                  </a>
+                ))}
+              </div>
+            ) : (
+              <p className="set-note">
+                Captain has no source link for this fare. Search the flight number on
+                the airline’s own site to book it.
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="set-note">
+            That fare is no longer in the verified set, so there is nothing to hand you
+            on to. Open the trip for the latest options.
+          </p>
         )}
       </div>
     </section>

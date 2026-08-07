@@ -1,0 +1,4 @@
+interface:
+  display_name: "Conversations"
+  short_description: "Write clear, cooperative product dialogue"
+  default_prompt: "Use $conversations to draft or review this user-facing interaction."

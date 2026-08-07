@@ -6,28 +6,44 @@ import type { RecommendationSnapshot } from "@agents/flight-store";
 import {
   CAPTAIN_CLEAR_COMMAND,
   CAPTAIN_CLEAR_CONFIRMATION,
+  CAPTAIN_DEFAULTS_INTRO,
   CAPTAIN_NEW_USER_GREETING,
-  CAPTAIN_PREFERENCES_INTRO,
   CAPTAIN_PROFILE_COMMAND,
+  CAPTAIN_READY_PROMPT,
   CAPTAIN_RETURNING_TRAVELLER_WELCOME,
   CAPTAIN_TRIP_COMMAND,
   explainNotification,
   explainRecommendation,
-  parseAirlinePreferences,
-  parseProfileCallback,
   repliedToTelegramMessageId
 } from "../agent/channels/telegram.js";
 
 describe("Telegram profile onboarding", () => {
-  it("starts every new traveller with the fixed introduction", () => {
+  it("starts every new traveller with the fixed three-message introduction", () => {
     expect(CAPTAIN_NEW_USER_GREETING).toBe(
-      "Hi, I'm Captain! I can help you prepare for a flight by tracking suitable options and reporting price changes."
+      "Hi, I’m Captain. Tell me a flight you’re thinking about and I’ll follow its price every day until it departs, so you know when it’s a good moment to book.\n\n"
+      + "I’m an early test version, so I keep things small: one trip at a time, and I never book or pay for anything myself."
     );
-    expect(CAPTAIN_PREFERENCES_INTRO).toBe("Let's start with your preferences");
+    expect(CAPTAIN_DEFAULTS_INTRO).toBe(
+      "I’ve already set you up with sensible defaults — fares in USD, a balanced pick between price and travel time, and one update a day. You can see and change any of it here."
+    );
+    expect(CAPTAIN_READY_PROMPT).toBe(
+      "That’s it. Whenever you’re ready, tell me where you’re going and roughly when — typed or as a voice note."
+    );
+  });
+
+  it("sets expectations before asking for anything", () => {
+    // The interview is gone: onboarding asks no questions, so the first
+    // message has to carry the demo framing and the one-trip limit itself.
+    expect(CAPTAIN_NEW_USER_GREETING).toContain("test version");
+    expect(CAPTAIN_NEW_USER_GREETING).toContain("one trip at a time");
+    expect(CAPTAIN_DEFAULTS_INTRO).toContain("defaults");
+    expect(CAPTAIN_READY_PROMPT).toContain("voice note");
   });
 
   it("introduces Captain once and welcomes returning travellers differently", () => {
-    expect(CAPTAIN_NEW_USER_GREETING).toContain("I'm Captain");
+    expect(CAPTAIN_NEW_USER_GREETING).toMatch(/I['’]m Captain/u);
+    expect(CAPTAIN_DEFAULTS_INTRO).not.toMatch(/I['’]m Captain/u);
+    expect(CAPTAIN_READY_PROMPT).not.toMatch(/I['’]m Captain/u);
     expect(CAPTAIN_RETURNING_TRAVELLER_WELCOME).not.toMatch(/I['’]m Captain/u);
     expect(CAPTAIN_RETURNING_TRAVELLER_WELCOME).toBe(
       "Welcome back. Tell me where and roughly when you want to fly, and I’ll watch it for you. I track one trip at a time."
@@ -45,25 +61,6 @@ describe("Telegram profile onboarding", () => {
   it("uses the clear command to reset preferences", () => {
     expect(CAPTAIN_CLEAR_COMMAND).toBe("/clear");
     expect(CAPTAIN_CLEAR_CONFIRMATION).toBe("Your preferences have been reset.");
-  });
-
-  it("parses currency, ranking, and preferred/avoided airlines deterministically", () => {
-    expect(parseProfileCallback("captain-profile:currency:NGN")).toEqual({
-      type: "currency",
-      value: "NGN"
-    });
-    expect(parseProfileCallback("captain-profile:ranking:balanced")).toEqual({
-      type: "ranking",
-      value: "balanced"
-    });
-    expect(parseAirlinePreferences("Prefer BA, VS; avoid KL and AF")).toEqual({
-      preferredAirlineCodes: ["BA", "VS"],
-      excludedAirlineCodes: ["KL", "AF"]
-    });
-    expect(parseAirlinePreferences("/skip")).toEqual({
-      preferredAirlineCodes: [],
-      excludedAirlineCodes: []
-    });
   });
 });
 

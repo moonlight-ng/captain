@@ -1,4 +1,4 @@
-import { summarizePriceHistory } from "@agents/flight-domain";
+import { formatTripGoal, summarizePriceHistory } from "@agents/flight-domain";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
@@ -18,14 +18,17 @@ export default defineTool({
     const trip = tripId
       ? trips.find((candidate) => candidate.id === tripId) ?? null
       : await services.platformStore.getActiveTrip(userId);
-    if (!trip) return { trips, trip: null, offers: [], watchedFlight: null };
-    const [offers, tracked] = await Promise.all([
+    if (!trip) return { trips, trip: null, goal: null, offers: [], watchedFlight: null };
+    const [offers, tracked, profile] = await Promise.all([
       services.trips.offers(userId, trip.id),
-      services.platformStore.getTrackedFlightPrices(userId, trip.id)
+      services.platformStore.getTrackedFlightPrices(userId, trip.id),
+      services.platformStore.ensureProfile(userId, new Date())
     ]);
     return {
       trips,
       trip,
+      // What this trip is for. Every answer is measured against it.
+      goal: formatTripGoal({ brief: trip.brief, rankingMode: profile.rankingMode }),
       offers,
       // The whole point of the trip: what the watched fare has done, and
       // whether now is the moment. Null until the traveller picks a flight.

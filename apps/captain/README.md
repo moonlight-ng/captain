@@ -114,6 +114,7 @@ onboarding without interrupting existing travellers.
 
 - Maximum 25 travellers.
 - One check a day per trip, until the day the trip departs.
+- Messages only when something changed, plus one overview per new trip.
 - One improvement alert in a rolling 24-hour period, or two if the traveller
   raises the cap in Profile.
 - Deferred searches keep the last verified results and show delayed tracking.

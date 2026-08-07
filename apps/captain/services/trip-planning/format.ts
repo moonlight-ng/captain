@@ -51,8 +51,10 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
 export function formatTripCreationReceipt(receipt: TripCreationReceipt): string {
   return [
     receipt.created
-      ? "Your trip is saved. I’ve started a three-day price watch, checking every six hours."
+      ? "Your trip is saved. I’ll check the fare once a day until you fly."
       : "That trip was already saved; I’m using the existing one.",
+    "",
+    `Goal: ${receipt.goal}`,
     "",
     ...formatTripSummaryLines(receipt),
     "",

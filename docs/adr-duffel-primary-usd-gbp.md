@@ -17,7 +17,8 @@ Accepted — restored 2026-07-29 and amended 2026-07-30.
 
 ## Consequences
 
-- Onboarding offers only USD/GBP.
+- New travellers default to USD; currency is changed on `/profile`, and only
+  USD/GBP are supported for a trip.
 - Planning no longer refuses same-country routes.
 - Empty inventory is a post-search UX concern, not a planning gate.
 - International USD trips (including multi-city watches) use Duffel with FX into trip currency when needed.

@@ -3,9 +3,11 @@ packages:
   - "packages/*"
 
 allowBuilds:
+  '@mongodb-js/zstd': false
   bufferutil: false
   cbor-extract: true
   esbuild: true
+  node-liblzma: false
   utf-8-validate: false
 
 minimumReleaseAgeExclude:

@@ -6,9 +6,11 @@ import {
   buildSearchSpecs,
   createTripSchema,
   daysBetween,
+  formatTripGoal,
   isSupportedTripCurrency,
   stableJson,
   totalTravellers,
+  type RankingMode,
   type Trip,
   type TripCreationReceipt,
   type TripDraftState,
@@ -249,7 +251,8 @@ export class TripPlanningService {
       confirmed.draft,
       confirmed.result.trip,
       confirmed.result.created,
-      await this.dashboardUrlForTrip(userId, confirmed.result.trip.id)
+      await this.dashboardUrlForTrip(userId, confirmed.result.trip.id),
+      (await this.#store.ensureProfile(userId, this.#now())).rankingMode
     );
     console.info(JSON.stringify({
       event: "captain.trip_plan_confirmed",
@@ -384,19 +387,22 @@ export class TripPlanningService {
       ? addIsoDays(departureDate, trip.brief.stayNights.preferred)
       : null;
     const dashboardUrl = await this.dashboardUrlForTrip(userId, trip.id);
+    const { rankingMode } = await this.#store.ensureProfile(userId, this.#now());
     const createdMessage = formatTripCreationReceipt(buildReceiptFromTrip(
       trip,
       true,
       departureDate,
       returnDate,
-      dashboardUrl
+      dashboardUrl,
+      rankingMode
     ));
     const reusedMessage = formatTripCreationReceipt(buildReceiptFromTrip(
       trip,
       false,
       departureDate,
       returnDate,
-      dashboardUrl
+      dashboardUrl,
+      rankingMode
     ));
     const trimmed = message.trim();
     if (trimmed === createdMessage) return { message, createdTrip: true };
@@ -581,7 +587,8 @@ function buildReceipt(
   draft: TripPlanDraft,
   trip: Trip,
   created: boolean,
-  dashboardUrl: string
+  dashboardUrl: string,
+  rankingMode: RankingMode
 ): TripCreationReceipt {
   if (!draft.confirmationSnapshot) {
     throw new Error("Started trip is missing its persisted confirmation snapshot");
@@ -591,7 +598,8 @@ function buildReceipt(
     created,
     draft.confirmationSnapshot.departureDate,
     draft.confirmationSnapshot.returnDate,
-    dashboardUrl
+    dashboardUrl,
+    rankingMode
   );
 }
 
@@ -600,7 +608,8 @@ function buildReceiptFromTrip(
   created: boolean,
   departureDate: string,
   returnDate: string | null,
-  dashboardUrl: string
+  dashboardUrl: string,
+  rankingMode: RankingMode
 ): TripCreationReceipt {
   return {
     tripId: trip.id,
@@ -621,6 +630,7 @@ function buildReceiptFromTrip(
     cabin: trip.brief.cabin,
     maxStops: trip.brief.maxStops,
     currency: trip.brief.currency,
+    goal: formatTripGoal({ brief: trip.brief, rankingMode }),
     dashboardUrl,
     accessHint: "Send /trip to open your trip."
   };

@@ -28,7 +28,6 @@ import {
 import {
   TripLimitError,
   type OfferSnapshot,
-  type TravellerProfile,
   type TripPlanDraft,
   type TripPlanResult
 } from "@agents/flight-domain";
@@ -64,9 +63,17 @@ const CAPTAIN_TOOL_STATUS: Readonly<Record<string, string>> = {
   manage_trip: "Updating your trip…"
 };
 const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. Your saved trip is unchanged—please try again.";
+// Onboarding is three messages and no questions. Everything the old interview
+// asked for is seeded by DEFAULT_PROFILE and editable on /profile, so a new
+// traveller learns what Captain is and can start tracking without answering
+// anything first.
 export const CAPTAIN_NEW_USER_GREETING =
-  "Hi, I'm Captain! I can help you prepare for a flight by tracking suitable options and reporting price changes.";
-export const CAPTAIN_PREFERENCES_INTRO = "Let's start with your preferences";
+  "Hi, I’m Captain. Tell me a flight you’re thinking about and I’ll follow its price every day until it departs, so you know when it’s a good moment to book.\n\n"
+  + "I’m an early test version, so I keep things small: one trip at a time, and I never book or pay for anything myself.";
+export const CAPTAIN_DEFAULTS_INTRO =
+  "I’ve already set you up with sensible defaults — fares in USD, a balanced pick between price and travel time, and one update a day. You can see and change any of it here.";
+export const CAPTAIN_READY_PROMPT =
+  "That’s it. Whenever you’re ready, tell me where you’re going and roughly when — typed or as a voice note.";
 // Captain introduces itself once, at the welcome step. A traveller who has
 // already onboarded gets this instead.
 export const CAPTAIN_RETURNING_TRAVELLER_WELCOME =
@@ -137,28 +144,17 @@ export default telegramChannel({
       return null;
     }
     if (content === "/start") {
+      // Claiming the welcome step completes onboarding, so anyone reaching
+      // here has already been introduced.
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
-      if (!profile.onboardingCompletedAt) {
-        await services.platformStore.updateProfile(
-          user.id,
-          { onboardingStep: "currency" },
-          new Date()
-        );
-        await postCurrencyQuestion(ctx);
-      } else {
-        const welcome = CAPTAIN_RETURNING_TRAVELLER_WELCOME;
-        await services.platformStore.appendMessage(user.id, "assistant", welcome, new Date());
-        await postWithLink(
-          ctx,
-          welcome,
-          "Edit preferences",
-          await services.auth.createLoginLink(user.id, "/profile")
-        );
-      }
-      return null;
-    }
-    if (!profile.onboardingCompletedAt) {
-      await handleOnboardingText(ctx, user.id, profile, content);
+      const welcome = CAPTAIN_RETURNING_TRAVELLER_WELCOME;
+      await services.platformStore.appendMessage(user.id, "assistant", welcome, new Date());
+      await postWithLink(
+        ctx,
+        welcome,
+        "Edit preferences",
+        await services.auth.createLoginLink(user.id, "/profile")
+      );
       return null;
     }
     if (content === CAPTAIN_PROFILE_COMMAND || content === "/settings" || content === "/preferences") {
@@ -312,21 +308,6 @@ export default telegramChannel({
   },
   async onCallbackQuery(ctx, query) {
     if (!privateHumanCallback(query)) return;
-    const profileAction = parseProfileCallback(query.data);
-    if (profileAction) {
-      try {
-        await handleProfileCallback(ctx, query, profileAction);
-      } catch (error) {
-        if (!(error instanceof BetaCapacityError || error instanceof BetaLaunchGateError)) throw error;
-        await ctx.telegram.answerCallbackQuery({
-          callbackQueryId: query.id,
-          text: error instanceof BetaLaunchGateError
-            ? "Captain’s public beta isn’t open yet."
-            : "Captain’s 25-person beta is full right now."
-        });
-      }
-      return;
-    }
     const action = parseTripPlanCallback(query.data);
     if (!action) return;
     const telegramUserId = safeId(query.from.id);
@@ -574,214 +555,22 @@ async function postNewUserOnboarding(
   userId: string
 ): Promise<void> {
   const services = await getCaptainServices();
+  const remember = (text: string) =>
+    services.platformStore.appendMessage(userId, "assistant", text, new Date());
+
+  // The caller already completed onboarding by claiming the welcome step, so
+  // these three messages are the whole of it.
   await ctx.telegram.post(CAPTAIN_NEW_USER_GREETING);
-  await services.platformStore.appendMessage(
-    userId,
-    "assistant",
-    CAPTAIN_NEW_USER_GREETING,
-    new Date()
-  );
-  await ctx.telegram.post(CAPTAIN_PREFERENCES_INTRO);
-  await services.platformStore.appendMessage(
-    userId,
-    "assistant",
-    CAPTAIN_PREFERENCES_INTRO,
-    new Date()
-  );
-  // The caller already advanced the step by claiming it.
-  await postCurrencyQuestion(ctx);
-}
-
-async function postCurrencyQuestion(ctx: TelegramContext): Promise<void> {
-  await ctx.telegram.post({
-    text: "First, choose the currency you’d like me to use for fares.",
-    reply_markup: {
-      inline_keyboard: [[
-        { text: "USD", callback_data: "captain-profile:currency:USD" },
-        { text: "GBP", callback_data: "captain-profile:currency:GBP" }
-      ]]
-    }
-  });
-}
-
-async function postRankingQuestion(ctx: TelegramContext): Promise<void> {
-  await ctx.telegram.post({
-    text: "What should Captain optimize for?",
-    reply_markup: {
-      inline_keyboard: [[
-        { text: "Cheapest", callback_data: "captain-profile:ranking:cheapest" },
-        { text: "Balanced", callback_data: "captain-profile:ranking:balanced" },
-        { text: "Fastest", callback_data: "captain-profile:ranking:fastest" }
-      ]]
-    }
-  });
-}
-
-async function postAirlineQuestion(ctx: TelegramContext): Promise<void> {
-  await ctx.telegram.post(
-    "Any airline preferences? Reply like “prefer KQ, avoid VS”, or send /skip. You can edit this later."
-  );
-}
-
-async function handleOnboardingText(
-  ctx: TelegramContext,
-  userId: string,
-  profile: TravellerProfile,
-  content: string
-): Promise<boolean> {
-  const services = await getCaptainServices();
-  if (profile.onboardingStep === "currency") {
-    const currency = /^(USD|GBP)$/iu.test(content.trim()) ? content.trim().toUpperCase() : null;
-    if (!currency) {
-      await postCurrencyQuestion(ctx);
-      return true;
-    }
-    await services.platformStore.updateProfile(
-      userId,
-      { defaultCurrency: currency, onboardingStep: "ranking" },
-      new Date()
-    );
-    await postRankingQuestion(ctx);
-    return true;
-  }
-  if (profile.onboardingStep === "ranking") {
-    const ranking = /^(cheapest|balanced|fastest)$/iu.exec(content.trim())?.[1]?.toLowerCase();
-    if (!ranking) {
-      await postRankingQuestion(ctx);
-      return true;
-    }
-    await services.platformStore.updateProfile(
-      userId,
-      {
-        rankingMode: ranking as TravellerProfile["rankingMode"],
-        onboardingStep: "airlines"
-      },
-      new Date()
-    );
-    await postAirlineQuestion(ctx);
-    return true;
-  }
-  const preferences = parseAirlinePreferences(content);
-  if (!preferences) {
-    await postAirlineQuestion(ctx);
-    return true;
-  }
-  await completeOnboarding(ctx, userId, preferences);
-  return true;
-}
-
-async function handleProfileCallback(
-  ctx: TelegramContext,
-  query: TelegramCallbackQuery,
-  action:
-    | { type: "currency"; value: string }
-    | { type: "ranking"; value: TravellerProfile["rankingMode"] }
-): Promise<void> {
-  const telegramUserId = safeId(query.from.id);
-  const telegramChatId = safeId(query.message?.chat.id ?? "");
-  if (telegramUserId === null || telegramChatId === null) return;
-  const services = await getCaptainServices();
-  const user = await services.platformStore.ensureTelegramUser({
-    telegramUserId,
-    telegramChatId,
-    username: query.from.username ?? null,
-    firstName: query.from.firstName ?? null,
-    lastName: query.from.lastName ?? null
-  }, new Date());
-  await clearCallbackButtons(ctx, query);
-  if (action.type === "currency") {
-    if (!/^(USD|GBP)$/u.test(action.value)) {
-      await ctx.telegram.answerCallbackQuery({
-        callbackQueryId: query.id,
-        text: "Choose USD or GBP"
-      });
-      await postCurrencyQuestion(ctx);
-      return;
-    }
-    await services.platformStore.updateProfile(
-      user.id,
-      { defaultCurrency: action.value, onboardingStep: "ranking" },
-      new Date()
-    );
-    await ctx.telegram.answerCallbackQuery({
-      callbackQueryId: query.id,
-      text: `${action.value} selected`
-    });
-    await postRankingQuestion(ctx);
-    return;
-  }
-  await services.platformStore.updateProfile(
-    user.id,
-    { rankingMode: action.value, onboardingStep: "airlines" },
-    new Date()
-  );
-  await ctx.telegram.answerCallbackQuery({
-    callbackQueryId: query.id,
-    text: `${titleCase(action.value)} selected`
-  });
-  await postAirlineQuestion(ctx);
-}
-
-export function parseProfileCallback(
-  data: string | undefined
-):
-  | { type: "currency"; value: string }
-  | { type: "ranking"; value: TravellerProfile["rankingMode"] }
-  | null {
-  const currency = /^captain-profile:currency:([A-Z]{3})$/u.exec(data ?? "");
-  if (currency?.[1]) return { type: "currency", value: currency[1] };
-  const ranking = /^captain-profile:ranking:(cheapest|balanced|fastest)$/u.exec(data ?? "");
-  return ranking?.[1]
-    ? { type: "ranking", value: ranking[1] as TravellerProfile["rankingMode"] }
-    : null;
-}
-
-export function parseAirlinePreferences(content: string): {
-  preferredAirlineCodes: string[];
-  excludedAirlineCodes: string[];
-} | null {
-  if (/^\/?skip$/iu.test(content.trim())) {
-    return { preferredAirlineCodes: [], excludedAirlineCodes: [] };
-  }
-  const upper = content.toUpperCase();
-  const preferredPart = /\bPREFER(?:RED)?\s+(.+?)(?=\s*(?:;?\s*\b(?:AVOID|EXCLUDE)\b|$))/u.exec(upper)?.[1] ?? "";
-  const excludedPart = /\b(?:AVOID|EXCLUDE)\s+(.+)$/u.exec(upper)?.[1] ?? "";
-  const codes = (value: string) => [...new Set(
-    [...value.replace(/\bAND\b/gu, " ").matchAll(/\b[A-Z0-9]{2,3}\b/gu)]
-      .map((match) => match[0])
-  )].slice(0, 12);
-  const preferredAirlineCodes = codes(preferredPart);
-  const excludedAirlineCodes = codes(excludedPart)
-    .filter((code) => !preferredAirlineCodes.includes(code));
-  return preferredAirlineCodes.length > 0 || excludedAirlineCodes.length > 0
-    ? { preferredAirlineCodes, excludedAirlineCodes }
-    : null;
-}
-
-async function completeOnboarding(
-  ctx: TelegramContext,
-  userId: string,
-  preferences: {
-    preferredAirlineCodes: string[];
-    excludedAirlineCodes: string[];
-  }
-): Promise<void> {
-  const services = await getCaptainServices();
-  await services.platformStore.updateProfile(
-    userId,
-    {
-      ...preferences,
-      onboardingStep: "complete",
-      onboardingCompletedAt: new Date().toISOString()
-    },
-    new Date()
-  );
+  await remember(CAPTAIN_NEW_USER_GREETING);
   await postWithLink(
     ctx,
-    "Preferences set. Tell me where and roughly when you want to fly. I can track one trip at a time.",
-    "Edit preferences",
-    await services.auth.createLoginLink(userId, "/profile", { tab: "preferences" })
+    CAPTAIN_DEFAULTS_INTRO,
+    "Preferences",
+    await services.auth.createLoginLink(userId, "/profile")
   );
+  await remember(CAPTAIN_DEFAULTS_INTRO);
+  await ctx.telegram.post(CAPTAIN_READY_PROMPT);
+  await remember(CAPTAIN_READY_PROMPT);
 }
 
 async function postWithLink(
@@ -830,27 +619,6 @@ export function explainNotification(notification: CaptainNotification): string |
       `The option was ${current.currency} ${current.priceAmount}, up ${formatMoney(increase, current.currency)} (${Math.round(percent)}%) from its seven-day low of ${formatMoney(low, current.currency)}.`,
       evidence ? `I checked it here: ${evidence.url}` : ""
     ].filter(Boolean).join("\n");
-  }
-  if (notification.kind === "daily_digest" && Array.isArray(notification.payload.trips)) {
-    const lines = notification.payload.trips.flatMap((value) => {
-      const trip = record(value);
-      if (!trip) return [];
-      // Digest entries carry the snapshot directly. Older queued digests
-      // nested it under `recommendation`, so both are still read here.
-      const snapshot = record(trip.snapshot)
-        ?? record(record(trip.recommendation)?.snapshot);
-      const digestSnapshot = snapshotFromPayload(
-        snapshot?.pendingDigestChange
-          ? { snapshot: snapshot.pendingDigestChange }
-          : { snapshot }
-      );
-      const current = digestSnapshot?.current;
-      if (!current) return [];
-      return [`• ${String(trip.tripTitle ?? "trip")}: ${current.currency} ${current.priceAmount}, checked ${new Date(current.observedAt).toISOString()}.`];
-    });
-    return lines.length > 0
-      ? ["That update used the saved results available when I sent it:", ...lines].join("\n")
-      : null;
   }
   return null;
 }

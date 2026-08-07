@@ -32,7 +32,6 @@ describe("flight worker orchestration", () => {
     const maintain = vi.spyOn(store, "maintainTracking");
     const schedule = vi.spyOn(store, "scheduleDueSearchRuns");
     const claim = vi.spyOn(store, "claimSearchRuns");
-    const digest = vi.spyOn(store, "enqueueDueDigests");
     const notifications = vi.spyOn(store, "listPendingNotifications");
     const worker = new FlightWorker({
       store,
@@ -59,7 +58,6 @@ describe("flight worker orchestration", () => {
     expect(maintain).not.toHaveBeenCalled();
     expect(schedule).not.toHaveBeenCalled();
     expect(claim).not.toHaveBeenCalled();
-    expect(digest).not.toHaveBeenCalled();
     expect(notifications).not.toHaveBeenCalled();
   });
 
@@ -142,7 +140,7 @@ describe("flight worker orchestration", () => {
       }
     });
     expect(await store.getNotificationByTelegramMessage(user.id, 42)).toMatchObject({
-      kind: "daily_digest",
+      kind: "initial_results",
       telegramMessageId: 42
     });
     vi.unstubAllGlobals();
@@ -173,6 +171,83 @@ describe("flight worker orchestration", () => {
     })).toContain("£10.00 less");
   });
 
+  it("opens a trip with an overview of the route, not one fare", () => {
+    expect(notificationText({
+      id: "first",
+      userId: "user",
+      tripId: "trip",
+      telegramChatId: 1,
+      kind: "initial_results",
+      attempts: 0,
+      telegramMessageId: null,
+      payload: {
+        tripTitle: "Lagos to London",
+        tripGoal: "Get you LOS → LON on 10 Sept for the cheapest fare, "
+          + "and tell you when it's the moment to buy.",
+        range: { count: 14, low: 393.26, high: 812.5, currency: "USD" },
+        snapshot: {
+          current: offerSnapshot("current", 393.26, 7_200),
+          previous: null,
+          rankingMode: "cheapest",
+          reasonCodes: ["initial_verified_result"],
+          createdAt: "2026-08-01T12:00:00.000Z"
+        }
+      }
+    })).toBe(
+      "Lagos → London is set up. Here’s the first look.\n"
+      + "\n"
+      + "14 fares today, $393.26–$812.50.\n"
+      + "My goal: Get you LOS → LON on 10 Sept for the cheapest fare, "
+      + "and tell you when it's the moment to buy.\n"
+      + "I’ll check once a day and only message you when something moves.\n"
+      + "\n"
+      + "Open the trip to pick the flight you want me to watch, or just reply here "
+      + "to change the dates, airports, or anything else."
+    );
+  });
+
+  it("says when tracking starts for a departure Captain is not yet watching daily", () => {
+    expect(notificationText({
+      id: "first",
+      userId: "user",
+      tripId: "trip",
+      telegramChatId: 1,
+      kind: "initial_results",
+      attempts: 0,
+      telegramMessageId: null,
+      payload: {
+        tripTitle: "Lagos to London",
+        tripGoal: "Get you LOS → LON on 10 Dec for the cheapest fare.",
+        range: { count: 1, low: 400, high: 400, currency: "USD" },
+        trackingStartsAt: "2026-11-10"
+      }
+    })).toContain("1 fare today, around $400.00.");
+  });
+
+  it("closes a price rise on the goal it threatens", () => {
+    expect(notificationText({
+      id: "rise",
+      userId: "user",
+      tripId: "trip",
+      telegramChatId: 1,
+      kind: "price_rise",
+      attempts: 0,
+      telegramMessageId: null,
+      payload: {
+        tripTitle: "Lagos to London",
+        tripGoal: "Get you LOS → LON on 10 Sept for under $400.",
+        current: offerSnapshot("current", 430, 7_200),
+        sevenDayLow: 393,
+        increase: 37,
+        percent: 9
+      }
+    })).toBe(
+      "Heads up — the BA option you’re watching is up £37.00 (9%) this week.\n"
+      + "It may be worth checking now.\n"
+      + "Goal: Get you LOS → LON on 10 Sept for under $400."
+    );
+  });
+
   it("uses a concise completed-run decision summary", () => {
     expect(notificationText({
       id: "notification",
@@ -189,78 +264,9 @@ describe("flight worker orchestration", () => {
         summary: "British Airways is the best current option."
       }
     })).toBe(
-      "Your three-day price watch for Lagos → Abuja is complete. I checked 12 times.\n"
+      "Your price watch for Lagos → Abuja is complete. I checked 12 times.\n"
       + "British Airways is the best current option.\n"
       + "These prices are now stale. Open the trip and choose Track."
-    );
-  });
-
-  it("combines useful Trip facts into one compact digest", () => {
-    const current = offerSnapshot("current", 125, 7_200);
-    expect(notificationText({
-      id: "digest",
-      userId: "user",
-      tripId: "trip",
-      telegramChatId: 1,
-      kind: "daily_digest",
-      attempts: 0,
-      telegramMessageId: null,
-      payload: {
-        trips: [{
-          tripId: "trip",
-          tripTitle: "Lagos to London",
-          snapshot: {
-            current,
-            previous: offerSnapshot("previous", 100, 7_200),
-            rankingMode: "balanced",
-            reasonCodes: [],
-            createdAt: "2026-08-01T12:00:00.000Z"
-          },
-          priceRise: { increase: 25, percent: 25 }
-        }]
-      }
-    })).toBe(
-      "Here’s today’s flight update.\n"
-      + "Lagos → London: £125.00, up £25.00 (25%) this week."
-    );
-  });
-
-  it("keeps a meaningful improvement for the next digest", () => {
-    const current = offerSnapshot("current", 90, 18_000);
-    const previous = offerSnapshot("previous", 100, 20_000);
-    expect(notificationText({
-      id: "digest-improvement",
-      userId: "user",
-      tripId: "trip",
-      telegramChatId: 1,
-      kind: "daily_digest",
-      attempts: 0,
-      telegramMessageId: null,
-      payload: {
-        trips: [{
-          tripId: "trip",
-          tripTitle: "Lagos to London",
-          recommendation: {
-            snapshot: {
-              current,
-              previous: current,
-              rankingMode: "balanced",
-              reasonCodes: [],
-              createdAt: "2026-08-01T12:00:00.000Z",
-              pendingDigestChange: {
-                current,
-                previous,
-                rankingMode: "balanced",
-                reasonCodes: ["better_balance"],
-                createdAt: "2026-08-01T06:00:00.000Z"
-              }
-            }
-          }
-        }]
-      }
-    })).toBe(
-      "Here’s today’s flight update.\n"
-      + "Lagos → London: BA is now £10.00 less and 33m shorter."
     );
   });
 

@@ -91,13 +91,6 @@ export type RecommendationSnapshot = {
   rankingMode: "cheapest" | "balanced" | "fastest";
   reasonCodes: RecommendationReasonCode[];
   createdAt: string;
-  pendingDigestChange?: {
-    current: OfferSnapshot;
-    previous: OfferSnapshot;
-    rankingMode: "cheapest" | "balanced" | "fastest";
-    reasonCodes: RecommendationReasonCode[];
-    createdAt: string;
-  } | null;
 };
 
 /**
@@ -136,7 +129,6 @@ export type CaptainNotification = {
     | "new_best"
     | "watch_attention"
     | "inventory_gap"
-    | "daily_digest"
     | "price_rise"
     | "tracking_activation"
     | "tracking_summary";
@@ -229,7 +221,6 @@ export interface CaptainPlatformStore {
   failSearchRun(workerId: string, runId: string, error: string, retryAfterMs: number | null, now: Date): Promise<void>;
   maintainTracking(now: Date): Promise<TrackingMaintenance>;
   finalizeFarFutureBaseline(searchSpecId: string, now: Date): Promise<void>;
-  enqueueDueDigests(now: Date): Promise<number>;
   pruneWatchData(now: Date): Promise<void>;
   evaluateTripsForSearchSpec(searchSpecId: string, now: Date): Promise<number>;
   enqueueInventoryGapForSearchSpec(searchSpecId: string, now: Date): Promise<number>;

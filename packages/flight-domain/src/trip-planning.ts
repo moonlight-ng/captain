@@ -119,6 +119,8 @@ export const tripCreationReceiptSchema = z.object({
   cabin: z.enum(["economy", "premium_economy", "business", "first"]),
   maxStops: z.number().int().min(0).max(2),
   currency: z.string().regex(/^[A-Z]{3}$/u),
+  /** What Captain is now trying to do for this trip, in one sentence. */
+  goal: z.string().trim().min(1).max(300),
   dashboardUrl: z.url(),
   accessHint: z.literal("Send /trip to open your trip.")
 }).strict();

@@ -6,6 +6,7 @@ import {
   TripLimitError,
   TripNotFoundError,
   TripVersionConflictError,
+  formatTripGoal,
   summarizePriceHistory,
   tripActionSchema,
   updateTripBriefSchema,
@@ -30,6 +31,7 @@ export default defineChannel({
     GET("/trip/:id", serveIndex),
     GET("/trip/:id/settings", serveIndex),
     GET("/trip/:id/flight/:itineraryKey", serveIndex),
+    GET("/trip/:id/flight/:itineraryKey/book", serveIndex),
     GET("/profile", serveIndex),
     GET("/settings", serveIndex),
     GET("/preferences", serveIndex),
@@ -248,7 +250,8 @@ async function getTrip(
         recommendation: null,
         selections: [],
         activity: [],
-        priceHistory: null
+        priceHistory: null,
+        goal: null
       },
       { headers: noStore() }
     );
@@ -272,8 +275,19 @@ async function getTrip(
         })
       }
     : null;
+  const profile = await services.platformStore.ensureProfile(userId, new Date());
   return Response.json(
-    { trips, trip, watch, offers, recommendation, selections, activity, priceHistory },
+    {
+      trips,
+      trip,
+      watch,
+      offers,
+      recommendation,
+      selections,
+      activity,
+      priceHistory,
+      goal: formatTripGoal({ brief: trip.brief, rankingMode: profile.rankingMode })
+    },
     { headers: noStore() }
   );
 }

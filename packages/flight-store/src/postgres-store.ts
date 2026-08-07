@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   DEFAULT_PROFILE,
+  formatTripGoal,
   MAX_ACTIVE_TRIPS_PER_USER,
   TripLimitError,
   TripNotFoundError,
@@ -42,6 +43,7 @@ import type {
   TripRecommendation
 } from "./contracts.js";
 import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
+import { notificationGoalPayload, offerRangeSummary } from "./notification-payload.js";
 import {
   meetsAlertThreshold,
   rankOffers,
@@ -50,7 +52,6 @@ import {
 } from "./ranking.js";
 import {
   CURRENT_OFFER_RETENTION_MS,
-  DIGEST_TRIP_LIMIT,
   DISCOVERY_SEARCH_SPEC_LIMIT,
   PRICE_HISTORY_RETENTION_MS,
   retainSearchOffers,
@@ -188,7 +189,6 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           excluded_airline_codes = ${tx.json([])},
           alerts_enabled = ${DEFAULT_PROFILE.alertsEnabled},
           notification_mode = ${DEFAULT_PROFILE.notificationMode},
-          digest_hour_local = ${DEFAULT_PROFILE.digestHourLocal},
           price_rise_alerts_enabled = ${DEFAULT_PROFILE.priceRiseAlertsEnabled},
           better_option_alerts_enabled = ${DEFAULT_PROFILE.betterOptionAlertsEnabled},
           max_alerts_per_day = ${DEFAULT_PROFILE.maxAlertsPerDay},
@@ -213,7 +213,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       insert into captain.traveller_profiles (
         user_id, default_currency, ranking_mode, preferred_airline_codes,
         excluded_airline_codes, alerts_enabled, max_alerts_per_day,
-        notification_mode, digest_hour_local, price_rise_alerts_enabled,
+        notification_mode, price_rise_alerts_enabled,
         better_option_alerts_enabled,
         quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
         onboarding_step, onboarding_completed_at,
@@ -222,7 +222,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       select ${userId}, ${DEFAULT_PROFILE.defaultCurrency}, ${DEFAULT_PROFILE.rankingMode},
         ${this.#sql.json([])}, ${this.#sql.json([])}, ${DEFAULT_PROFILE.alertsEnabled},
         ${DEFAULT_PROFILE.maxAlertsPerDay}, ${DEFAULT_PROFILE.notificationMode},
-        ${DEFAULT_PROFILE.digestHourLocal}, ${DEFAULT_PROFILE.priceRiseAlertsEnabled},
+        ${DEFAULT_PROFILE.priceRiseAlertsEnabled},
         ${DEFAULT_PROFILE.betterOptionAlertsEnabled},
         ${DEFAULT_PROFILE.quietHoursEnabled},
         ${DEFAULT_PROFILE.quietHoursStart}, ${DEFAULT_PROFILE.quietHoursEnd},
@@ -265,10 +265,9 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           when ${input.notificationMode !== undefined}
             then ${input.notificationMode ?? null}
           when ${input.alertsEnabled ?? null} = false then 'off'
-          when ${input.alertsEnabled ?? null} = true and notification_mode = 'off' then 'smart'
+          when ${input.alertsEnabled ?? null} = true and notification_mode = 'off' then 'changes_only'
           else notification_mode
         end,
-        digest_hour_local = coalesce(${input.digestHourLocal ?? null}, digest_hour_local),
         price_rise_alerts_enabled = coalesce(
           ${input.priceRiseAlertsEnabled ?? null},
           price_rise_alerts_enabled
@@ -372,7 +371,9 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     await this.ensureProfile(userId, now);
     const rows = await this.#sql<Array<{ user_id: string }>>`
       update captain.traveller_profiles
-      set onboarding_step = 'currency', updated_at = ${now}
+      set onboarding_step = 'complete',
+        onboarding_completed_at = ${now},
+        updated_at = ${now}
       where user_id = ${userId}
         and onboarding_step = 'welcome'
         and onboarding_completed_at is null
@@ -1061,29 +1062,6 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           where notification.status = 'pending'
             and notification.available_at <= ${now}
         )
-        or exists (
-          select 1
-          from captain.traveller_profiles profile
-          join captain.users users on users.id = profile.user_id
-          where profile.notification_mode in ('smart', 'daily')
-            and extract(hour from timezone(users.timezone, ${now}::timestamptz))
-              >= profile.digest_hour_local
-            and (
-              profile.last_digest_at is null
-              or timezone(users.timezone, profile.last_digest_at)::date
-                < timezone(users.timezone, ${now}::timestamptz)::date
-            )
-            and exists (
-              select 1
-              from captain.trips trip
-              join captain.watches watch on watch.trip_id = trip.id
-              join captain.trip_recommendations recommendation
-                on recommendation.trip_id = trip.id
-              where trip.user_id = profile.user_id
-                and trip.status not in ('paused', 'cancelled', 'completed', 'archived')
-                and watch.status = 'active'
-            )
-        )
       ) as due
     `;
     return rows[0]?.due ?? false;
@@ -1101,13 +1079,15 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       run_ends_at: Date;
       checks_completed: number;
       notification_mode: TravellerProfile["notificationMode"];
+      ranking_mode: TravellerProfile["rankingMode"];
+      brief: Trip["brief"];
       recommendation_summary: string | null;
     }>>`
       select watch.id as watch_id, trip.id as trip_id, trip.user_id, trip.title,
         watch.status as watch_status, watch.tracking_starts_at,
         watch.run_started_at, watch.run_ends_at,
         watch.checks_completed,
-        profile.notification_mode,
+        profile.notification_mode, profile.ranking_mode, trip.brief,
         recommendation.summary as recommendation_summary
       from captain.watches watch
       join captain.trips trip on trip.id = watch.trip_id
@@ -1186,6 +1166,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
             dedupKey: `${row.trip_id}:tracking_summary:${row.run_started_at.toISOString()}`,
             payload: {
               tripTitle: row.title,
+              tripGoal: formatTripGoal({ brief: row.brief, rankingMode: row.ranking_mode }),
               checksCompleted: row.checks_completed,
               summary: row.recommendation_summary ?? "The latest verified options are ready to review."
             },
@@ -1219,17 +1200,11 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
             dedupKey: `${row.trip_id}:tracking_activation:${row.tracking_starts_at.toISOString()}`,
             payload: {
               tripTitle: row.title,
+              tripGoal: formatTripGoal({ brief: row.brief, rankingMode: row.ranking_mode }),
               trackingStartsAt: row.tracking_starts_at.toISOString()
             },
             now
           });
-        }
-        if (["smart", "daily"].includes(row.notification_mode)) {
-          await this.#sql`
-            update captain.traveller_profiles
-            set last_digest_at = ${now}, updated_at = ${now}
-            where user_id = ${row.user_id}
-          `;
         }
         activated += 1;
       }
@@ -1250,143 +1225,6 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         and watch.status = 'active'
         and watch.tracking_starts_at > ${now}
     `;
-  }
-
-  async enqueueDueDigests(now: Date): Promise<number> {
-    const profiles = await this.#sql<Array<ProfileRow & { timezone: string }>>`
-      select profile.*, users.timezone
-      from captain.traveller_profiles profile
-      join captain.users users on users.id = profile.user_id
-      where profile.notification_mode in ('smart', 'daily')
-        and extract(hour from timezone(users.timezone, ${now}::timestamptz))
-          >= profile.digest_hour_local
-        and (
-          profile.last_digest_at is null
-          or timezone(users.timezone, profile.last_digest_at)::date
-            < timezone(users.timezone, ${now}::timestamptz)::date
-        )
-        and exists (
-          select 1
-          from captain.trips trip
-          join captain.watches watch on watch.trip_id = trip.id
-          join captain.trip_recommendations recommendation
-            on recommendation.trip_id = trip.id
-          where trip.user_id = profile.user_id
-            and trip.status not in ('paused', 'cancelled', 'completed', 'archived')
-            and watch.status = 'active'
-        )
-    `;
-    let queued = 0;
-    for (const profile of profiles) {
-      if (!digestDue(now, profile.timezone, profile.digest_hour_local, profile.last_digest_at)) {
-        continue;
-      }
-      const trips = await this.#sql<Array<{
-        id: string;
-        title: string;
-        recommendation: TripRecommendation["snapshot"];
-        price: string | number;
-        currency: string;
-        summary: string;
-        price_rise_itinerary_key: string | null;
-      }>>`
-        select trip.id, trip.title, recommendation.snapshot as recommendation,
-          recommendation.price, recommendation.currency, recommendation.summary,
-          watch.price_rise_itinerary_key
-        from captain.trips trip
-        join captain.watches watch on watch.trip_id = trip.id
-        join captain.trip_recommendations recommendation on recommendation.trip_id = trip.id
-        where trip.user_id = ${profile.user_id}
-          and trip.status not in ('paused', 'cancelled', 'completed', 'archived')
-          and watch.status = 'active'
-        order by trip.updated_at desc
-        limit ${DIGEST_TRIP_LIMIT}
-      `;
-      if (trips.length === 0) continue;
-      const recent = await this.#sql<Array<{ exists: boolean }>>`
-        select exists(
-          select 1 from captain.notifications
-          where user_id = ${profile.user_id}
-            and kind in ('price_rise', 'price_drop', 'new_best')
-            and status in ('pending', 'sending', 'sent')
-            and created_at >= ${new Date(now.getTime() - 3 * 3_600_000)}
-        ) as exists
-      `;
-      if (recent[0]?.exists) {
-        await this.#sql`
-          update captain.trip_recommendations recommendation set
-            snapshot = recommendation.snapshot - 'pendingDigestChange',
-            updated_at = ${now}
-          from captain.trips trip
-          where recommendation.trip_id = trip.id
-            and trip.user_id = ${profile.user_id}
-        `;
-        await this.#sql`
-          update captain.traveller_profiles
-          set last_digest_at = ${now}, updated_at = ${now}
-          where user_id = ${profile.user_id}
-        `;
-        continue;
-      }
-      const primary = trips[0]!;
-      const digestTrips = [];
-      for (const trip of trips) {
-        let priceRise: { increase: number; percent: number } | null = null;
-        const itineraryKey = trip.price_rise_itinerary_key;
-        if (itineraryKey) {
-          const prices = await this.#sql<Array<{
-            current_price: string | number;
-            low_price: string | number;
-          }>>`
-            select
-              (array_agg(price order by observed_at desc))[1] as current_price,
-              min(price) as low_price
-            from captain.price_observations
-            where itinerary_key = ${itineraryKey}
-              and currency = ${trip.currency}
-              and observed_at >= ${new Date(now.getTime() - 7 * 86_400_000)}
-            having count(*) > 0
-          `;
-          const current = Number(prices[0]?.current_price);
-          const low = Number(prices[0]?.low_price);
-          const increase = current - low;
-          const percent = low > 0 ? increase / low * 100 : 0;
-          if (increase >= 20 && percent >= 5) priceRise = { increase, percent };
-        }
-        digestTrips.push({
-          tripId: trip.id,
-          tripTitle: trip.title,
-          price: Number(trip.price),
-          currency: trip.currency,
-          summary: trip.summary,
-          snapshot: trip.recommendation,
-          priceRise
-        });
-      }
-      const inserted = await enqueueNotification(this.#sql, {
-        userId: profile.user_id,
-        tripId: primary.id,
-        kind: "daily_digest",
-        dedupKey: `${profile.user_id}:daily_digest:${localDateKey(now, profile.timezone)}`,
-        payload: { trips: digestTrips },
-        now
-      });
-      if (inserted) queued += 1;
-      await this.#sql`
-        update captain.trip_recommendations recommendation set
-          snapshot = recommendation.snapshot - 'pendingDigestChange',
-          updated_at = ${now}
-        from captain.trips trip
-        where recommendation.trip_id = trip.id
-          and trip.user_id = ${profile.user_id}
-      `;
-      await this.#sql`
-        update captain.traveller_profiles
-        set last_digest_at = ${now}, updated_at = ${now}
-        where user_id = ${profile.user_id}
-      `;
-    }
-    return queued;
   }
 
   async scheduleDueSearchRuns(now: Date, freshnessMs: number, limit: number): Promise<number> {
@@ -1711,17 +1549,6 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
             best.offer,
             previous?.snapshot.current ?? null
           );
-      const pendingDigestChange = ["smart", "daily"].includes(profile.notificationMode)
-        ? previous && qualifies
-          ? {
-              current: best.offer,
-              previous: previous.snapshot.current,
-              rankingMode: profile.rankingMode,
-              reasonCodes,
-              createdAt: now.toISOString()
-            }
-          : previous?.snapshot.pendingDigestChange ?? null
-        : null;
       const recommendation: TripRecommendation = {
         tripId: trip.id, offerId: best.offer.id, searchSpecId: best.offer.searchSpecId,
         itineraryKey: best.offer.itineraryKey,
@@ -1733,30 +1560,19 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           previous: previous?.snapshot.current ?? null,
           rankingMode: profile.rankingMode,
           reasonCodes,
-          createdAt: now.toISOString(),
-          pendingDigestChange
+          createdAt: now.toISOString()
         }
       };
-      const farBaseline = Boolean(
-        watch?.trackingStartsAt
-        && Date.parse(watch.trackingStartsAt) > now.getTime()
-        && !watch.baselineCompletedAt
-      );
-      const finalWeek = daysUntilDeparture(trip.brief.departureWindow.start, now) <= 7;
-      const immediateInitial = farBaseline || profile.notificationMode === "changes_only";
-      const immediateImprovement = profile.betterOptionAlertsEnabled && (
-        profile.notificationMode === "changes_only"
-        || (profile.notificationMode === "smart" && finalWeek)
-      );
+      // The first search always earns a message: it is the overview that tells
+      // the traveller what Captain found and what it is now chasing. After
+      // that, only a change worth the interruption speaks.
       const kind = profile.notificationMode === "off"
         ? null
         : !previous
-          ? immediateInitial ? "initial_results" : null
-          : qualifies && immediateImprovement && profile.rankingMode === "cheapest"
-            ? "price_drop"
-            : qualifies && immediateImprovement
-              ? "new_best"
-              : null;
+          ? "initial_results"
+          : qualifies && profile.betterOptionAlertsEnabled
+            ? profile.rankingMode === "cheapest" ? "price_drop" : "new_best"
+            : null;
       const notified = await this.#sql.begin(async (tx) => {
         let queued = false;
         await tx`
@@ -1800,8 +1616,11 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
                 ) values (
                   ${randomUUID()}, ${trip.userId}, ${trip.id}, ${kind}, ${dedupKey},
                   ${tx.json(json({
-                    tripTitle: trip.title,
+                    ...notificationGoalPayload(trip, profile),
                     ...recommendation,
+                    ...(kind === "initial_results"
+                      ? { range: offerRangeSummary(offers) }
+                      : {}),
                     ...(kind === "initial_results" && watch?.trackingStartsAt
                       ? { trackingStartsAt: watch.trackingStartsAt }
                       : {}),
@@ -1868,13 +1687,8 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     const sameItinerary = watch.priceRiseItineraryKey === monitored.itineraryKey;
     const armed = sameItinerary ? watch.priceRiseArmed : true;
     const thresholdReached = percent >= 0.05 && increase >= 20;
-    const finalWeek = daysUntilDeparture(trip.brief.departureWindow.start, now) <= 7;
-    const immediate = profile.priceRiseAlertsEnabled && (
-      profile.notificationMode === "changes_only"
-      || (profile.notificationMode === "smart" && finalWeek)
-    );
     let queued = false;
-    if (thresholdReached && armed && immediate) {
+    if (thresholdReached && armed && profile.priceRiseAlertsEnabled) {
       const recent = await this.#sql<Array<{ count: string }>>`
         select count(*)::text as count
         from captain.notifications
@@ -1890,7 +1704,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           kind: "price_rise",
           dedupKey: `${trip.id}:price_rise:${monitored.itineraryKey}:${low}:${monitored.price}`,
           payload: {
-            tripTitle: trip.title,
+            ...notificationGoalPayload(trip, profile),
             current: monitored,
             sevenDayLow: low,
             increase,
@@ -1921,6 +1735,9 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           and available_at <= ${now}
           and kind in ('inventory_gap', 'watch_attention')
       `;
+      // A stale "better option" is worth dropping for a fresher one. The
+      // opening overview is not one of those: it states the goal, and it is
+      // the only message that does, so it always gets delivered.
       await tx`
         with ranked as (
           select id,
@@ -1930,7 +1747,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
             ) as position
           from captain.notifications
           where status = 'pending'
-            and kind in ('initial_results', 'price_drop', 'new_best')
+            and kind in ('price_drop', 'new_best')
         )
         update captain.notifications notification set
           status = 'superseded',
@@ -2258,27 +2075,6 @@ async function enqueueNotification(
   return rows.length === 1;
 }
 
-function digestDue(
-  now: Date,
-  timezone: string,
-  digestHourLocal: number,
-  lastDigestAt: Date | string | undefined | null
-): boolean {
-  try {
-    const parts = localParts(now, timezone);
-    if (parts.hour < digestHourLocal) return false;
-    return !lastDigestAt || localDateKey(new Date(lastDigestAt), timezone) !== parts.date;
-  } catch {
-    return now.getUTCHours() >= digestHourLocal
-      && (!lastDigestAt
-        || new Date(lastDigestAt).toISOString().slice(0, 10) !== now.toISOString().slice(0, 10));
-  }
-}
-
-function localDateKey(now: Date, timezone: string): string {
-  return localParts(now, timezone).date;
-}
-
 function localParts(now: Date, timezone: string): { date: string; hour: number } {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
@@ -2376,10 +2172,8 @@ type ProfileRow = {
   excluded_airline_codes: string[];
   alerts_enabled: boolean;
   notification_mode: TravellerProfile["notificationMode"];
-  digest_hour_local: number;
   price_rise_alerts_enabled: boolean;
   better_option_alerts_enabled: boolean;
-  last_digest_at: Date | null;
   max_alerts_per_day: number;
   quiet_hours_enabled: boolean;
   quiet_hours_start: number;
@@ -2493,7 +2287,6 @@ function toProfile(row: ProfileRow): TravellerProfile {
     excludedAirlineCodes: row.excluded_airline_codes,
     alertsEnabled: row.alerts_enabled,
     notificationMode: row.notification_mode,
-    digestHourLocal: row.digest_hour_local,
     priceRiseAlertsEnabled: row.price_rise_alerts_enabled,
     betterOptionAlertsEnabled: row.better_option_alerts_enabled,
     maxAlertsPerDay: row.max_alerts_per_day,
