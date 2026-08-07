@@ -78,10 +78,20 @@ export const CAPTAIN_READY_PROMPT =
 // already onboarded gets this instead.
 export const CAPTAIN_RETURNING_TRAVELLER_WELCOME =
   "Welcome back. Tell me where and roughly when you want to fly, and I’ll watch it for you. I track one trip at a time.";
+// Someone who is already tracking something is not being asked for a trip
+// again—the welcome hands straight over to the one they have. Worded for one
+// trip or several, since the summary below it counts them itself.
+export const CAPTAIN_RETURNING_TRAVELLER_TRIP_WELCOME =
+  "Welcome back. Here’s what I’m watching for you.";
 export const CAPTAIN_PROFILE_COMMAND = "/profile";
 export const CAPTAIN_TRIP_COMMAND = "/trip";
+export const CAPTAIN_TRIPS_COMMAND = "/trips";
 export const CAPTAIN_CLEAR_COMMAND = "/clear";
-export const CAPTAIN_CLEAR_CONFIRMATION = "Your preferences have been reset.";
+// Clearing drops the traveller's trips as well as their preferences, so the
+// confirmation has to name both—otherwise the next /trip comes back empty
+// and reads as Captain having lost something.
+export const CAPTAIN_CLEAR_CONFIRMATION =
+  "Your trips and preferences have been cleared. Tell me where and roughly when you want to fly, and I’ll start watching again.";
 
 export default telegramChannel({
   route: "/eve/v1/telegram",
@@ -143,12 +153,20 @@ export default telegramChannel({
       }
       return null;
     }
-    if (content === "/start") {
+    const command = telegramCommandName(content);
+    if (command === "start") {
       // Claiming the welcome step completes onboarding, so anyone reaching
       // here has already been introduced.
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
-      const welcome = CAPTAIN_RETURNING_TRAVELLER_WELCOME;
+      // Someone already tracking a trip is welcomed back to that trip rather
+      // than asked for one they have—same summary /trip would give them.
+      const tracked = await services.tripPlanning.activeTripsLocation(user.id);
+      const welcome = returningTravellerWelcome(tracked);
       await services.platformStore.appendMessage(user.id, "assistant", welcome, new Date());
+      if (tracked) {
+        await postTelegramDashboardMessage(ctx, welcome);
+        return null;
+      }
       await postWithLink(
         ctx,
         welcome,
@@ -157,7 +175,11 @@ export default telegramChannel({
       );
       return null;
     }
-    if (content === CAPTAIN_PROFILE_COMMAND || content === "/settings" || content === "/preferences") {
+    if (
+      command === CAPTAIN_PROFILE_COMMAND.slice(1)
+      || command === "settings"
+      || command === "preferences"
+    ) {
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       await postWithLink(
         ctx,
@@ -167,7 +189,10 @@ export default telegramChannel({
       );
       return null;
     }
-    if (content === CAPTAIN_TRIP_COMMAND) {
+    if (
+      command === CAPTAIN_TRIP_COMMAND.slice(1)
+      || command === CAPTAIN_TRIPS_COMMAND.slice(1)
+    ) {
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       const response = await services.tripPlanning.activeTripsLocation(user.id);
       if (!response) {
@@ -178,9 +203,16 @@ export default telegramChannel({
       await postTelegramDashboardMessage(ctx, response);
       return null;
     }
-    if (content === CAPTAIN_CLEAR_COMMAND) {
+    if (command === CAPTAIN_CLEAR_COMMAND.slice(1)) {
       await services.platformStore.clearTravellerData(user.id, new Date());
       await ctx.telegram.post(CAPTAIN_CLEAR_CONFIRMATION);
+      return null;
+    }
+    if (content.trimStart().startsWith("/")) {
+      const response = "I don’t recognise that command. Use /trip to view your trip or /profile for preferences.";
+      await services.platformStore.appendMessage(user.id, "user", content, new Date());
+      await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
+      await ctx.telegram.post(response);
       return null;
     }
     if (!content) {
@@ -264,13 +296,13 @@ export default telegramChannel({
       }
     } catch (error) {
       if (error instanceof TripLimitError) {
-        const message = "You’re already tracking a trip. Open Profile and stop tracking it before creating another.";
+        const message = "You’re already tracking a trip. Open /trip and stop tracking it before creating another.";
         await services.platformStore.appendMessage(user.id, "assistant", message, new Date());
         await postWithLink(
           ctx,
           message,
-          "Open profile",
-          await services.auth.createLoginLink(user.id, "/profile")
+          "Open trip",
+          await services.auth.createLoginLink(user.id, "/trip")
         );
         return null;
       }
@@ -386,9 +418,9 @@ export default telegramChannel({
         });
         await postWithLink(
           ctx,
-          "You’re already tracking a trip. Stop tracking it before creating another.",
-          "Open profile",
-          await services.auth.createLoginLink(user.id, "/profile")
+          "You’re already tracking a trip. Open /trip and stop tracking it before creating another.",
+          "Open trip",
+          await services.auth.createLoginLink(user.id, "/trip")
         );
         return;
       }
@@ -591,6 +623,17 @@ export function repliedToTelegramMessageId(raw: Record<string, unknown>): number
   const reply = record(raw.reply_to_message);
   const value = Number(reply?.message_id);
   return Number.isSafeInteger(value) ? value : null;
+}
+
+export function telegramCommandName(content: string): string | null {
+  const match = /^\/([a-z][a-z0-9_]*)(?:@[a-z][a-z0-9_]*)?$/iu.exec(content.trim());
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
+export function returningTravellerWelcome(trackedTrips: string | null): string {
+  return trackedTrips
+    ? `${CAPTAIN_RETURNING_TRAVELLER_TRIP_WELCOME}\n\n${trackedTrips}`
+    : CAPTAIN_RETURNING_TRAVELLER_WELCOME;
 }
 
 function isExplanationQuestion(content: string): boolean {

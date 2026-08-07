@@ -181,6 +181,30 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     }
     for (const [hash, token] of this.#loginTokens) if (token.userId === userId) this.#loginTokens.delete(hash);
     for (const [hash, session] of this.#webSessions) if (session.userId === userId) this.#webSessions.delete(hash);
+    // The conversation is already gone, so this leaves nothing to point at a
+    // trip that no longer exists.
+    this.#clearTrips(userId);
+  }
+
+  async clearTravellerData(userId: string, now: Date): Promise<void> {
+    const current = await this.ensureProfile(userId, now);
+    this.#profiles.set(userId, {
+      ...current,
+      ...DEFAULT_PROFILE,
+      preferredAirlineCodes: [],
+      excludedAirlineCodes: [],
+      updatedAt: now.toISOString()
+    });
+    this.#clearTrips(userId);
+  }
+
+  /**
+   * Every trip a traveller owns, and everything hanging off it. Shared search
+   * data—specs, runs, offers, price history—is not one traveller's to delete,
+   * so it stays. The account, profile and conversation survive too: only the
+   * traveller's own trips go.
+   */
+  #clearTrips(userId: string): void {
     const tripIds = new Set(
       [...this.#trips.values()].filter((trip) => trip.userId === userId).map((trip) => trip.id)
     );
@@ -203,17 +227,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         this.#tripPlanConfirmations.delete(id);
       }
     }
-  }
-
-  async clearTravellerData(userId: string, now: Date): Promise<void> {
-    const current = await this.ensureProfile(userId, now);
-    this.#profiles.set(userId, {
-      ...current,
-      ...DEFAULT_PROFILE,
-      preferredAirlineCodes: [],
-      excludedAirlineCodes: [],
-      updatedAt: now.toISOString()
-    });
+    const conversation = this.#conversations.get(userId);
+    if (conversation) this.#conversations.set(userId, { ...conversation, activeTripId: null });
   }
 
   async getProfile(userId: string): Promise<TravellerProfile | null> {
