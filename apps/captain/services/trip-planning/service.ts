@@ -39,6 +39,8 @@ const CANCEL_PATTERN = /^(?:no|cancel|never\s*mind|stop)[.! ]*$/iu;
 const NEW_DRAFT_PATTERN = /\b(?:another|a new|new|different)\s+(?:flight|trip|journey)\b/iu;
 const FRESH_TRIP_DIRECTIVE_PATTERN = /^\s*(?:(?:let(?:'|’)s|please)\s+|i\s+(?:want|need|would\s+like)\s+to\s+|(?:can|could|would)\s+you\s+)?(?:track|start|create|plan|set\s*up|find|search(?:\s+for)?)\s+(?:(?:me|us)\s+)?(?:a\s+|the\s+|my\s+)?(?:flight|trip|journey)\b/iu;
 const WHERE_PATTERN = /^(?:where|where is it|where(?:'s| is) (?:the|my) trip)[?!. ]*$/iu;
+const BARE_ROUTE_PATTERN = /\b(?:from\s+)?[\p{L}][\p{L}.'’()-]*(?:\s+[\p{L}][\p{L}.'’()-]*){0,3}\s+to\s+[\p{L}][\p{L}.'’()-]*(?:\s+[\p{L}][\p{L}.'’()-]*){0,3}\b/iu;
+const TRAVEL_DATE_PATTERN = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|today|tomorrow|tonight|next\s+(?:week|month|weekend)|this\s+(?:week|month|weekend)|\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b/iu;
 const CREATION_SUCCESS_PATTERNS = [
   /\b(?:your|the|that)\b[\s\S]{0,100}\btrip\b[\s\S]{0,200}\b(?:has\s+been|was|is\s+now)\s+(?:successfully\s+)?(?:created|saved|set\s+up|started)\b/iu,
   /\b(?:your|the|that)\b[\s\S]{0,100}\btrip\b\s+is\s+(?:successfully\s+)?(?:created|saved|set\s+up)\b/iu,
@@ -438,7 +440,9 @@ export class TripPlanningService {
     if (!normalized) return false;
     const travel = /\b(?:flight|flights|trip|travel|fly|flying|journey)\b/iu.test(normalized);
     const action = /\b(?:plan|start|create|set\s*up|track|search|find|book|want|need|compare|options?|best|cheapest)\b/iu.test(normalized);
-    return travel && action;
+    const bareDatedRoute = BARE_ROUTE_PATTERN.test(normalized)
+      && TRAVEL_DATE_PATTERN.test(normalized);
+    return (travel && action) || bareDatedRoute;
   }
 
   static isWhereQuestion(text: string): boolean {

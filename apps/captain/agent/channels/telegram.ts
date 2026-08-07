@@ -566,6 +566,24 @@ export default telegramChannel({
       let message = data.message;
       if (userId) {
         const services = await getCaptainServices();
+        const draft = await services.tripPlanning.findOpen(userId);
+        if (draft?.status === "awaiting_confirmation") {
+          const confirmation = formatTripPlanConfirmation(draft);
+          const conversation = await services.platformStore.getConversation(userId, 8);
+          if (isDuplicateTripConfirmationReply(
+            draft,
+            confirmation,
+            message,
+            conversation.recentMessages
+          )) {
+            console.info(JSON.stringify({
+              event: "captain.telegram_duplicate_trip_confirmation_suppressed",
+              draft_id: draft.id,
+              revision: draft.revision
+            }));
+            return;
+          }
+        }
         const grounded = await services.tripPlanning.groundAssistantMessage(userId, message);
         message = grounded.message;
         await services.platformStore.appendMessage(userId, "assistant", message, new Date());
@@ -891,6 +909,39 @@ export function hasDeliveredTripConfirmation(
     && candidate.content === message
     && Date.parse(candidate.createdAt) >= updatedAt
   );
+}
+
+export function isDuplicateTripConfirmationReply(
+  draft: Pick<TripPlanDraft, "updatedAt">,
+  confirmation: string,
+  candidate: string,
+  recentMessages: Array<{ role: "user" | "assistant"; content: string; createdAt: string }>
+): boolean {
+  if (!hasSameTripConfirmationFacts(confirmation, candidate)) return false;
+  const updatedAt = Date.parse(draft.updatedAt);
+  return recentMessages.some((recent) =>
+    recent.role === "assistant"
+    && Date.parse(recent.createdAt) >= updatedAt
+    && hasSameTripConfirmationFacts(confirmation, recent.content)
+  );
+}
+
+function hasSameTripConfirmationFacts(expected: string, candidate: string): boolean {
+  const expectedFacts = tripConfirmationFacts(expected);
+  if (expectedFacts.length < 3) return false;
+  const candidateFacts = new Set(tripConfirmationFacts(candidate));
+  return expectedFacts.every((fact) => candidateFacts.has(fact));
+}
+
+function tripConfirmationFacts(message: string): string[] {
+  return message
+    .split("\n")
+    .map((line) => line
+      .trim()
+      .replace(/^[•*-]\s*/u, "")
+      .replace(/\s+/gu, " ")
+      .toLocaleLowerCase("en"))
+    .filter((line) => /^(?:route|leg \d+|depart|return|stay|trip type|travellers|cabin|stops|currency):/u.test(line));
 }
 
 async function postTelegramDashboardMessage(

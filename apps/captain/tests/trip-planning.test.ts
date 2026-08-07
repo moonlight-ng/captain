@@ -4,6 +4,7 @@ import { MemoryCaptainPlatformStore } from "@agents/flight-store";
 import {
   hasDeliveredTripConfirmation,
   isCaptainGreeting,
+  isDuplicateTripConfirmationReply,
   parseTripPlanCallback,
   tripPlanConfirmationReplyMarkup
 } from "../agent/channels/telegram.js";
@@ -93,11 +94,57 @@ describe("Captain trip planning", () => {
     }])).toBe(true);
   });
 
+  it("suppresses a repeated confirmation after the button message was delivered", () => {
+    const draft = { updatedAt: "2026-09-01T12:00:00.000Z" };
+    const confirmation = [
+      "Ready to create this trip:",
+      "",
+      "• Route: LOS → LON",
+      "• Depart: Sunday, 6 Sep 2026",
+      "• Trip type: One-way (default)",
+      "• Travellers: 1 (default)",
+      "• Cabin: Economy (default)",
+      "• Stops: At most 2 stops (default)",
+      "• Currency: USD (default)",
+      "",
+      "Tap Create or Cancel below, or reply with what you’d like to change."
+    ].join("\n");
+    const echo = confirmation.replace(
+      "Tap Create or Cancel below, or reply with what you’d like to change.",
+      "Reply “Create” to start tracking, or tell me what you’d like to change."
+    );
+    const delivered = [{
+      role: "assistant" as const,
+      content: confirmation,
+      createdAt: "2026-09-01T12:00:01.000Z"
+    }];
+
+    expect(isDuplicateTripConfirmationReply(draft, confirmation, echo, delivered)).toBe(true);
+    expect(isDuplicateTripConfirmationReply(
+      draft,
+      confirmation,
+      echo.replace("LOS → LON", "LOS → NYC"),
+      delivered
+    )).toBe(false);
+  });
+
   it("routes only standalone greetings away from conversational history", () => {
     expect(isCaptainGreeting("Hi there")).toBe(true);
     expect(isCaptainGreeting("Good morning!")).toBe(true);
     expect(isCaptainGreeting("Hi, plan a trip to New York")).toBe(false);
     expect(isCaptainGreeting("Where is my trip?")).toBe(false);
+  });
+
+  it("routes a bare dated route directly to trip planning", () => {
+    expect(TripPlanningService.isTripPlanningRequest(
+      "Lagos to London September 6"
+    )).toBe(true);
+    expect(TripPlanningService.isTripPlanningRequest(
+      "Lagos to London next weekend"
+    )).toBe(true);
+    expect(TripPlanningService.isTripPlanningRequest(
+      "I moved from Lagos to London"
+    )).toBe(false);
   });
 
   it("reproduces the Lagos-to-New-York conversation without changing dates", async () => {
