@@ -58,6 +58,7 @@ const pendingConfirmationPosts = new Set<string>();
 // —reading recent context, for one—run under the typing indicator alone.
 const CAPTAIN_TOOL_STATUS: Readonly<Record<string, string>> = {
   prepare_trip: "Working through the route and dates…",
+  search_flights: "Checking verified fares…",
   select_trip_flight: "Comparing the flight options…",
   start_prepared_trip: "Starting your trip…",
   manage_trip: "Updating your trip…"

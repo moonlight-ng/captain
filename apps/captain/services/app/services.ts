@@ -3,8 +3,10 @@ import {
   PostgresCaptainPlatformStore,
   type CaptainPlatformStore
 } from "@agents/flight-store";
+import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
 
 import { CaptainWebAuth } from "../auth/web-session.js";
+import { FlightLookupService } from "../flights/lookup.js";
 import { TripPlanningService } from "../trip-planning/service.js";
 import { TripService } from "../trips/service.js";
 import { loadEnv, type CaptainEnv } from "./env.js";
@@ -16,6 +18,7 @@ export type CaptainServices = {
   auth: CaptainWebAuth;
   trips: TripService;
   tripPlanning: TripPlanningService;
+  flightLookup: FlightLookupService;
 };
 
 let servicesPromise: Promise<CaptainServices> | undefined;
@@ -42,11 +45,24 @@ export async function createCaptainServices(): Promise<CaptainServices> {
     store: platformStore
   });
   const trips = new TripService({ store: platformStore });
+  const flightProvider = env.duffelAccessToken
+    ? new DuffelFlightSearchProvider({
+        accessToken: env.duffelAccessToken,
+        baseUrl: env.duffelBaseUrl,
+        timeoutMs: 70_000,
+        supplierTimeoutMs: 60_000
+      })
+    : null;
   return {
     env,
     platformStore,
     auth,
     trips,
+    flightLookup: new FlightLookupService({
+      store: platformStore,
+      trips,
+      provider: flightProvider
+    }),
     tripPlanning: new TripPlanningService({
       store: platformStore,
       trips,
