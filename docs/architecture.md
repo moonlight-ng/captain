@@ -7,8 +7,10 @@ Captain's PostgreSQL database and public Telegram bot token. Captain owns
 onboarding, the one-active-trip flow, secure web sessions, and the dashboard.
 The worker owns scheduled fare research and Telegram alerts.
 
-Pilot is a separate private product. It has no Captain client, flight tools,
-shared credentials, redirects, or access to Captain profiles and trips.
+Pilot is a separate private product. It has no Captain flight tools, redirects,
+or access to Captain profiles and trips. Captain's only Pilot-facing operation
+is a signed, one-way `/feedback` notification carrying bounded text and basic
+reporter attribution to Telegram; it never enters Pilot's agent session.
 
 ## Profile, trip, and authentication flow
 

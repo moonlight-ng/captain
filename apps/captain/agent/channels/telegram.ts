@@ -88,6 +88,9 @@ export const CAPTAIN_PROFILE_COMMAND = "/profile";
 export const CAPTAIN_TRIP_COMMAND = "/trip";
 export const CAPTAIN_TRIPS_COMMAND = "/trips";
 export const CAPTAIN_CLEAR_COMMAND = "/clear";
+export const CAPTAIN_FEEDBACK_COMMAND = "/feedback";
+export const CAPTAIN_FEEDBACK_PROMPT =
+  "Tell us what worked, what didn’t, or what you’d like Captain to do better.";
 // Clearing drops the traveller's trips as well as their preferences, so the
 // confirmation has to name both—otherwise the next /trip comes back empty
 // and reads as Captain having lost something.
@@ -197,6 +200,16 @@ export default telegramChannel({
       );
       return null;
     }
+    if (command === CAPTAIN_FEEDBACK_COMMAND.slice(1)) {
+      await services.platformStore.appendMessage(user.id, "user", content, new Date());
+      await postWithLink(
+        ctx,
+        CAPTAIN_FEEDBACK_PROMPT,
+        "Open feedback form",
+        await services.auth.createLoginLink(user.id, "/feedback")
+      );
+      return null;
+    }
     if (
       command === CAPTAIN_TRIP_COMMAND.slice(1)
       || command === CAPTAIN_TRIPS_COMMAND.slice(1)
@@ -217,7 +230,7 @@ export default telegramChannel({
       return null;
     }
     if (content.trimStart().startsWith("/")) {
-      const response = "I don’t recognise that command. Use /trip to view your trip or /profile for preferences.";
+      const response = "I don’t recognise that command. Use /trip to view your trip, /profile for preferences, or /feedback to share feedback.";
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
       await ctx.telegram.post(response);

@@ -7,6 +7,11 @@ import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
 
 import { CaptainWebAuth } from "../auth/web-session.js";
 import { FlightLookupService } from "../flights/lookup.js";
+import {
+  DisabledFeedbackBridge,
+  HttpTelegramFeedbackBridge,
+  type FeedbackBridge
+} from "../feedback/telegram-bridge.js";
 import { TripPlanningService } from "../trip-planning/service.js";
 import { TripService } from "../trips/service.js";
 import { loadEnv, type CaptainEnv } from "./env.js";
@@ -19,6 +24,7 @@ export type CaptainServices = {
   trips: TripService;
   tripPlanning: TripPlanningService;
   flightLookup: FlightLookupService;
+  feedback: FeedbackBridge;
 };
 
 let servicesPromise: Promise<CaptainServices> | undefined;
@@ -45,6 +51,12 @@ export async function createCaptainServices(): Promise<CaptainServices> {
     store: platformStore
   });
   const trips = new TripService({ store: platformStore });
+  const feedback = env.feedbackBridgeUrl && env.feedbackBridgeSecret
+    ? new HttpTelegramFeedbackBridge({
+        baseUrl: env.feedbackBridgeUrl,
+        secret: env.feedbackBridgeSecret
+      })
+    : new DisabledFeedbackBridge();
   const flightProvider = env.duffelAccessToken
     ? new DuffelFlightSearchProvider({
         accessToken: env.duffelAccessToken,
@@ -58,6 +70,7 @@ export async function createCaptainServices(): Promise<CaptainServices> {
     platformStore,
     auth,
     trips,
+    feedback,
     flightLookup: new FlightLookupService({
       store: platformStore,
       trips,

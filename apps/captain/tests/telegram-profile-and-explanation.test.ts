@@ -8,6 +8,8 @@ import {
   CAPTAIN_CLEAR_COMMAND,
   CAPTAIN_CLEAR_CONFIRMATION,
   CAPTAIN_DEFAULTS_INTRO,
+  CAPTAIN_FEEDBACK_COMMAND,
+  CAPTAIN_FEEDBACK_PROMPT,
   CAPTAIN_NEW_USER_GREETING,
   CAPTAIN_PROFILE_COMMAND,
   CAPTAIN_READY_PROMPT,
@@ -67,9 +69,17 @@ describe("Telegram profile onboarding", () => {
   it("accepts the singular and plural trip commands", () => {
     expect(CAPTAIN_TRIP_COMMAND).toBe("/trip");
     expect(CAPTAIN_TRIPS_COMMAND).toBe("/trips");
+    expect(CAPTAIN_FEEDBACK_COMMAND).toBe("/feedback");
     expect(telegramCommandName("/trip")).toBe("trip");
     expect(telegramCommandName(" /trips ")).toBe("trips");
     expect(telegramCommandName("/trips@CaptainBot")).toBe("trips");
+  });
+
+  it("offers a concise feedback form prompt", () => {
+    expect(CAPTAIN_FEEDBACK_PROMPT).toBe(
+      "Tell us what worked, what didn’t, or what you’d like Captain to do better."
+    );
+    expect(telegramCommandName("/feedback")).toBe("feedback");
   });
 
   it("only parses complete Telegram commands", () => {

@@ -20,6 +20,10 @@ deployment credentials. Pilot is a separate private product and repository.
 Captain tracks fares and nothing else. It does not book travel, take payments,
 or hold any traveller identity: there is no passenger record and no stored card.
 
+`/feedback` is the sole cross-product integration: Captain sends a signed,
+bounded notification to Pilot for Telegram delivery, without sharing trip data
+or opening a Pilot agent turn.
+
 ## Commands
 
 ```sh

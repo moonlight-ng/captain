@@ -15,6 +15,10 @@ import { ZodError, z } from "zod";
 
 import { getCaptainServices } from "../../services/app/services.js";
 import {
+  FeedbackBridgeUnavailableError,
+  FeedbackDeliveryError
+} from "../../services/feedback/telegram-bridge.js";
+import {
   legacyBearerAllowed,
   type ResolvedAuth
 } from "../../services/auth/legacy-bearer.js";
@@ -33,6 +37,7 @@ export default defineChannel({
     GET("/trip/:id/flight/:itineraryKey", serveIndex),
     GET("/trip/:id/flight/:itineraryKey/book", serveIndex),
     GET("/profile", serveIndex),
+    GET("/feedback", serveIndex),
     GET("/settings", serveIndex),
     GET("/preferences", serveIndex),
     GET("/travellers", serveIndex),
@@ -42,6 +47,7 @@ export default defineChannel({
     GET("/api/auth/session", authenticated(sessionStatus)),
     GET("/api/me/profile", authenticated(getProfile)),
     PATCH("/api/me/profile", authenticatedMutation(updateProfile)),
+    POST("/api/me/feedback", authenticatedMutation(requireSession(submitFeedback))),
     GET("/api/me/trip", authenticated(getTrip)),
     PATCH("/api/me/trip", authenticatedMutation(updateTrip)),
     POST("/api/me/trip/actions", authenticatedMutation(tripAction)),
@@ -78,6 +84,12 @@ function safely(handler: Handler): Handler {
       }
       if (error instanceof TripLimitError) {
         return Response.json({ error: "trip_limit", limit: 3 }, { status: 409 });
+      }
+      if (error instanceof FeedbackBridgeUnavailableError) {
+        return Response.json({ error: "feedback_unavailable" }, { status: 503 });
+      }
+      if (error instanceof FeedbackDeliveryError) {
+        return Response.json({ error: "feedback_delivery_failed" }, { status: 502 });
       }
       if (error instanceof Error && error.message === "body_too_large") {
         return Response.json({ error: "body_too_large" }, { status: 413 });
@@ -225,6 +237,24 @@ async function updateProfile(
   return Response.json({
     profile: { ...profile, timeZone: user?.timezone ?? "UTC" }
   }, { headers: noStore() });
+}
+
+async function submitFeedback(
+  request: Request,
+  _context: RouteContext,
+  userId: string
+): Promise<Response> {
+  const services = await getCaptainServices();
+  const body = z.object({
+    text: z.string().trim().min(1).max(2_000)
+  }).strict().parse(await requestJson(request));
+  const user = await services.platformStore.getUser(userId);
+  if (!user) return Response.json({ error: "unauthorized" }, { status: 401 });
+  const receipt = await services.feedback.send(body.text, {
+    telegramUserId: user.telegramUserId,
+    displayName: user.displayName
+  });
+  return Response.json(receipt, { headers: noStore() });
 }
 
 async function getTrip(

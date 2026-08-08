@@ -1165,6 +1165,12 @@ textarea {
 }
 .settings-card small { color: var(--quiet); font-size: var(--type-body); line-height: 1.45; }
 .settings-card .form-error { margin: -10px 0 0; color: rgba(242, 176, 163, .9); font-size: var(--type-body); }
+.feedback-shell .settings-intro h1 { margin-bottom: 7px; }
+.feedback-card textarea { min-height: 150px; line-height: 1.55; }
+.feedback-success { display: flex; flex-direction: column; gap: 12px; }
+.feedback-success h2, .feedback-success p { margin: 0; }
+.feedback-success p { color: var(--muted); font-size: var(--type-body); line-height: 1.55; }
+.feedback-success .save-button { margin-top: 8px; }
 .airline-search { position: relative; }
 .airline-search-field {
   display: flex;

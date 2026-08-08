@@ -4,6 +4,8 @@ export type CaptainEnv = {
   databaseUrl: string | null;
   telegramBotToken: string | null;
   telegramWebhookSecretToken: string | null;
+  feedbackBridgeUrl: string | null;
+  feedbackBridgeSecret: string | null;
   aiModel: string;
   tripInterpreterModel: string;
   aiGatewayApiKey: string | null;
@@ -15,12 +17,28 @@ export type CaptainEnv = {
 
 export function loadEnv(): CaptainEnv {
   const mode = process.env.NODE_ENV === "production" ? "production" : "development";
+  const feedbackBridgeUrl = optional("FEEDBACK_BRIDGE_URL");
+  const feedbackBridgeSecret = optional("FEEDBACK_BRIDGE_SECRET");
+  if (Boolean(feedbackBridgeUrl) !== Boolean(feedbackBridgeSecret)) {
+    throw new Error("FEEDBACK_BRIDGE_URL and FEEDBACK_BRIDGE_SECRET must be configured together");
+  }
+  if (feedbackBridgeUrl) {
+    const protocol = new URL(feedbackBridgeUrl).protocol;
+    if (mode === "production" && protocol !== "https:") {
+      throw new Error("FEEDBACK_BRIDGE_URL must use HTTPS in production");
+    }
+    if (protocol !== "https:" && protocol !== "http:") {
+      throw new Error("FEEDBACK_BRIDGE_URL must use HTTP or HTTPS");
+    }
+  }
   const env: CaptainEnv = {
     mode,
     publicUrl: (process.env.CAPTAIN_PUBLIC_URL?.trim() || "http://127.0.0.1:4178").replace(/\/$/, ""),
     databaseUrl: optional("DATABASE_URL"),
     telegramBotToken: optional("TELEGRAM_BOT_TOKEN"),
     telegramWebhookSecretToken: optional("TELEGRAM_WEBHOOK_SECRET_TOKEN"),
+    feedbackBridgeUrl,
+    feedbackBridgeSecret,
     aiModel: process.env.AI_MODEL?.trim() || "openai/gpt-5.6-terra",
     tripInterpreterModel: process.env.TRIP_INTERPRETER_MODEL?.trim() || "openai/gpt-5.6-luna",
     aiGatewayApiKey: optional("AI_GATEWAY_API_KEY"),

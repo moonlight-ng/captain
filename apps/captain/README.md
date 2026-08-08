@@ -29,6 +29,9 @@ to buy. It does not book, take payments, or collect any traveller identity.
   kept long enough to cover a full tracking run. `/clear` resets preferences to
   defaults. Account deletion removes the traveller, trip, sessions, and
   retained evidence.
+- `/feedback` opens a session-authenticated text form. A signed, one-way bridge
+  sends the bounded submission to Pilot's owner in Telegram without exposing
+  Pilot memory or opening a private agent turn.
 
 ## Architecture
 
@@ -61,9 +64,11 @@ paginated Offers endpoint until no cursor remains. Offers are deduplicated by
 itinerary, ordered across primary marketing airlines, and capped at 60 retained
 results per search.
 
-Captain and Pilot are independent. Captain has no Pilot client, route,
-principal, secret, tool, or redirect. Future provider adapters use the
-reserved `official_*` namespace and require documented access.
+Captain and Pilot remain independent flight and agent products. The only
+cross-product connection is the notification-only feedback ingress described
+above: it cannot read Pilot or Captain data, invoke Pilot tools, or enter a
+Pilot model session. Future provider adapters use the reserved `official_*`
+namespace and require documented access.
 
 ## Local development
 
