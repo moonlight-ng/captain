@@ -18,7 +18,6 @@ import {
   statusTextForToolNames,
   storePendingSessionRotation,
   takePendingSessionRotation,
-  TELEGRAM_TYPING_KEEPALIVE_MS,
   TelegramProgressTracker,
   telegramMessageUpdateKey,
   toolNamesFromActions,
@@ -46,6 +45,7 @@ import {
   formatTripPlanConfirmation,
   telegramDashboardMessage
 } from "../../services/trip-planning/format.js";
+import { tripRouteEcho } from "../../services/trip-planning/route-echo.js";
 
 const MAX_VOICE_BYTES = 20 * 1024 * 1024;
 const credentials = {
@@ -58,14 +58,44 @@ const pendingConfirmationPosts = new Set<string>();
 // Only steps a traveller would recognise as work belong here. Tools left out
 // —reading recent context, for one—run under the typing indicator alone.
 const CAPTAIN_TOOL_STATUS: Readonly<Record<string, string>> = {
-  prepare_trip: "Working through the route and dates…",
+  prepare_trip: "Reading the route and dates…",
   search_trip_leg: "Checking dates and verified fares…",
   search_flights: "Checking verified fares…",
-  select_trip_flight: "Comparing the flight options…",
+  select_trip_flight: "Putting the options side by side…",
+  // Saving, not starting: creating a trip stores its legs and searches nothing
+  // until the traveller asks.
   start_prepared_trip: "Saving your trip…",
   manage_trip: "Updating your trip…"
 };
-const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. Your saved trip is unchanged—please try again.";
+// Said before Captain knows anything, so it promises nothing but attention.
+export const CAPTAIN_OPENING_STATUS = "Got it — let me check…";
+
+/**
+ * The opening acknowledgement, naming their route when they gave one plainly
+ * enough to repeat. Echoing their own words costs nothing and says nothing
+ * Captain has not been told, so it stays true however the search turns out.
+ */
+export function captainOpeningStatus(content: string): string {
+  const route = tripRouteEcho(content);
+  return route ? `Got it — ${route}. Checking…` : CAPTAIN_OPENING_STATUS;
+}
+// One line sitting still reads as a hang. These take over in order once a step
+// outlasts its welcome, and stop once Captain has run out of honest things to
+// say about waiting.
+export const CAPTAIN_HOLDING_STATUS = [
+  "Still on it…",
+  "The providers are being slow. Still on it…",
+  "Almost there — thanks for your patience…"
+] as const;
+// The deterministic planner interprets the request, resolves airports, and
+// validates the calendar before any agent tool runs, so its stages are known up
+// front and paced on a timer rather than reported by a tool.
+export const CAPTAIN_PLANNING_STATUS = [
+  CAPTAIN_TOOL_STATUS.prepare_trip!,
+  ...CAPTAIN_HOLDING_STATUS
+] as const;
+const CAPTAIN_PLANNING_STAGE_MS = 3_000;
+const PROCESSING_FAILURE_TEXT = "That one didn’t go through on my end. Your trip is untouched — try me again.";
 // Onboarding is three messages and no questions. Everything the old interview
 // asked for is seeded by DEFAULT_PROFILE and editable on /profile, so a new
 // traveller learns what Captain is and can start planning without answering
@@ -97,7 +127,7 @@ export const CAPTAIN_FEEDBACK_PROMPT =
 // confirmation has to name both—otherwise the next /trip comes back empty
 // and reads as Captain having lost something.
 export const CAPTAIN_CLEAR_CONFIRMATION =
-  "Your trips and preferences have been cleared. Looking forward to your next trip.";
+  "Cleared — trips and preferences both. I’ll be here when the next trip comes up.";
 export const CAPTAIN_VOICE_TURN_CONTEXT =
   "The current user message was transcribed from a Telegram voice note. "
   + "Treat it as the traveller’s actual current request. Briefly acknowledge what you understood, "
@@ -219,7 +249,7 @@ export default telegramChannel({
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       const response = await services.tripPlanning.activeTripsLocation(user.id);
       if (!response) {
-        await ctx.telegram.post("No trip yet. Where to next?");
+        await ctx.telegram.post("Nothing on the board yet. Where to next?");
         return null;
       }
       await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
@@ -232,7 +262,7 @@ export default telegramChannel({
       return null;
     }
     if (content.trimStart().startsWith("/")) {
-      const response = "I don’t recognise that command. Use /trip to view your trip, /profile for preferences, or /feedback to share feedback.";
+      const response = "That’s not one of mine. /trip for your trip, /profile for preferences, /feedback to send feedback.";
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
       await ctx.telegram.post(response);
@@ -281,47 +311,56 @@ export default telegramChannel({
     if (isCaptainGreeting(content)) {
       const draft = await services.tripPlanning.findOpen(user.id);
       const response = draft
-        ? "Hi! Your trip draft is still here. Ready to continue?"
-        : "Hi! Where to next?";
+        ? "Hello. Your draft is still open — want to pick it back up?"
+        : "Hello. Where to next?";
       await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
       await ctx.telegram.post(response);
       return null;
     }
 
     try {
-      const handled = await withTypingIndicator(ctx, async () => {
+      // Trip planning is the only turn this path is certain to answer itself.
+      // Anything else may fall through to the agent, which posts its own
+      // acknowledgement—so those turns stay on the typing indicator rather than
+      // posting a status message and deleting it a second later.
+      const stages = TripPlanningService.isTripPlanningRequest(content)
+        && !TripPlanningService.needsItineraryPlanningConversation(content)
+        ? { opening: captainOpeningStatus(content), lines: CAPTAIN_PLANNING_STATUS }
+        : null;
+      // The reply is worked out under the progress message and posted after it
+      // is gone, so the traveller never sees Captain's answer land underneath
+      // its own "still on it".
+      const reply = await withCaptainProgress(ctx, telegramChatId, stages, async () => {
         const openDraftResult = await services.tripPlanning.handleOpenDraftText(
           user.id,
           content,
           sourceMessageId
         );
         if (openDraftResult) {
-          await postTripPlanResult(ctx, user.id, openDraftResult, {
-            acknowledgeVoice: voiceTranscript !== null
-          });
-          return true;
+          return { kind: "trip_plan" as const, result: openDraftResult };
         }
         if (TripPlanningService.isWhereQuestion(content)) {
           const location = await services.tripPlanning.activeTripLocation(user.id);
-          if (location) {
-            await services.platformStore.appendMessage(user.id, "assistant", location, new Date());
-            await postTelegramDashboardMessage(ctx, location);
-            return true;
-          }
+          if (location) return { kind: "dashboard" as const, message: location };
         }
         if (
           TripPlanningService.isTripPlanningRequest(content)
           && !TripPlanningService.needsItineraryPlanningConversation(content)
         ) {
           const planned = await services.tripPlanning.prepare(user.id, content, sourceMessageId);
-          await postTripPlanResult(ctx, user.id, planned, {
-            acknowledgeVoice: voiceTranscript !== null
-          });
-          return true;
+          return { kind: "trip_plan" as const, result: planned };
         }
-        return false;
+        return null;
       });
-      if (handled) {
+      if (reply) {
+        if (reply.kind === "dashboard") {
+          await services.platformStore.appendMessage(user.id, "assistant", reply.message, new Date());
+          await postTelegramDashboardMessage(ctx, reply.message);
+          return null;
+        }
+        await postTripPlanResult(ctx, user.id, reply.result, {
+          acknowledgeVoice: voiceTranscript !== null
+        });
         return null;
       }
     } catch (error) {
@@ -409,7 +448,7 @@ export default telegramChannel({
       if (action.type === "start") {
         await ctx.telegram.answerCallbackQuery({
           callbackQueryId: query.id,
-          text: "Creating the trip…"
+          text: "Setting it up…"
         });
         const result = await services.tripPlanning.confirm(
           user.id,
@@ -439,7 +478,7 @@ export default telegramChannel({
       );
       await ctx.telegram.answerCallbackQuery({
         callbackQueryId: query.id,
-        text: "Trip draft cancelled."
+        text: "Draft dropped."
       });
       await clearCallbackButtons(ctx, query);
       await postTripPlanResult(ctx, user.id, result);
@@ -475,45 +514,9 @@ export default telegramChannel({
         sessionId: ctx.session.id,
         chatId,
         turnId: data.turnId,
-        onShow: async (statusText) => {
-          try {
-            const posted = await channel.telegram.post(statusText);
-            return posted.id ?? null;
-          } catch (error) {
-            console.error(JSON.stringify({
-              event: "captain.telegram_progress_start_failed",
-              error: error instanceof Error ? error.name : "UnknownError"
-            }));
-            return null;
-          }
-        },
-        onEdit: async (messageId, statusText) => {
-          try {
-            await channel.telegram.request("editMessageText", {
-              chat_id: chatId,
-              message_id: Number(messageId),
-              text: statusText
-            });
-          } catch (error) {
-            console.error(JSON.stringify({
-              event: "captain.telegram_progress_update_failed",
-              error: error instanceof Error ? error.name : "UnknownError"
-            }));
-          }
-        },
-        onDiscard: async (messageId) => {
-          try {
-            await channel.telegram.request("deleteMessage", {
-              chat_id: chatId,
-              message_id: Number(messageId)
-            });
-          } catch (error) {
-            console.error(JSON.stringify({
-              event: "captain.telegram_progress_clear_failed",
-              error: error instanceof Error ? error.name : "UnknownError"
-            }));
-          }
-        },
+        opening: CAPTAIN_OPENING_STATUS,
+        holdingLines: CAPTAIN_HOLDING_STATUS,
+        ...telegramProgressCallbacks(channel.telegram, chatId),
         onTyping: () => channel.telegram.startTyping()
       });
     },
@@ -872,25 +875,30 @@ async function postTripPlanResult(
   options: { acknowledgeVoice?: boolean } = {}
 ): Promise<void> {
   const services = await getCaptainServices();
-  let message = result.status === "needs_input"
-    ? result.prompt
-    : result.status === "awaiting_confirmation"
-      ? result.confirmation
-      : result.message;
+  // A prompt the service built from more than one turn is sent as more than one
+  // message: a question bundled under a dozen dated bullets is where it is
+  // least likely to be read and answered.
+  let parts = result.status === "needs_input"
+    ? [...(result.promptParts ?? [result.prompt])]
+    : [result.status === "awaiting_confirmation" ? result.confirmation : result.message];
   if (result.status === "needs_input" && options.acknowledgeVoice) {
-    message = acknowledgeVoiceClarification(message);
+    // The voice acknowledgement belongs on the first thing Captain says, not
+    // on whichever part happens to carry the question.
+    parts[0] = acknowledgeVoiceClarification(parts[0]!);
   }
-  message = reviewCaptainMessage(message);
+  parts = parts.map(reviewCaptainMessage);
   if (result.status === "awaiting_confirmation") {
-    await postTripConfirmationOnce(ctx.telegram, userId, result.draft, message);
+    await postTripConfirmationOnce(ctx.telegram, userId, result.draft, parts[0]!);
     return;
   }
-  await services.platformStore.appendMessage(userId, "assistant", message, new Date());
-  if (result.status === "started") {
-    await postTelegramDashboardMessage(ctx, message);
-    return;
+  for (const part of parts) {
+    await services.platformStore.appendMessage(userId, "assistant", part, new Date());
+    if (result.status === "started") {
+      await postTelegramDashboardMessage(ctx, part);
+      continue;
+    }
+    await ctx.telegram.post(part);
   }
-  await ctx.telegram.post(message);
 }
 
 export function acknowledgeVoiceClarification(prompt: string): string {
@@ -1019,28 +1027,87 @@ async function postTelegramDashboardMessage(
 }
 
 /**
- * Keeps Telegram's typing indicator alive while the deterministic path works
- * out what the message is. Nothing is posted here: the traveller sees the
- * standard placeholder until a real step has something to report.
+ * Runs the deterministic path under the same disappearing status message the
+ * agent turns use. With `stages`, it acknowledges the traveller and then walks
+ * that script on a timer; with `null` it keeps the typing indicator alone. The
+ * message is deleted in `finally`—before the caller posts anything—so a thrown
+ * TripLimitError leaves no orphan status behind.
+ *
+ * Deterministic turns have no Eve session, so they are keyed on the chat under
+ * a prefix that cannot collide with a session id.
  */
-async function withTypingIndicator<T>(
+async function withCaptainProgress<T>(
   ctx: TelegramContext,
+  chatId: number,
+  stages: { opening: string; lines: readonly string[] } | null,
   operation: () => Promise<T>
 ): Promise<T> {
-  const keepalive = setInterval(() => {
-    void Promise.resolve(ctx.telegram.startTyping()).catch((error) => {
-      console.error(JSON.stringify({
-        event: "captain.telegram_typing_keepalive_failed",
-        error: error instanceof Error ? error.name : "UnknownError"
-      }));
-    });
-  }, TELEGRAM_TYPING_KEEPALIVE_MS);
-  keepalive.unref?.();
+  const sessionId = `captain-telegram-chat:${chatId}`;
+  agentProgress.start({
+    sessionId,
+    chatId: String(chatId),
+    turnId: "deterministic",
+    ...(stages ? { opening: stages.opening, holdingLines: stages.lines } : {}),
+    holdingIntervalMs: CAPTAIN_PLANNING_STAGE_MS,
+    ...telegramProgressCallbacks(ctx.telegram, String(chatId)),
+    onTyping: () => ctx.telegram.startTyping()
+  });
   try {
     return await operation();
   } finally {
-    clearInterval(keepalive);
+    await clearAgentProgress(sessionId);
   }
+}
+
+/**
+ * Posting, editing, and deleting the one status message. Every failure is
+ * logged and swallowed: progress copy is never worth losing a turn over.
+ */
+function telegramProgressCallbacks(
+  telegram: Pick<TelegramContext["telegram"], "post" | "request">,
+  chatId: string
+) {
+  return {
+    onShow: async (statusText: string) => {
+      try {
+        const posted = await telegram.post(statusText);
+        return posted.id ?? null;
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "captain.telegram_progress_start_failed",
+          error: error instanceof Error ? error.name : "UnknownError"
+        }));
+        return null;
+      }
+    },
+    onEdit: async (messageId: string, statusText: string) => {
+      try {
+        await telegram.request("editMessageText", {
+          chat_id: chatId,
+          message_id: Number(messageId),
+          text: statusText
+        });
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "captain.telegram_progress_update_failed",
+          error: error instanceof Error ? error.name : "UnknownError"
+        }));
+      }
+    },
+    onDiscard: async (messageId: string) => {
+      try {
+        await telegram.request("deleteMessage", {
+          chat_id: chatId,
+          message_id: Number(messageId)
+        });
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "captain.telegram_progress_clear_failed",
+          error: error instanceof Error ? error.name : "UnknownError"
+        }));
+      }
+    }
+  };
 }
 
 async function clearAgentProgress(sessionId: string): Promise<void> {

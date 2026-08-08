@@ -257,6 +257,19 @@ describe("Captain trip planning", () => {
     }
     expect(replacement.prompt).toContain("Replace it");
     expect(replacement.prompt).toContain("/feedback");
+    // The recap and the question are two turns. Bundled into one message the
+    // question lands under a dozen dated bullets, where it is least likely to
+    // be read and answered.
+    expect(replacement.promptParts).toHaveLength(2);
+    const [recap, question] = replacement.promptParts!;
+    expect(recap).toContain("I mapped the flights as:");
+    expect(recap).toContain("→");
+    expect(recap).not.toContain("Replace it");
+    expect(question).toContain("Replace it");
+    expect(question).toContain("/feedback");
+    expect(question).not.toContain("I mapped the flights as:");
+    // `prompt` stays the single canonical string for anything that needs one.
+    expect(replacement.prompt).toBe(`${recap}\n\n${question}`);
     expect(await trips.get(user.id, current.trip.id)).toMatchObject({ status: "draft" });
 
     const ready = await planning.handleOpenDraftText(user.id, "Yes", null);
