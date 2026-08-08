@@ -12,10 +12,12 @@ describe("Captain public environment", () => {
     vi.stubEnv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "telegram-webhook-secret");
     vi.stubEnv("CAPTAIN_BETA_USER_LIMIT", undefined);
     vi.stubEnv("CAPTAIN_PUBLIC_BETA_ENABLED", undefined);
+    vi.stubEnv("CAPTAIN_SIMPLIFIED_MULTI_CITY_ENABLED", undefined);
     expect(loadEnv()).toMatchObject({
       mode: "production",
       betaUserLimit: 25,
-      publicBetaEnabled: false
+      publicBetaEnabled: false,
+      simplifiedMultiCityEnabled: false
     });
   });
 
@@ -39,5 +41,18 @@ describe("Captain public environment", () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("DATABASE_URL", "");
     expect(loadEnv()).toMatchObject({ databaseUrl: null });
+  });
+
+  it("configures the feedback bridge as an all-or-nothing pair", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("FEEDBACK_BRIDGE_URL", "https://pilot.example");
+    vi.stubEnv("FEEDBACK_BRIDGE_SECRET", "feedback-secret");
+    expect(loadEnv()).toMatchObject({
+      feedbackBridgeUrl: "https://pilot.example",
+      feedbackBridgeSecret: "feedback-secret"
+    });
+
+    vi.stubEnv("FEEDBACK_BRIDGE_SECRET", "");
+    expect(() => loadEnv()).toThrow("must be configured together");
   });
 });

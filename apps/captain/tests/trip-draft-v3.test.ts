@@ -43,8 +43,8 @@ describe("Trip planner v3 transcript", () => {
       user.id,
       "Lagos to london one way first week of September"
     );
-    expect(window.status).toBe("needs_input");
-    if (window.status !== "needs_input") throw new Error("Expected an exact-date question");
+    expect(window.status).toBe("awaiting_confirmation");
+    if (window.status !== "awaiting_confirmation") throw new Error("Expected a window confirmation");
     expect(window.draft.state).toMatchObject({
       version: 3,
       tripType: "one_way",

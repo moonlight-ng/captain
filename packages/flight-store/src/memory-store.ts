@@ -2,13 +2,20 @@ import { randomUUID } from "node:crypto";
 
 import {
   DEFAULT_PROFILE,
+  cityLabelForAirportCodes,
   formatTripGoal,
+  legSearchSnapshotSchema,
+  MAX_MANUAL_SEARCH_DAYS,
   MAX_ACTIVE_TRIPS_PER_USER,
   TripLimitError,
   TripNotFoundError,
   TripVersionConflictError,
   EMPTY_TRIP_DRAFT_STATE,
+  type CanonicalFlight,
   type CreateTripInput,
+  type FlightOfferSnapshot,
+  type LegSearchSnapshot,
+  type LegSearchSnapshotRevision,
   type OfferSnapshot,
   type TripCreationResult,
   type TripPlanDraft,
@@ -19,7 +26,11 @@ import {
   type SearchSpec,
   type Trip,
   type TripAction,
+  type TripBrief,
+  type TripCity,
+  type TripCityLeg,
   type Watch,
+  type TripGraph,
   type CaptainSessionPath
 } from "@agents/flight-domain";
 
@@ -54,8 +65,7 @@ import {
   DISCOVERY_SEARCH_SPEC_LIMIT,
   retainSearchOffers,
   TRACKING_SEARCH_SPEC_LIMIT,
-  TRACKING_CHECK_INTERVAL_MS,
-  trackingRunEndsAt
+  TRACKING_CHECK_INTERVAL_MS
 } from "./watch-policy.js";
 
 function truncateErrorDetail(detail: string | null | undefined): string | null {
@@ -99,6 +109,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   readonly #updates = new Map<string, string>();
   readonly #conversations = new Map<string, MemoryConversation>();
   readonly #trips = new Map<string, Trip>();
+  readonly #tripGraphs = new Map<string, TripGraph>();
+  readonly #legSearchSnapshots = new Map<string, LegSearchSnapshot>();
   readonly #watches = new Map<string, Watch>();
   readonly #specs = new Map<string, SearchSpec>();
   readonly #watchSpecs = new Map<string, Set<string>>();
@@ -210,6 +222,10 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     );
     for (const tripId of tripIds) {
       this.#trips.delete(tripId);
+      this.#tripGraphs.delete(tripId);
+      for (const [searchId, snapshot] of this.#legSearchSnapshots) {
+        if (snapshot.tripId === tripId) this.#legSearchSnapshots.delete(searchId);
+      }
       this.#recommendations.delete(tripId);
       this.#personSelections.delete(tripId);
       this.#tripActivity.delete(tripId);
@@ -426,6 +442,34 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     void now;
   }
 
+  async archiveTripForReplacement(userId: string, tripId: string, now: Date): Promise<Trip> {
+    const trip = this.#requiredTrip(userId, tripId);
+    const timestamp = now.toISOString();
+    const archived: Trip = {
+      ...trip,
+      status: "archived",
+      version: trip.version + 1,
+      archivedAt: timestamp,
+      archiveReason: "replaced",
+      updatedAt: timestamp
+    };
+    this.#trips.set(tripId, archived);
+    const conversation = this.#conversations.get(userId);
+    if (conversation?.activeTripId === tripId) conversation.activeTripId = null;
+    const watch = [...this.#watches.values()].find((candidate) => candidate.tripId === tripId);
+    if (watch) {
+      this.#watches.set(watch.id, {
+        ...watch,
+        status: "completed",
+        nextCheckAt: null,
+        completedAt: watch.completedAt ?? timestamp,
+        updatedAt: timestamp
+      });
+    }
+    this.#recordTripActivity(tripId, "trip_replaced", {}, now);
+    return clone(archived);
+  }
+
   async listTrips(userId: string): Promise<Trip[]> {
     return [...this.#trips.values()].filter((trip) => trip.userId === userId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(clone);
   }
@@ -452,6 +496,156 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     return clone(this.#trips.get(tripId) ?? null);
   }
 
+  async getTripGraph(userId: string, tripId: string): Promise<TripGraph> {
+    this.#requiredTrip(userId, tripId);
+    return clone(this.#tripGraphs.get(tripId) ?? { cities: [], legs: [] });
+  }
+
+  async getTripLeg(
+    userId: string,
+    tripId: string,
+    legId: string
+  ): Promise<TripCityLeg | null> {
+    if (this.#trips.get(tripId)?.userId !== userId) return null;
+    return clone(this.#tripGraphs.get(tripId)?.legs.find((leg) => leg.id === legId) ?? null);
+  }
+
+  async createLegSearchSnapshot(
+    userId: string,
+    tripId: string,
+    legId: string,
+    requestedWindow: { start: string; end: string },
+    datesRequested: string[],
+    now: Date
+  ): Promise<LegSearchSnapshot> {
+    this.#requiredTrip(userId, tripId);
+    const graph = this.#tripGraphs.get(tripId);
+    const leg = graph?.legs.find((candidate) => candidate.id === legId);
+    if (!graph || !leg) throw new TripNotFoundError();
+    assertLegSearchRequest(leg, requestedWindow, datesRequested);
+    const timestamp = now.toISOString();
+    const snapshot: LegSearchSnapshot = {
+      id: randomUUID(),
+      tripId,
+      legId,
+      revision: 1,
+      status: "queued",
+      requestedWindow: clone(requestedWindow),
+      analysis: {
+        complete: false,
+        datesRequested: clone(datesRequested),
+        datesCompleted: [],
+        failedDates: [],
+        optionsChecked: 0,
+        cheapest: null,
+        fastest: null,
+        balanced: null,
+        cheapestByDate: [],
+        observedAt: null
+      },
+      flights: [],
+      offers: [],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      completedAt: null
+    };
+    this.#legSearchSnapshots.set(snapshot.id, snapshot);
+    leg.latestSearchId = snapshot.id;
+    return clone(snapshot);
+  }
+
+  async reviseLegSearchSnapshot(
+    userId: string,
+    searchId: string,
+    expectedRevision: number,
+    revision: LegSearchSnapshotRevision,
+    now: Date
+  ): Promise<LegSearchSnapshot | null> {
+    const current = this.#legSearchSnapshots.get(searchId);
+    if (!current || current.revision !== expectedRevision) return null;
+    const trip = this.#trips.get(current.tripId);
+    if (!trip || trip.userId !== userId) return null;
+    assertLegSearchRevision(revision);
+    const updated: LegSearchSnapshot = {
+      ...current,
+      ...clone(revision),
+      revision: current.revision + 1,
+      updatedAt: now.toISOString()
+    };
+    const parsed = legSearchSnapshotSchema.parse(updated);
+    this.#legSearchSnapshots.set(searchId, parsed);
+    return clone(parsed);
+  }
+
+  async getLegSearchSnapshot(
+    userId: string,
+    searchId: string
+  ): Promise<LegSearchSnapshot | null> {
+    const snapshot = this.#legSearchSnapshots.get(searchId);
+    return clone(snapshot && this.#trips.get(snapshot.tripId)?.userId === userId ? snapshot : null);
+  }
+
+  async getLatestLegSearchSnapshot(
+    userId: string,
+    tripId: string,
+    legId: string
+  ): Promise<LegSearchSnapshot | null> {
+    const leg = await this.getTripLeg(userId, tripId, legId);
+    return leg?.latestSearchId
+      ? this.getLegSearchSnapshot(userId, leg.latestSearchId)
+      : null;
+  }
+
+  async setTripLegFlight(
+    userId: string,
+    tripId: string,
+    legId: string,
+    flightKey: string | null,
+    now: Date
+  ): Promise<TripCityLeg> {
+    const trip = this.#requiredTrip(userId, tripId);
+    const graph = this.#tripGraphs.get(tripId);
+    const leg = graph?.legs.find((candidate) => candidate.id === legId);
+    if (!graph || !leg) throw new TripNotFoundError();
+    if (flightKey && ![...this.#legSearchSnapshots.values()].some((snapshot) =>
+      snapshot.tripId === tripId
+      && snapshot.legId === legId
+      && snapshot.flights.some((flight) => flight.key === flightKey)
+    )) {
+      throw new Error("Flight not found for Trip leg");
+    }
+    leg.selectedFlightKey = flightKey;
+    this.#trips.set(tripId, {
+      ...trip,
+      version: trip.version + 1,
+      updatedAt: now.toISOString()
+    });
+    this.#recordTripActivity(tripId, "trip_leg_flight_selected", { legId, flightKey }, now);
+    return clone(leg);
+  }
+
+  async getCanonicalFlight(
+    flightKey: string,
+    now: Date
+  ): Promise<{ flight: CanonicalFlight; offers: FlightOfferSnapshot[] } | null> {
+    const snapshots = [...this.#legSearchSnapshots.values()]
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const flight = snapshots
+      .flatMap((snapshot) => snapshot.flights)
+      .find((candidate) => candidate.key === flightKey);
+    if (!flight) return null;
+    const current = snapshots
+      .flatMap((snapshot) => snapshot.offers)
+      .filter((offer) =>
+        offer.flightKey === flightKey
+        && (!offer.expiresAt || Date.parse(offer.expiresAt) > now.getTime())
+      );
+    return {
+      flight: clone(flight),
+      offers: clone(dedupeFlightOffers(current))
+    };
+  }
+
   async getWatch(userId: string, tripId: string): Promise<Watch | null> {
     if (this.#trips.get(tripId)?.userId !== userId) return null;
     return clone([...this.#watches.values()].find((watch) => watch.tripId === tripId) ?? null);
@@ -465,50 +659,29 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       && JSON.stringify(trip.brief) === JSON.stringify(input.brief)
     );
     if (duplicate) {
-      const existingWatch = [...this.#watches.values()].find((watch) => watch.tripId === duplicate.id);
-      if (!existingWatch) throw new Error("Trip Watch not found");
       await this.setActiveTrip(userId, duplicate.id, now);
-      return clone({ trip: duplicate, watch: existingWatch, created: false });
+      return clone({
+        trip: duplicate,
+        watch: [...this.#watches.values()].find((watch) => watch.tripId === duplicate.id) ?? null,
+        created: false
+      });
     }
     const active = [...this.#trips.values()].filter((trip) => trip.userId === userId && isActiveTripStatus(trip.status));
     if (active.length >= MAX_ACTIVE_TRIPS_PER_USER) throw new TripLimitError();
     const timestamp = now.toISOString();
-    const runEndsAt = trackingRunEndsAt(now, input.brief.departureWindow.start);
     const trip: Trip = {
-      id: randomUUID(), userId, title: input.title, status: "tracking", version: 1,
+      id: randomUUID(), userId, title: input.title, status: "draft", version: 1,
       brief: clone(input.brief), archivedAt: null, archiveReason: null,
       createdAt: timestamp, updatedAt: timestamp
     };
-    const watch: Watch = {
-      id: randomUUID(), tripId: trip.id, status: "active",
-      runStartedAt: timestamp,
-      runEndsAt: runEndsAt.toISOString(),
-      completedAt: null,
-      checksCompleted: 0,
-      nextCheckAt: timestamp, lastCheckAt: null, lastManualRefreshAt: null,
-      trackingStartsAt: null,
-      baselineCompletedAt: null,
-      activatedAt: timestamp,
-      lastUserActivityAt: timestamp,
-      priceRiseItineraryKey: null,
-      priceRiseArmed: true,
-      delayedAt: null, delayReason: null,
-      createdAt: timestamp, updatedAt: timestamp
-    };
     this.#trips.set(trip.id, trip);
-    this.#watches.set(watch.id, watch);
-    this.#setSpecs(watch.id, specs);
+    this.#tripGraphs.set(trip.id, materializeTripGraph(trip.id, input.brief));
     this.#recordTripActivity(trip.id, "trip_created", clone(input), now);
     await this.setActiveTrip(userId, trip.id, now);
-    for (const specId of new Set(specs.map((spec) => spec.id))) {
-      await this.evaluateTripsForSearchSpec(specId, now);
-      if (this.#recommendations.has(trip.id)) {
-        await this.finalizeFarFutureBaseline(specId, now);
-      }
-    }
+    void specs;
     return clone({
-      trip: this.#trips.get(trip.id) ?? trip,
-      watch: this.#watches.get(watch.id) ?? watch,
+      trip,
+      watch: null,
       created: true
     });
   }
@@ -525,34 +698,28 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const updated: Trip = {
       ...trip,
       brief: clone(input.brief),
-      status: "tracking",
+      status: "draft",
       version: trip.version + 1,
       updatedAt: now.toISOString()
     };
     this.#trips.set(tripId, updated);
+    this.#tripGraphs.set(tripId, materializeTripGraph(tripId, input.brief));
+    for (const [searchId, snapshot] of this.#legSearchSnapshots) {
+      if (snapshot.tripId === tripId) this.#legSearchSnapshots.delete(searchId);
+    }
     this.#recommendations.delete(tripId);
     const watch = [...this.#watches.values()].find((candidate) => candidate.tripId === tripId);
     if (watch) {
-      this.#setSpecs(watch.id, specs);
       this.#watches.set(watch.id, {
         ...watch,
-        status: "active",
-        runStartedAt: now.toISOString(),
-        runEndsAt: trackingRunEndsAt(now, updated.brief.departureWindow.start).toISOString(),
-        completedAt: null,
-        checksCompleted: 0,
-        nextCheckAt: now.toISOString(),
-        trackingStartsAt: null,
-        baselineCompletedAt: null,
-        activatedAt: now.toISOString(),
+        status: "completed",
+        completedAt: now.toISOString(),
+        nextCheckAt: null,
         lastUserActivityAt: now.toISOString(),
-        priceRiseItineraryKey: null,
-        priceRiseArmed: true,
-        delayedAt: null,
-        delayReason: null,
         updatedAt: now.toISOString()
       });
     }
+    void specs;
     this.#recordTripActivity(tripId, "trip_brief_updated", clone(input.brief), now);
     return clone(updated);
   }
@@ -649,7 +816,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     if (current.status === "started" && current.tripId) {
       const trip = await this.getTrip(userId, current.tripId);
       const watch = trip ? await this.getWatch(userId, trip.id) : null;
-      return trip && watch ? { draft: current, result: { trip, watch, created: false } } : null;
+      return trip ? { draft: current, result: { trip, watch, created: false } } : null;
     }
     if (
       current.status !== "awaiting_confirmation"
@@ -713,36 +880,17 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const watch = [...this.#watches.values()].find((item) => item.tripId === tripId);
     let status = trip.status;
     if (action.type === "pause") status = "paused";
-    if (["resume", "refresh", "track"].includes(action.type)) status = "tracking";
+    if (["resume", "refresh", "track"].includes(action.type)) status = "draft";
     if (action.type === "cancel") status = "cancelled";
     if (action.type === "complete") status = "completed";
     const updated = { ...trip, status, version: trip.version + 1, updatedAt: now.toISOString() };
     this.#trips.set(tripId, updated);
     if (watch) {
-      const watchStatus = status === "paused"
-        ? "paused"
-        : ["cancelled", "completed"].includes(status)
-          ? "completed"
-          : "active";
       this.#watches.set(watch.id, {
-        ...watch, status: watchStatus,
-        ...(action.type === "track"
-          ? {
-              runStartedAt: now.toISOString(),
-              runEndsAt: trackingRunEndsAt(now, updated.brief.departureWindow.start).toISOString(),
-              completedAt: null,
-              checksCompleted: 0,
-              nextCheckAt: now.toISOString(),
-              activatedAt: now.toISOString(),
-              delayedAt: null,
-              delayReason: null
-            }
-          : action.type === "refresh"
-          ? { nextCheckAt: now.toISOString() }
-          : action.type === "resume"
-            ? { nextCheckAt: now.toISOString() }
-            : {}),
-        ...(action.type === "refresh" ? { lastManualRefreshAt: now.toISOString() } : {}),
+        ...watch,
+        status: "completed",
+        completedAt: watch.completedAt ?? now.toISOString(),
+        nextCheckAt: null,
         lastUserActivityAt: now.toISOString(),
         updatedAt: now.toISOString()
       });
@@ -835,14 +983,17 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   }
 
   async markTripActivity(userId: string, tripId: string, now: Date): Promise<void> {
-    this.#requiredTrip(userId, tripId);
+    const trip = this.#requiredTrip(userId, tripId);
     const watch = [...this.#watches.values()].find((candidate) => candidate.tripId === tripId);
-    if (!watch) throw new Error("Trip Watch not found");
-    this.#watches.set(watch.id, {
-      ...watch,
-      lastUserActivityAt: now.toISOString(),
-      updatedAt: now.toISOString()
-    });
+    if (watch) {
+      this.#watches.set(watch.id, {
+        ...watch,
+        lastUserActivityAt: now.toISOString(),
+        updatedAt: now.toISOString()
+      });
+    } else {
+      this.#trips.set(tripId, { ...trip, updatedAt: now.toISOString() });
+    }
   }
 
   async hasDueWorkerWork(now: Date): Promise<boolean> {
@@ -1127,6 +1278,10 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         continue;
       }
       this.#trips.delete(tripId);
+      this.#tripGraphs.delete(tripId);
+      for (const [searchId, snapshot] of this.#legSearchSnapshots) {
+        if (snapshot.tripId === tripId) this.#legSearchSnapshots.delete(searchId);
+      }
       this.#recommendations.delete(tripId);
       this.#personSelections.delete(tripId);
       for (const [watchId, watch] of this.#watches) {
@@ -1245,9 +1400,9 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         }
       };
       this.#recommendations.set(trip.id, recommendation);
-      // The first search always earns a message: it is the overview that tells
-      // the traveller what Captain found and what it is now chasing. After
-      // that, only a change worth the interruption speaks.
+      // The first search always earns a message: it tells the traveller what
+      // Captain found and what to do next. After that, only a change worth the
+      // interruption speaks.
       const kind = profile.notificationMode === "off"
         ? null
         : !previous
@@ -1282,9 +1437,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         this.#notifications.set(notification.id, { ...notification, status: "superseded" });
       }
     }
-    // A stale "better option" is worth dropping for a fresher one. The
-    // opening overview is not one of those: it states the goal, and it is the
-    // only message that does, so it always gets delivered.
+    // A stale "better option" is worth dropping for a fresher one. The opening
+    // overview is not one of those, so it always gets delivered.
     const resultKinds = new Set<CaptainNotification["kind"]>(["price_drop", "new_best"]);
     const resultGroups = new Map<string, StoredNotification[]>();
     for (const notification of [...this.#notifications.values()].filter((candidate) =>
@@ -1391,15 +1545,6 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const trip = this.#trips.get(tripId);
     if (!trip || trip.userId !== userId) throw new TripNotFoundError();
     return trip;
-  }
-
-  #setSpecs(watchId: string, specs: SearchSpec[]): void {
-    const ids = new Set<string>();
-    for (const spec of specs) {
-      this.#specs.set(spec.id, clone(spec));
-      ids.add(spec.id);
-    }
-    this.#watchSpecs.set(watchId, ids);
   }
 
   #recordTripActivity(
@@ -1556,7 +1701,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       tripId: trip.id,
       telegramChatId: user.telegramChatId,
       kind,
-      // Every automatic message states the goal it is reporting against.
+      // The immutable goal remains available as internal decision context.
       payload: { ...notificationGoalPayload(trip, profile), ...payload },
       attempts: 0,
       telegramMessageId: null,
@@ -1626,6 +1771,145 @@ function localParts(now: Date, timezone: string): { date: string; hour: number }
  */
 function isoTimestamp(value: string): string {
   return new Date(value).toISOString();
+}
+
+function materializeTripGraph(tripId: string, brief: TripBrief): TripGraph {
+  const routeLegs = legacyRouteLegs(brief);
+  const cities: TripCity[] = routeLegs.map((leg, position) => ({
+    id: randomUUID(),
+    tripId,
+    position,
+    label: cityLabelForAirportCodes(leg.originAirports),
+    airportCodes: clone(leg.originAirports),
+    arrivalWindow: position === 0
+      ? null
+      : arrivalWindowFor(routeLegs[position - 1]!),
+    departureWindow: clone(leg.departureWindow)
+  }));
+  const finalLeg = routeLegs.at(-1);
+  if (finalLeg) {
+    cities.push({
+      id: randomUUID(),
+      tripId,
+      position: routeLegs.length,
+      label: cityLabelForAirportCodes(finalLeg.destinationAirports),
+      airportCodes: clone(finalLeg.destinationAirports),
+      arrivalWindow: arrivalWindowFor(finalLeg),
+      departureWindow: null
+    });
+  }
+  const legs: TripCityLeg[] = routeLegs.map((leg, position) => ({
+    id: randomUUID(),
+    tripId,
+    position,
+    originCityId: cities[position]!.id,
+    destinationCityId: cities[position + 1]!.id,
+    departureWindow: clone(leg.departureWindow),
+    arriveBy: leg.arriveBy ?? null,
+    selectedFlightKey: null,
+    latestSearchId: null
+  }));
+  return { cities, legs };
+}
+
+function arrivalWindowFor(leg: {
+  departureWindow: { start: string; end: string };
+  arriveBy: string | null;
+}): { start: string; end: string } {
+  return leg.arriveBy
+    ? { start: leg.arriveBy, end: leg.arriveBy }
+    : clone(leg.departureWindow);
+}
+
+function legacyRouteLegs(brief: TripBrief): Array<{
+  originAirports: string[];
+  destinationAirports: string[];
+  departureWindow: { start: string; end: string };
+  arriveBy: string | null;
+}> {
+  if (brief.tripType === "multi_city" && brief.legs?.length) {
+    return clone(brief.legs).map((leg) => ({ ...leg, arriveBy: leg.arriveBy ?? null }));
+  }
+  const outbound = {
+    originAirports: clone(brief.originAirports),
+    destinationAirports: clone(brief.destinationAirports),
+    departureWindow: clone(brief.departureWindow),
+    arriveBy: null
+  };
+  if (brief.tripType !== "round_trip" || !brief.stayNights) return [outbound];
+  return [outbound, {
+    originAirports: clone(brief.destinationAirports),
+    destinationAirports: clone(brief.originAirports),
+    departureWindow: {
+      start: addUtcDays(brief.departureWindow.start, brief.stayNights.minimum),
+      end: addUtcDays(brief.departureWindow.end, brief.stayNights.maximum)
+    },
+    arriveBy: null
+  }];
+}
+
+function addUtcDays(date: string, days: number): string {
+  return new Date(Date.parse(`${date}T00:00:00.000Z`) + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+function assertLegSearchRequest(
+  leg: Pick<TripCityLeg, "departureWindow">,
+  requestedWindow: { start: string; end: string },
+  datesRequested: string[]
+): void {
+  const requestedDates = enumerateIsoDates(requestedWindow.start, requestedWindow.end);
+  if (
+    requestedDates.length === 0
+    || requestedDates.length > MAX_MANUAL_SEARCH_DAYS
+    || requestedWindow.start < leg.departureWindow.start
+    || requestedWindow.end > leg.departureWindow.end
+    || JSON.stringify(datesRequested) !== JSON.stringify(requestedDates)
+  ) {
+    throw new RangeError("Leg search must cover every date in a valid window of at most 7 days");
+  }
+}
+
+function enumerateIsoDates(start: string, end: string): string[] {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(start) || !/^\d{4}-\d{2}-\d{2}$/u.test(end)) return [];
+  const startMs = Date.parse(`${start}T00:00:00.000Z`);
+  const endMs = Date.parse(`${end}T00:00:00.000Z`);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return [];
+  const result: string[] = [];
+  for (
+    let value = startMs;
+    value <= endMs && result.length <= MAX_MANUAL_SEARCH_DAYS;
+    value += 86_400_000
+  ) {
+    result.push(new Date(value).toISOString().slice(0, 10));
+  }
+  return result;
+}
+
+function assertLegSearchRevision(revision: LegSearchSnapshotRevision): void {
+  legSearchSnapshotSchema.shape.status.parse(revision.status);
+  legSearchSnapshotSchema.shape.analysis.parse(revision.analysis);
+  legSearchSnapshotSchema.shape.flights.parse(revision.flights);
+  legSearchSnapshotSchema.shape.offers.parse(revision.offers);
+  legSearchSnapshotSchema.shape.completedAt.parse(revision.completedAt);
+  const flightKeys = new Set(revision.flights.map((flight) => flight.key));
+  if (revision.offers.some((offer) => !flightKeys.has(offer.flightKey))) {
+    throw new Error("Every offer must reference a canonical flight in the same snapshot");
+  }
+}
+
+function dedupeFlightOffers(offers: FlightOfferSnapshot[]): FlightOfferSnapshot[] {
+  const byProviderOffer = new Map<string, FlightOfferSnapshot>();
+  for (const offer of offers) {
+    const key = `${offer.provider}:${offer.offerId}`;
+    const current = byProviderOffer.get(key);
+    if (!current || offer.observedAt > current.observedAt) byProviderOffer.set(key, offer);
+  }
+  return [...byProviderOffer.values()].sort((left, right) =>
+    Number(left.priceAmount) - Number(right.priceAmount)
+    || right.observedAt.localeCompare(left.observedAt)
+  );
 }
 
 function clone<T>(value: T): T {

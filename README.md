@@ -1,24 +1,31 @@
 # Captain
 
-Captain is a private Moonlight repository for the Telegram-first flight price
-tracker, its search worker, and their shared flight platform.
+Captain is a private Moonlight repository for a Telegram-first multi-city trip
+planner and real-time flight search product.
 
-You describe a trip, Captain finds flights, you pick one to watch, and it
-checks the price daily until you fly — telling you how it moves and when to buy.
+You describe the cities and timing constraints. Captain turns each adjacent
+city pair into a flight leg and, when asked, checks every date in a window of up
+to seven days against live inventory. Results are a point-in-time snapshot;
+Captain does not automatically recheck them.
 
 - `apps/captain` owns onboarding, trip planning, authenticated APIs, and the
   traveller dashboard.
-- `apps/flight-worker` owns scheduled provider searches, ranking, retention,
-  and notifications.
+- `apps/flight-worker` retains the read-only legacy tracking runtime. New trips
+  never create its watches or scheduled work.
 - `packages` contains the flight domain, persistence, provider adapters,
   observability, and Telegram helpers shared by those two deployments.
 
-Captain deploys as `dr-captain`; the worker deploys as `dr-flight-worker`.
-They share Captain's Postgres schema but have independent Fly applications and
-deployment credentials. Pilot is a separate private product and repository.
+Captain deploys as `dr-captain`. The retained worker is independently deployed
+and disabled for new trip work. Pilot is a separate private product and
+repository.
 
-Captain tracks fares and nothing else. It does not book travel, take payments,
-or hold any traveller identity: there is no passenger record and no stored card.
+Captain plans cities and searches flights. It does not book travel, take
+payments, or hold any traveller identity: there is no passenger record and no
+stored card.
+
+`/feedback` is the sole cross-product integration: Captain sends a signed,
+bounded notification to Pilot for Telegram delivery, without sharing trip data
+or opening a Pilot agent turn.
 
 ## Commands
 

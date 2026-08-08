@@ -3,10 +3,10 @@
  * derived rather than asked for: it is already fully determined by the route,
  * the departure date, how the traveller wants flights ranked, and any ceiling
  * they put on the fare. Deriving it means the goal can never drift from the
- * trip it describes, and onboarding stays free of questions.
+ * trip it describes, and onboarding stays free of extra questions.
  *
- * The dashboard, the creation receipt, and every automatic message render from
- * here, so all three say the same thing about what Captain is trying to do.
+ * The dashboard and agent use it as decision context so recommendations stay
+ * aligned without printing this internal sentence to the traveller.
  */
 import type { RankingMode } from "./profile.js";
 import type { TripBrief } from "./trip.js";
@@ -34,7 +34,7 @@ const rankingGoals: Record<RankingMode, string> = {
 
 /**
  * One sentence naming what this trip is for. Deliberately a claim Captain can
- * be held to: a route, a date, a target, and a promise to say when to buy.
+ * be held to: a route, a date range, and the way live options will be ranked.
  */
 export function formatTripGoal(input: TripGoalInput): string {
   const route = goalRoute(input.brief);
@@ -42,7 +42,7 @@ export function formatTripGoal(input: TripGoalInput): string {
     ? `under ${formatCeiling(input.brief.maximumPrice, input.brief.currency)}`
     : rankingGoals[input.rankingMode];
   return `Get you ${route} on ${goalDate(input.brief.departureWindow)} for ${target}, `
-    + "and tell you when it's the moment to buy.";
+    + "using verified fares when you search.";
 }
 
 /**

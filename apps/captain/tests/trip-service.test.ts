@@ -14,7 +14,8 @@ describe("Trip service", () => {
     const service = new TripService({ store, now: () => now });
     const created = await service.create(owner.id, { title: "New York", brief: defaultTestBrief() });
     expect(created.created).toBe(true);
-    expect(created.searchCombinations).toBe(1);
+    expect(created.searchCombinations).toBe(0);
+    expect(created.watch).toBeNull();
     const duplicate = await service.create(owner.id, { title: "New York", brief: defaultTestBrief() });
     expect(duplicate.created).toBe(false);
     expect(duplicate.trip.id).toBe(created.trip.id);
@@ -46,10 +47,10 @@ describe("Trip service", () => {
     await expect(service.action(owner.id, created.trip.id, {
       type: "refresh",
       expectedVersion: refreshed.version
-    })).resolves.toMatchObject({ status: "tracking" });
+    })).resolves.toMatchObject({ status: "draft" });
   });
 
-  it("updates one Trip brief, restarts its search, and records the change", async () => {
+  it("updates one Trip brief without scheduling a search and records the change", async () => {
     const now = new Date("2026-08-01T12:00:00Z");
     const store = new MemoryCaptainPlatformStore();
     const owner = await store.ensureTelegramUser({
@@ -76,7 +77,7 @@ describe("Trip service", () => {
 
     expect(updated).toMatchObject({
       id: created.trip.id,
-      status: "tracking",
+      status: "draft",
       version: created.trip.version + 1,
       brief: {
         destinationAirports: ["CDG"],
@@ -84,10 +85,7 @@ describe("Trip service", () => {
         maximumPrice: 850
       }
     });
-    await expect(store.getWatch(owner.id, created.trip.id)).resolves.toMatchObject({
-      status: "active",
-      nextCheckAt: now.toISOString()
-    });
+    await expect(store.getWatch(owner.id, created.trip.id)).resolves.toBeNull();
     await expect(store.listTripActivity(owner.id, created.trip.id)).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ eventType: "trip_brief_updated" }),
@@ -96,7 +94,7 @@ describe("Trip service", () => {
     );
   });
 
-  it("tracks one Trip without replacement and rejects a second", async () => {
+  it("saves one active Trip without replacement and rejects a second", async () => {
     const now = new Date("2026-08-01T12:00:00Z");
     const store = new MemoryCaptainPlatformStore();
     const owner = await store.ensureTelegramUser({
@@ -111,13 +109,13 @@ describe("Trip service", () => {
       title: "Anambra",
       brief: defaultTestBrief({ destinationAirports: ["ANA"] })
     });
-    expect((await service.list(owner.id)).filter((trip) => trip.status === "tracking"))
+    expect((await service.list(owner.id)).filter((trip) => trip.status === "draft"))
       .toHaveLength(1);
     await expect(service.create(owner.id, {
       title: "Nairobi",
       brief: defaultTestBrief({ destinationAirports: ["NBO"] })
     })).rejects.toBeInstanceOf(TripLimitError);
-    const tracked = (await service.list(owner.id)).filter((trip) => trip.status === "tracking");
+    const tracked = (await service.list(owner.id)).filter((trip) => trip.status === "draft");
     await service.action(owner.id, tracked[0]!.id, {
       type: "cancel",
       expectedVersion: tracked[0]!.version

@@ -147,6 +147,192 @@ describe("Captain trip planning", () => {
     )).toBe(false);
   });
 
+  it("keeps exploratory itinerary and date planning in the conversation", () => {
+    for (const request of [
+      "I have a potential itinerary and need help figuring out what dates work",
+      "Help me plan an itinerary to London and Paris; my dates are flexible",
+      "I want to travel in September but I’m not sure which dates make sense"
+    ]) {
+      expect(TripPlanningService.isTripPlanningRequest(request)).toBe(true);
+      expect(TripPlanningService.needsItineraryPlanningConversation(request)).toBe(true);
+    }
+
+    expect(TripPlanningService.needsItineraryPlanningConversation(
+      "Lagos to London on 6 September 2026"
+    )).toBe(false);
+  });
+
+  it("recognises event context as a multi-city flight-planning request", () => {
+    const request = "Let's plan for Nairobi in November. I'm going to a wedding from Nov 4 - 8, "
+      + "a birthday from Nov 10 - 14. Then 19 - 22, Uganda. Then a wedding, Dec 10. "
+      + "I'll be in London and want to spend Christmas in Lagos.";
+
+    expect(TripPlanningService.isTripPlanningRequest(request)).toBe(true);
+    expect(TripPlanningService.needsItineraryPlanningConversation(request)).toBe(false);
+  });
+
+  it("grounds the Nairobi narrative before asking to replace the active trip", async () => {
+    const clock = new Date("2026-08-08T12:00:00Z");
+    const { planning, trips, store, user } = await setup(clock);
+    const current = await trips.create(user.id, {
+      title: "Existing London trip",
+      brief: defaultTestBrief({
+        originAirports: ["LOS"],
+        destinationAirports: ["LHR"],
+        tripType: "one_way",
+        stayNights: null
+      })
+    });
+    await planning.prepare(user.id, "Track a trip to New York on November 2");
+    const narrative = "Let's plan for Nairobi in November. I'm going to a wedding from Nov 4 - 8, "
+      + "a birthday from Nov 10 - 14. Then 19 - 22, Uganda. Then a wedding, Dec 10. "
+      + "I'll be in London and want to spend Christmas in Lagos.";
+
+    const originQuestion = await planning.handleOpenDraftText(user.id, narrative, null);
+    expect(originQuestion?.status).toBe("needs_input");
+    if (!originQuestion || originQuestion.status !== "needs_input") {
+      throw new Error("Expected the missing origin question");
+    }
+    expect(originQuestion.prompt).toContain("Nairobi → Entebbe → London → Lagos");
+    expect(originQuestion.prompt).toContain("Where will you be flying from to Nairobi?");
+    expect(originQuestion.prompt).not.toContain("Replace it");
+    expect(originQuestion.draft.confirmationSnapshot).toBeNull();
+    expect(originQuestion.draft.state).toMatchObject({
+      tripType: "multi_city",
+      legs: [
+        {
+          originAirports: [],
+          destinationAirports: ["NBO"],
+          departure: null,
+          arriveBy: "2026-11-04"
+        },
+        {
+          originAirports: ["NBO"],
+          destinationAirports: ["EBB"],
+          departure: { start: "2026-11-15", end: "2026-11-18" },
+          arriveBy: "2026-11-19"
+        },
+        {
+          originAirports: ["EBB"],
+          destinationAirports: ["LON"],
+          departure: null,
+          feasibleDepartureWindow: { start: "2026-11-23", end: "2026-12-09" },
+          proposedDeparture: { start: "2026-12-03", end: "2026-12-09" },
+          arriveBy: "2026-12-10"
+        },
+        {
+          originAirports: ["LON"],
+          destinationAirports: ["LOS"],
+          departure: null,
+          feasibleDepartureWindow: { start: "2026-12-11", end: "2026-12-24" },
+          proposedDeparture: { start: "2026-12-18", end: "2026-12-24" },
+          arriveBy: "2026-12-25"
+        }
+      ]
+    });
+    expect(await trips.get(user.id, current.trip.id)).toMatchObject({ status: "draft" });
+
+    const firstFlight = await planning.handleOpenDraftText(user.id, "Accra", null);
+    expect(firstFlight?.status).toBe("needs_input");
+    if (!firstFlight || firstFlight.status !== "needs_input") {
+      throw new Error("Expected the first-flight date question");
+    }
+    expect(firstFlight.prompt).toContain("Accra → Nairobi");
+    expect(firstFlight.prompt).toContain("arrive by");
+
+    const proposals = await planning.handleOpenDraftText(user.id, "Nov 1 - 3", null);
+    expect(proposals?.status).toBe("needs_input");
+    if (!proposals || proposals.status !== "needs_input") {
+      throw new Error("Expected proposed search windows");
+    }
+    expect(proposals.prompt).toContain("possible travel envelopes, not search dates");
+    expect(proposals.prompt).toContain("Entebbe → London: 3 Dec–9 Dec suggested within 23 Nov–9 Dec");
+    expect(proposals.prompt).toContain("London → Lagos: 18 Dec–24 Dec suggested within 11 Dec–24 Dec");
+    expect(proposals.prompt).toContain("Use these seven-day search windows?");
+
+    const replacement = await planning.handleOpenDraftText(user.id, "Yes", null);
+    expect(replacement?.status).toBe("needs_input");
+    if (!replacement || replacement.status !== "needs_input") {
+      throw new Error("Expected replacement consent");
+    }
+    expect(replacement.prompt).toContain("Replace it");
+    expect(replacement.prompt).toContain("/feedback");
+    expect(await trips.get(user.id, current.trip.id)).toMatchObject({ status: "draft" });
+
+    const ready = await planning.handleOpenDraftText(user.id, "Yes", null);
+    expect(ready?.status).toBe("awaiting_confirmation");
+    if (!ready || ready.status !== "awaiting_confirmation") {
+      throw new Error("Expected confirmation after replacement consent");
+    }
+    expect(await trips.get(user.id, current.trip.id)).toMatchObject({
+      status: "archived",
+      archiveReason: "replaced"
+    });
+    const started = await planning.confirm(user.id, ready.draft.id, ready.draft.revision);
+    expect(started.status).toBe("started");
+    if (started.status !== "started") throw new Error("Expected a saved trip");
+    const graph = await store.getTripGraph(user.id, started.receipt.tripId);
+    expect(graph.cities.map((city) => city.airportCodes)).toEqual([
+      ["ACC"], ["NBO"], ["EBB"], ["LON"], ["LOS"]
+    ]);
+    expect(graph.cities.map((city) => city.arrivalWindow)).toEqual([
+      null,
+      { start: "2026-11-04", end: "2026-11-04" },
+      { start: "2026-11-19", end: "2026-11-19" },
+      { start: "2026-12-10", end: "2026-12-10" },
+      { start: "2026-12-25", end: "2026-12-25" }
+    ]);
+    expect(graph.legs.map((leg) => leg.arriveBy)).toEqual([
+      "2026-11-04", "2026-11-19", "2026-12-10", "2026-12-25"
+    ]);
+  });
+
+  it("treats no as declining proposed search windows rather than cancelling the trip", async () => {
+    const clock = new Date("2026-08-08T12:00:00Z");
+    const { planning, user } = await setup(clock);
+    const narrative = "Let's plan for Nairobi in November. I'm going to a wedding from Nov 4 - 8, "
+      + "a birthday from Nov 10 - 14. Then 19 - 22, Uganda. Then a wedding, Dec 10. "
+      + "I'll be in London and want to spend Christmas in Lagos.";
+
+    await planning.prepare(user.id, narrative);
+    await planning.handleOpenDraftText(user.id, "Accra", null);
+    const proposed = await planning.handleOpenDraftText(user.id, "Nov 1 - 3", null);
+    expect(proposed?.status).toBe("needs_input");
+
+    const declined = await planning.handleOpenDraftText(user.id, "No", null);
+    expect(declined?.status).toBe("needs_input");
+    if (!declined || declined.status !== "needs_input") {
+      throw new Error("Expected a custom search-window question");
+    }
+    expect(declined.draft.status).toBe("collecting");
+    expect(declined.prompt).toBe(
+      "What seven-day window should I use for Entebbe → London within 23 Nov–9 Dec?"
+    );
+  });
+
+  it("persists grounded flight windows for each adjacent city pair", async () => {
+    const { planning, user } = await setup();
+    const planned = await planning.prepare(
+      user.id,
+      "Create a multi-city trip Nairobi to Uganda November 15-18, "
+        + "Uganda to London November 23-29, and London to Lagos December 18-24."
+    );
+
+    expect(planned.status).toBe("awaiting_confirmation");
+    if (planned.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(planned.draft.confirmationSnapshot?.input.brief).toMatchObject({
+      tripType: "multi_city",
+      originAirports: ["NBO"],
+      destinationAirports: ["LOS"],
+      context: "",
+      legs: [
+        { originAirports: ["NBO"], destinationAirports: ["EBB"], departureWindow: { start: "2025-11-15", end: "2025-11-18" } },
+        { originAirports: ["EBB"], destinationAirports: ["LON"], departureWindow: { start: "2025-11-23", end: "2025-11-29" } },
+        { originAirports: ["LON"], destinationAirports: ["LOS"], departureWindow: { start: "2025-12-18", end: "2025-12-24" } }
+      ]
+    });
+  });
+
   it("reproduces the Lagos-to-New-York conversation without changing dates", async () => {
     const { planning, trips, user } = await setup();
     const first = await planning.prepare(
@@ -188,11 +374,14 @@ describe("Captain trip planning", () => {
       stayNights: 7
     });
     expect(started.message).toContain("Send /trip");
-    // A trip states what it is for the moment it exists.
+    // The structured goal stays available for decision-making without being
+    // printed as internal planning language in the traveller-facing receipt.
     expect(started.receipt.goal)
       .toBe("Get you LOS → NYC and back on 17 Aug for the best balance of fare and "
-        + "journey time, and tell you when it's the moment to buy.");
-    expect(started.message).toContain(`Goal: ${started.receipt.goal}`);
+        + "journey time, using verified fares when you search.");
+    expect(started.message).not.toContain("Goal:");
+    expect(started.message).not.toContain(started.receipt.goal);
+    expect(started.message).toContain("ready to search each flight leg with live fares");
     expect(started.message).toContain(`Open trip: https://captain.example/t#test-${started.receipt.tripId}`);
     expect(started.message).not.toContain("Trip reference");
     const renderedReceipt = telegramDashboardMessage(started.message);
@@ -240,8 +429,8 @@ describe("Captain trip planning", () => {
       "Find the best flights from Lagos to New York and back to London from Aug 16 - 23."
     );
 
-    expect(ready.status).toBe("awaiting_confirmation");
-    if (ready.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(ready?.status).toBe("awaiting_confirmation");
+    if (ready?.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
     expect(ready.draft.confirmationSnapshot?.input).toMatchObject({
       title: "LOS to NYC to LON",
       brief: {
@@ -293,8 +482,8 @@ describe("Captain trip planning", () => {
       user.id,
       "Fly from Lagos to New York on Aug 17, to London on the 20th, to Paris on the 23rd"
     );
-    expect(ready.status).toBe("awaiting_confirmation");
-    if (ready.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(ready?.status).toBe("awaiting_confirmation");
+    if (ready?.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
     expect(ready.draft.confirmationSnapshot?.input.brief.legs).toEqual([
       expect.objectContaining({
         originAirports: ["LOS"],
@@ -627,11 +816,8 @@ describe("Captain trip planning", () => {
       user.id,
       "Check for Lagos to London first week of September"
     );
-    expect(first.status).toBe("needs_input");
-    if (first.status !== "needs_input") throw new Error("Expected a departure-date question");
-    expect(first.prompt).toBe(
-      "Which exact departure date should I use within 2026-09-01 to 2026-09-07?"
-    );
+    expect(first.status).toBe("awaiting_confirmation");
+    if (first.status !== "awaiting_confirmation") throw new Error("Expected a window confirmation");
 
     const completed = await planning.prepare(
       user.id,
@@ -732,7 +918,7 @@ describe("Captain trip planning", () => {
     expect(await trips.list(user.id)).toHaveLength(0);
   });
 
-  it("holds a second trip back while one is already tracking", async () => {
+  it("preserves a second request, then archives the active trip on replacement consent", async () => {
     const { planning, trips, user } = await setup();
     const current = await trips.create(user.id, {
       title: "Existing London trip",
@@ -749,33 +935,45 @@ describe("Captain trip planning", () => {
     );
     expect(blocked.status).toBe("needs_input");
     if (blocked.status !== "needs_input") throw new Error("Expected the trip limit prompt");
-    expect(blocked.prompt).toContain("You’re already tracking a trip.");
-    expect(blocked.prompt).toContain("Open /trip");
-    expect(blocked.prompt).not.toContain("/profile");
-    expect(blocked.draft.confirmationSnapshot).toBeNull();
+    expect(blocked.prompt).toContain("Existing London trip");
+    expect(blocked.prompt).toContain("Replace it");
+    expect(blocked.prompt).toContain("/feedback");
+    expect(blocked.draft.confirmationSnapshot).toMatchObject({
+      input: { brief: { originAirports: ["LOS"], destinationAirports: ["NYC"] } }
+    });
 
     const saved = await trips.list(user.id);
     expect(saved).toHaveLength(1);
     expect(saved[0]).toMatchObject({
       id: current.trip.id,
-      status: "tracking",
+      status: "draft",
       archiveReason: null
     });
 
-    // Stopping the current trip frees the slot, and the held draft continues.
-    await trips.action(user.id, current.trip.id, {
-      type: "cancel",
-      expectedVersion: current.trip.version
+    const both = await planning.handleOpenDraftText(user.id, "I want to keep both", null);
+    expect(both).toMatchObject({
+      status: "needs_input",
+      prompt: expect.stringContaining("/feedback")
     });
-    const ready = await planning.prepare(user.id, "continue", null, blocked.draft.id);
-    expect(ready.status).toBe("awaiting_confirmation");
-    if (ready.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(await trips.get(user.id, current.trip.id)).toMatchObject({
+      status: "draft",
+      archiveReason: null
+    });
+
+    const ready = await planning.handleOpenDraftText(user.id, "Yes", null);
+    expect(ready?.status).toBe("awaiting_confirmation");
+    if (!ready || ready.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(ready.draft.id).toBe(blocked.draft.id);
+    expect(await trips.get(user.id, current.trip.id)).toMatchObject({
+      status: "archived",
+      archiveReason: "replaced"
+    });
     const added = await planning.confirm(user.id, ready.draft.id, ready.draft.revision);
     expect(added.status).toBe("started");
     if (added.status !== "started") throw new Error("Expected started trip");
     expect(await trips.list(user.id)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: current.trip.id, status: "cancelled" }),
-      expect.objectContaining({ id: added.receipt.tripId, status: "tracking" })
+      expect.objectContaining({ id: current.trip.id, status: "archived", archiveReason: "replaced" }),
+      expect.objectContaining({ id: added.receipt.tripId, status: "draft" })
     ]));
   });
 
@@ -812,7 +1010,7 @@ describe("Captain trip planning", () => {
     const started = await planning.handleOpenDraftText(user.id, "Yes", null);
     expect(started?.status).toBe("started");
     expect(await planning.activeTripLocation(user.id)).toBe(
-      "Your trip is tracking.\n\n"
+      "Your trip is saved and ready to search.\n\n"
       + "• LOS → NYC\n"
       + "• Depart: Sunday, 17 Aug 2025\n"
       + "• 1 traveller, Economy, At most 2 stops, USD\n\n"
@@ -855,7 +1053,7 @@ describe("Captain trip planning", () => {
     });
 
     const message = await planning.activeTripsLocation(user.id);
-    expect(message).toContain("Your trip is tracking.");
+    expect(message).toContain("Your trip is saved and ready to search.");
     expect(message).toContain("• LOS → ANA");
     const rendered = telegramDashboardMessage(message!);
     expect(rendered.links).toEqual([
@@ -878,7 +1076,115 @@ describe("Captain trip planning", () => {
       { text: "Open LOS → ANA", url: "https://captain.example/t#test-anambra" },
       { text: "Open LOS → LHR", url: "https://captain.example/t#test-london" }
     ]);
-    expect(rendered.text).toContain("You’re tracking 2 trips:");
+    expect(rendered.text).toContain("You have 2 saved trips:");
     expect(rendered.text).not.toContain("https://");
+  });
+
+  // A weekday answer to a leg question means the weekday that gets the
+  // traveller there in time, not the next one on the calendar.
+  it("reads a bare weekday against the leg's arrive-by deadline", async () => {
+    const clock = new Date("2026-08-08T12:00:00Z");
+    const { planning, user } = await setup(clock);
+    await planning.prepare(
+      user.id,
+      "Let's plan for Nairobi in November. I'm going to a wedding from Nov 4 - 8, "
+      + "a birthday from Nov 10 - 14. Then 19 - 22, Uganda. Then a wedding, Dec 10. "
+      + "I'll be in London and want to spend Christmas in Lagos."
+    );
+
+    const dateQuestion = await planning.handleOpenDraftText(user.id, "From London", null);
+    if (dateQuestion?.status !== "needs_input") {
+      throw new Error("Expected the first-flight date question");
+    }
+    expect(dateQuestion.prompt).toContain("When can you fly London → Nairobi?");
+    expect(dateQuestion.prompt).toContain("arrive by Wednesday, 4 Nov 2026");
+
+    const answered = await planning.handleOpenDraftText(user.id, "The sunday before", null);
+    if (answered?.status !== "needs_input") {
+      throw new Error("Expected the itinerary to continue");
+    }
+    // The Sunday before Wednesday 4 Nov 2026 — not 9 Aug 2026, the next
+    // Sunday after today.
+    expect(answered.draft.state.legs[0]).toMatchObject({
+      originAirports: ["LON"],
+      destinationAirports: ["NBO"],
+      departure: { kind: "exact", date: "2026-11-01" }
+    });
+  });
+
+  // A date past the deadline is refused rather than stored, and the traveller
+  // is told which deadline it missed.
+  it("refuses a departure that lands after the arrival deadline", async () => {
+    const clock = new Date("2026-08-08T12:00:00Z");
+    const { planning, user } = await setup(clock);
+    await planning.prepare(
+      user.id,
+      "Let's plan for Nairobi in November. I'm going to a wedding from Nov 4 - 8, "
+      + "a birthday from Nov 10 - 14. Then 19 - 22, Uganda. Then a wedding, Dec 10. "
+      + "I'll be in London and want to spend Christmas in Lagos."
+    );
+    await planning.handleOpenDraftText(user.id, "From London", null);
+
+    const answered = await planning.handleOpenDraftText(user.id, "5 November", null);
+    if (answered?.status !== "needs_input") {
+      throw new Error("Expected the deadline question again");
+    }
+    expect(answered.prompt).toContain("after the 2026-11-04 arrival deadline");
+    expect(answered.draft.state.legs[0]!.departure).toBeNull();
+  });
+
+  // “Create” in front of proposed search windows accepts them, the same as
+  // “yes” — it never re-posts the proposal the traveller just answered.
+  it("reads create as consent to the proposed search windows", async () => {
+    const clock = new Date("2026-08-08T12:00:00Z");
+    const { planning, user } = await setup(clock);
+    await planning.prepare(
+      user.id,
+      "Let's plan for Nairobi in November. I'm going to a wedding from Nov 4 - 8, "
+      + "a birthday from Nov 10 - 14. Then 19 - 22, Uganda. Then a wedding, Dec 10. "
+      + "I'll be in London and want to spend Christmas in Lagos."
+    );
+    await planning.handleOpenDraftText(user.id, "From London", null);
+    const proposals = await planning.handleOpenDraftText(user.id, "The sunday before", null);
+    if (proposals?.status !== "needs_input") {
+      throw new Error("Expected proposed search windows");
+    }
+    expect(proposals.prompt).toContain("Use these seven-day search windows?");
+
+    const created = await planning.handleOpenDraftText(user.id, "Create", null);
+    expect(created?.status).toBe("awaiting_confirmation");
+    if (created?.status !== "awaiting_confirmation") {
+      throw new Error("Expected the trip to reach its confirmation");
+    }
+    expect(created.confirmation).not.toBe(proposals.prompt);
+    expect(created.draft.state.legs.every((leg) => leg.departure !== null)).toBe(true);
+  });
+
+  // With nothing proposed to say yes to, “Create” explains what is missing
+  // rather than silently re-asking the same question.
+  it("explains why an incomplete draft cannot be created yet", async () => {
+    const clock = new Date("2026-08-08T12:00:00Z");
+    const { planning, user } = await setup(clock);
+    await planning.prepare(
+      user.id,
+      "Let's plan for Nairobi in November. I'm going to a wedding from Nov 4 - 8, "
+      + "a birthday from Nov 10 - 14. Then 19 - 22, Uganda. Then a wedding, Dec 10. "
+      + "I'll be in London and want to spend Christmas in Lagos."
+    );
+    const dateQuestion = await planning.handleOpenDraftText(user.id, "From London", null);
+    if (dateQuestion?.status !== "needs_input") {
+      throw new Error("Expected the first-flight date question");
+    }
+
+    const created = await planning.handleOpenDraftText(user.id, "Create", null);
+    if (created?.status !== "needs_input") {
+      throw new Error("Expected an explanation rather than a trip");
+    }
+    expect(created.prompt).not.toBe(dateQuestion.prompt);
+    expect(created.prompt).toContain("I can’t start tracking yet");
+    expect(created.prompt).toContain("a date for every flight");
+    expect(created.prompt).toContain("When can you fly London → Nairobi?");
+    // A message that changes nothing must not burn a draft revision.
+    expect(created.draft.revision).toBe(dateQuestion.draft.revision);
   });
 });

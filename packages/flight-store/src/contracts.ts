@@ -1,9 +1,15 @@
 import type {
   CaptainSessionPath,
+  CanonicalFlight,
   CreateTripInput,
+  FlightOfferSnapshot,
   OfferSnapshot,
   SearchSpec,
   SearchSpecRequest,
+  LegSearchSnapshot,
+  LegSearchSnapshotRevision,
+  TripGraph,
+  TripCityLeg,
   TravellerProfile,
   UpdateTravellerProfile,
   Trip,
@@ -191,9 +197,44 @@ export interface CaptainPlatformStore {
   getActiveTrip(userId: string): Promise<Trip | null>;
   getTrip(userId: string, tripId: string): Promise<Trip | null>;
   getTripById(tripId: string): Promise<Trip | null>;
+  getTripGraph(userId: string, tripId: string): Promise<TripGraph>;
+  getTripLeg(userId: string, tripId: string, legId: string): Promise<TripCityLeg | null>;
+  createLegSearchSnapshot(
+    userId: string,
+    tripId: string,
+    legId: string,
+    requestedWindow: { start: string; end: string },
+    datesRequested: string[],
+    now: Date
+  ): Promise<LegSearchSnapshot>;
+  reviseLegSearchSnapshot(
+    userId: string,
+    searchId: string,
+    expectedRevision: number,
+    revision: LegSearchSnapshotRevision,
+    now: Date
+  ): Promise<LegSearchSnapshot | null>;
+  getLegSearchSnapshot(userId: string, searchId: string): Promise<LegSearchSnapshot | null>;
+  getLatestLegSearchSnapshot(
+    userId: string,
+    tripId: string,
+    legId: string
+  ): Promise<LegSearchSnapshot | null>;
+  getCanonicalFlight(
+    flightKey: string,
+    now: Date
+  ): Promise<{ flight: CanonicalFlight; offers: FlightOfferSnapshot[] } | null>;
+  setTripLegFlight(
+    userId: string,
+    tripId: string,
+    legId: string,
+    flightKey: string | null,
+    now: Date
+  ): Promise<TripCityLeg>;
   getWatch(userId: string, tripId: string): Promise<Watch | null>;
   createTrip(userId: string, input: CreateTripInput, specs: SearchSpec[], now: Date): Promise<TripCreationResult>;
   updateTripBrief(userId: string, tripId: string, input: UpdateTripBrief, specs: SearchSpec[], now: Date): Promise<Trip>;
+  archiveTripForReplacement(userId: string, tripId: string, now: Date): Promise<Trip>;
   applyTripAction(userId: string, tripId: string, action: TripAction, now: Date): Promise<Trip>;
   listTripActivity(userId: string, tripId: string): Promise<TripActivity[]>;
   listTripOffers(userId: string, tripId: string, now: Date): Promise<OfferSnapshot[]>;

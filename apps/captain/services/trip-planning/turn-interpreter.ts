@@ -322,11 +322,9 @@ function deterministicRoute(
     if (previous.length > 1) {
       return [
         outbound,
-        ...previous.slice(1).map((leg, index) => ({
+        ...previous.slice(1).map((leg) => ({
           originAirports: [...leg.originAirports],
-          destinationAirports: index === previous.length - 2
-            ? [code]
-            : [...leg.destinationAirports]
+          destinationAirports: [...leg.destinationAirports]
         }))
       ];
     }
@@ -385,7 +383,12 @@ function appendDateOperations(
   }
 
   const weekday = /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/iu.exec(input.normalizedDateText);
-  const selectedTarget = targetForRequest(input.request, input.activeQuestion, 0);
+  const unresolvedLeg = input.state.legs.findIndex((leg) => !leg.departure);
+  const selectedTarget = targetForRequest(
+    input.request,
+    input.activeQuestion,
+    unresolvedLeg >= 0 ? unresolvedLeg : 0
+  );
   const selectedLeg = input.state.legs[
     selectedTarget.field === "return"
       ? Math.max(1, input.state.legs.length - 1)
@@ -393,9 +396,43 @@ function appendDateOperations(
         ? selectedTarget.legIndex
         : 0
   ];
+  const explicitWindows = explicitDateRangeExpressions(input.normalizedDateText);
+  if (
+    input.routeLegCount > 1
+    && explicitWindows.length >= input.routeLegCount
+  ) {
+    explicitWindows.slice(0, input.routeLegCount).forEach((expression, index) => {
+      operations.push({
+        type: "set_date",
+        target: { field: "leg", legIndex: index },
+        expression,
+        evidence: expression
+      });
+    });
+    return;
+  }
+  if (
+    explicitWindows[0]
+    && (
+      input.routeLegCount === 1
+      || input.state.tripType === "one_way"
+      || input.activeQuestion === "itineraryLegs"
+    )
+  ) {
+    operations.push({
+      type: "set_date",
+      target: selectedTarget,
+      expression: explicitWindows[0],
+      evidence: explicitWindows[0]
+    });
+    return;
+  }
+  // A bare weekday only means something next to the leg it answers for. Pass
+  // the word through so the reducer can read it against that leg's window or
+  // arrival deadline; resolving it here would measure it from today instead.
   if (
     weekday
-    && selectedLeg?.departure?.kind === "window"
+    && legAnchorsWeekday(selectedLeg)
     && !/\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|\d{1,2})\b/iu.test(input.normalizedDateText)
   ) {
     operations.push({
@@ -492,6 +529,29 @@ function appendDateOperations(
       evidence: evidenceForNormalized(input.request, weekday[0])
     });
   }
+}
+
+function explicitDateRangeExpressions(request: string): string[] {
+  const month = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+  const patterns = [
+    new RegExp(String.raw`\b(?:${month})\s+\d{1,2}(?:st|nd|rd|th)?\s*(?:-|–|—|to)\s*\d{1,2}(?:st|nd|rd|th)?(?:[\s,]+20\d{2})?\b`, "giu"),
+    new RegExp(String.raw`\b\d{1,2}(?:st|nd|rd|th)?\s*(?:-|–|—|to)\s*\d{1,2}(?:st|nd|rd|th)?\s+(?:${month})(?:[\s,]+20\d{2})?\b`, "giu"),
+    /\b20\d{2}-\d{2}-\d{2}\s+(?:-|–|—|to)\s+20\d{2}-\d{2}-\d{2}\b/giu
+  ];
+  const matches = patterns.flatMap((pattern) => [...request.matchAll(pattern)].map((match) => ({
+    index: match.index,
+    value: match[0]
+  })));
+  return matches
+    .sort((left, right) => left.index - right.index)
+    .filter((match, index, all) => index === 0 || match.index !== all[index - 1]!.index)
+    .map((match) => match.value);
+}
+
+function legAnchorsWeekday(leg: TripDraftState["legs"][number] | undefined): boolean {
+  if (!leg) return false;
+  if (leg.departure) return leg.departure.kind === "window";
+  return Boolean(leg.feasibleDepartureWindow || leg.arriveBy);
 }
 
 function targetFor(question: TripPlannerQuestion, fallbackLeg: number): DateTarget {

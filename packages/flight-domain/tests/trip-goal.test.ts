@@ -21,13 +21,13 @@ describe("trip goal", () => {
   it("states the route, the date and what Captain is ranking for", () => {
     expect(formatTripGoal(goalInput())).toBe(
       "Get you LOS → LON on 10 Sept for the best balance of fare and journey time, "
-      + "and tell you when it's the moment to buy."
+      + "using verified fares when you search."
     );
   });
 
   it("prefers a stated fare ceiling over the ranking mode", () => {
     expect(formatTripGoal(goalInput({ maximumPrice: 500 }, "cheapest"))).toBe(
-      "Get you LOS → LON on 10 Sept for under $500, and tell you when it's the moment to buy."
+      "Get you LOS → LON on 10 Sept for under $500, using verified fares when you search."
     );
     expect(formatTripGoalTarget(goalInput({ maximumPrice: 500 }, "cheapest")))
       .toBe("your $500 target");
@@ -38,7 +38,7 @@ describe("trip goal", () => {
       departureWindow: { start: "2026-09-10", end: "2026-09-14" }
     }, "fastest"))).toBe(
       "Get you LOS → LON on 10 Sept–14 Sept for the fastest journey, "
-      + "and tell you when it's the moment to buy."
+      + "using verified fares when you search."
     );
   });
 

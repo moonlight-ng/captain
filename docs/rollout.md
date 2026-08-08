@@ -39,18 +39,19 @@ fly secrets set -a dr-flight-worker \
 3. Back up Captain's database, then run
    `pnpm --filter @agents/captain db:migrate`. The Captain 1.0 migration is a
    deliberate destructive cutover from the private prototype.
-4. Deploy Captain and verify `/health`, `/ready`, one-time login exchange,
-   profile editing, and account deletion.
-5. Deploy one worker. Leave tracking disabled while checking readiness and
-   logs.
+4. Deploy Captain with `CAPTAIN_SIMPLIFIED_MULTI_CITY_ENABLED=false` and verify
+   `/health`, `/ready`, one-time login exchange, profile editing, and account deletion.
+5. Keep the legacy worker tracking kill switch enabled. New trips must not
+   create watches or wake the worker.
 6. Run the live Duffel evaluation corpus.
 7. Force one harmless primary failure or use an empty test market and confirm
    the worker records a successful Flysoar result as `flysoar_mcp`.
 8. Continue only if overall coverage reaches 80%, domestic and international
    subsets each reach 75% with three usable offers, representative carrier
    coverage is acceptable, and P95 search latency is below three minutes.
-9. Turn off `TRACKING_KILL_SWITCH` for private users and observe at least one
-   full adaptive cycle.
+9. Enable `CAPTAIN_SIMPLIFIED_MULTI_CITY_ENABLED=true` for the rollout cohort.
+   Create a multi-city trip, run a partial and a complete manual leg search,
+   select a flight, and verify the public canonical flight link leaks no trip data.
 10. Set `CAPTAIN_PUBLIC_BETA_ENABLED=true` to admit new users, capped by
    `CAPTAIN_BETA_USER_LIMIT=25`.
 

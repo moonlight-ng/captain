@@ -88,6 +88,96 @@ export type Segment = {
   arrival: string;
 };
 
+export type DateWindow = { start: string; end: string };
+
+export type TripCity = {
+  id: string;
+  tripId: string;
+  position: number;
+  label: string;
+  airportCodes: string[];
+  arrivalWindow: DateWindow | null;
+  departureWindow: DateWindow | null;
+};
+
+export type TripCityLeg = {
+  id: string;
+  tripId: string;
+  position: number;
+  originCityId: string;
+  destinationCityId: string;
+  departureWindow: DateWindow;
+  arriveBy: string | null;
+  selectedFlightKey: string | null;
+  latestSearchId: string | null;
+};
+
+export type CanonicalFlight = {
+  key: string;
+  origin: string;
+  destination: string;
+  departureDate: string;
+  segments: Array<{
+    origin: string;
+    destination: string;
+    departure: string;
+    arrival: string;
+    marketingAirlineCode: string;
+    marketingAirline: string;
+    flightNumber: string;
+  }>;
+  primaryAirlineCode: string;
+  participatingAirlineCodes: string[];
+  stops: number;
+  durationMinutes: number;
+};
+
+export type FlightOfferSnapshot = {
+  offerId: string;
+  flightKey: string;
+  provider: "flysoar_mcp" | `official_${string}`;
+  priceAmount: string;
+  currency: string;
+  evidence: Array<{ url: string; title: string; domain: string }>;
+  observedAt: string;
+  expiresAt: string | null;
+};
+
+export type LegSearchPick = {
+  flightKey: string;
+  departureDate: string;
+  priceAmount: string;
+  currency: string;
+  durationMinutes: number;
+  stops: number;
+};
+
+export type LegSearchSnapshot = {
+  id: string;
+  tripId: string;
+  legId: string;
+  revision: number;
+  status: "queued" | "running" | "completed" | "partial" | "failed";
+  requestedWindow: DateWindow;
+  analysis: {
+    complete: boolean;
+    datesRequested: string[];
+    datesCompleted: string[];
+    failedDates: Array<{ date: string; code: string }>;
+    optionsChecked: number;
+    cheapest: LegSearchPick | null;
+    fastest: LegSearchPick | null;
+    balanced: LegSearchPick | null;
+    cheapestByDate: LegSearchPick[];
+    observedAt: string | null;
+  };
+  flights: CanonicalFlight[];
+  offers: FlightOfferSnapshot[];
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+};
+
 export type VerifiedOffer = {
   id: string;
   itineraryKey: string;
@@ -158,6 +248,23 @@ export type TripPayload = {
   priceHistory: TrackedPriceHistory | null;
   /** One sentence naming what Captain is trying to do for this trip. */
   goal: string | null;
+  /** Ordered cities and flight legs for the simplified multi-city experience. */
+  cities?: TripCity[];
+  legs?: TripCityLeg[];
+  /** The last search result for each leg, keyed by TripCityLeg.id. */
+  latestSearches?: Record<string, LegSearchSnapshot>;
+};
+
+export type CanonicalFlightPayload = {
+  flight: CanonicalFlight;
+  offers: FlightOfferSnapshot[];
+  /** Private context is omitted for anonymous or unrelated viewers. */
+  context?: {
+    tripId: string;
+    legId: string;
+    routeLabel: string;
+    selected: boolean;
+  } | null;
 };
 
 export type TripActivity = {

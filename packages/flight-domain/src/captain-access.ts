@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 export type CaptainWebPath = "/trip" | "/profile" | "/preferences" | "/settings";
 /** Paths that may be targeted by single-use login tokens / session cookies. */
-export type CaptainSessionPath = "/trip" | "/profile" | "/preferences" | "/settings";
+export type CaptainSessionPath = "/trip" | "/profile" | "/preferences" | "/settings" | "/feedback";
 
 const TOKEN_VERSION = "v1";
 const USER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;

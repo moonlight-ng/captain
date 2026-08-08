@@ -66,4 +66,25 @@ describe("multi-city Trip briefs", () => {
     });
     expect(parsed.legs).toBeUndefined();
   });
+
+  it("keeps every possible departure on or before an arrive-by boundary", () => {
+    const result = tripBriefSchema.safeParse({
+      ...baseBrief,
+      departureWindow: { start: "2026-08-16", end: "2026-08-18" },
+      legs: [
+        {
+          ...baseBrief.legs[0],
+          departureWindow: { start: "2026-08-16", end: "2026-08-18" },
+          arriveBy: "2026-08-17"
+        },
+        baseBrief.legs[1]
+      ]
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues.map((issue) => issue.message)).toContain(
+      "A leg's arrival boundary must not precede its departure window"
+    );
+  });
 });

@@ -27,9 +27,10 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
     `• Route: ${isMultiCity ? formatLegRoute(legs) : `${brief.originAirports.join("/")} → ${brief.destinationAirports.join("/")}`}`,
     ...(isMultiCity
       ? legs.map((leg, index) =>
-          `• Leg ${index + 1}: ${leg.originAirports.join("/")} → ${leg.destinationAirports.join("/")} · ${formatCalendarDate(leg.departureWindow.start)}`
+          `• Leg ${index + 1}: ${leg.originAirports.join("/")} → ${leg.destinationAirports.join("/")} · ${formatDateWindow(leg.departureWindow)}`
+          + (leg.arriveBy ? ` · arrive by ${formatCalendarDate(leg.arriveBy)}` : "")
         )
-      : [`• Depart: ${formatCalendarDate(draft.confirmationSnapshot.departureDate)}`]),
+      : [`• Depart: ${formatDateWindow(brief.departureWindow)}`]),
     ...(!isMultiCity && draft.confirmationSnapshot.returnDate
       ? [
           `• Return: ${formatCalendarDate(draft.confirmationSnapshot.returnDate)}`,
@@ -48,13 +49,17 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
   return lines.join("\n");
 }
 
+function formatDateWindow(window: { start: string; end: string }): string {
+  return window.start === window.end
+    ? formatCalendarDate(window.start)
+    : `${formatCalendarDate(window.start)} – ${formatCalendarDate(window.end)}`;
+}
+
 export function formatTripCreationReceipt(receipt: TripCreationReceipt): string {
   return [
     receipt.created
-      ? "Your trip is saved. I’ll check the fare once a day until you fly."
+      ? "Your trip is saved. Open it when you’re ready to search each flight leg with live fares."
       : "That trip was already saved; I’m using the existing one.",
-    "",
-    `Goal: ${receipt.goal}`,
     "",
     ...formatTripSummaryLines(receipt),
     "",
@@ -94,7 +99,7 @@ export function formatActiveTripLocation(input: ActiveTripFormatInput): string {
 
 export function formatActiveTripList(inputs: ActiveTripFormatInput[]): string {
   return [
-    `You’re tracking ${inputs.length} trips:`,
+    `You have ${inputs.length} saved trips:`,
     "",
     ...inputs.flatMap((input) => {
       const route = input.legs && input.legs.length >= 2
@@ -143,6 +148,7 @@ function label(value: string): string {
 
 function activeTripStatusLine(status: TripStatus): string {
   if (status === "recommended") return "I’ve found some flights for your trip.";
+  if (status === "draft") return "Your trip is saved and ready to search.";
   return `Your trip is ${label(status).toLowerCase()}.`;
 }
 

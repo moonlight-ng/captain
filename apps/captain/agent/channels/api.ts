@@ -15,6 +15,10 @@ import { ZodError, z } from "zod";
 
 import { getCaptainServices } from "../../services/app/services.js";
 import {
+  FeedbackBridgeUnavailableError,
+  FeedbackDeliveryError
+} from "../../services/feedback/telegram-bridge.js";
+import {
   legacyBearerAllowed,
   type ResolvedAuth
 } from "../../services/auth/legacy-bearer.js";
@@ -30,9 +34,12 @@ export default defineChannel({
     GET("/trip", serveIndex),
     GET("/trip/:id", serveIndex),
     GET("/trip/:id/settings", serveIndex),
+    GET("/trip/:id/leg/:legId", serveIndex),
     GET("/trip/:id/flight/:itineraryKey", serveIndex),
     GET("/trip/:id/flight/:itineraryKey/book", serveIndex),
+    GET("/flight/:flightKey", serveIndex),
     GET("/profile", serveIndex),
+    GET("/feedback", serveIndex),
     GET("/settings", serveIndex),
     GET("/preferences", serveIndex),
     GET("/travellers", serveIndex),
@@ -42,10 +49,15 @@ export default defineChannel({
     GET("/api/auth/session", authenticated(sessionStatus)),
     GET("/api/me/profile", authenticated(getProfile)),
     PATCH("/api/me/profile", authenticatedMutation(updateProfile)),
+    POST("/api/me/feedback", authenticatedMutation(requireSession(submitFeedback))),
     GET("/api/me/trip", authenticated(getTrip)),
     PATCH("/api/me/trip", authenticatedMutation(updateTrip)),
     POST("/api/me/trip/actions", authenticatedMutation(tripAction)),
     POST("/api/me/trip/selections", authenticatedMutation(setTripSelection)),
+    POST("/api/me/trip/legs/:legId/searches", authenticatedMutation(startTripLegSearch)),
+    GET("/api/me/trip/legs/:legId/searches/:searchId", authenticated(getTripLegSearch)),
+    POST("/api/me/trip/legs/:legId/selection", authenticatedMutation(setTripLegSelection)),
+    GET("/api/flights/:flightKey", safely(getCanonicalFlight)),
     DELETE("/api/me/account", authenticatedMutation(requireSession(deleteAccount)))
   ]
 });
@@ -77,7 +89,13 @@ function safely(handler: Handler): Handler {
         return Response.json({ error: "not_found" }, { status: 404 });
       }
       if (error instanceof TripLimitError) {
-        return Response.json({ error: "trip_limit", limit: 3 }, { status: 409 });
+        return Response.json({ error: "trip_limit", limit: 1 }, { status: 409 });
+      }
+      if (error instanceof FeedbackBridgeUnavailableError) {
+        return Response.json({ error: "feedback_unavailable" }, { status: 503 });
+      }
+      if (error instanceof FeedbackDeliveryError) {
+        return Response.json({ error: "feedback_delivery_failed" }, { status: 502 });
       }
       if (error instanceof Error && error.message === "body_too_large") {
         return Response.json({ error: "body_too_large" }, { status: 413 });
@@ -227,6 +245,24 @@ async function updateProfile(
   }, { headers: noStore() });
 }
 
+async function submitFeedback(
+  request: Request,
+  _context: RouteContext,
+  userId: string
+): Promise<Response> {
+  const services = await getCaptainServices();
+  const body = z.object({
+    text: z.string().trim().min(1).max(2_000)
+  }).strict().parse(await requestJson(request));
+  const user = await services.platformStore.getUser(userId);
+  if (!user) return Response.json({ error: "unauthorized" }, { status: 401 });
+  const receipt = await services.feedback.send(body.text, {
+    telegramUserId: user.telegramUserId,
+    displayName: user.displayName
+  });
+  return Response.json(receipt, { headers: noStore() });
+}
+
 async function getTrip(
   request: Request,
   _context: RouteContext,
@@ -241,6 +277,9 @@ async function getTrip(
     : await services.platformStore.getActiveTrip(userId);
   if (requestedTripId && !trip) throw new TripNotFoundError();
   if (!trip) {
+    const graphPayload = services.env.simplifiedMultiCityEnabled
+      ? { cities: [], legs: [], latestSearches: {} }
+      : {};
     return Response.json(
       {
         trips,
@@ -251,20 +290,33 @@ async function getTrip(
         selections: [],
         activity: [],
         priceHistory: null,
-        goal: null
+        goal: null,
+        ...graphPayload
       },
       { headers: noStore() }
     );
   }
   await services.platformStore.markTripActivity(userId, trip.id, new Date());
-  const [watch, offers, recommendation, selections, activity, tracked] = await Promise.all([
+  const [watch, offers, recommendation, selections, activity, tracked, graph] = await Promise.all([
     services.platformStore.getWatch(userId, trip.id),
     services.trips.offers(userId, trip.id),
     services.platformStore.getRecommendation(userId, trip.id),
     services.platformStore.listTripFlightSelections(userId, trip.id),
     services.platformStore.listTripActivity(userId, trip.id),
-    services.platformStore.getTrackedFlightPrices(userId, trip.id)
+    services.platformStore.getTrackedFlightPrices(userId, trip.id),
+    services.env.simplifiedMultiCityEnabled
+      ? services.platformStore.getTripGraph(userId, trip.id)
+      : Promise.resolve({ cities: [], legs: [] })
   ]);
+  const latestSearchEntries = await Promise.all(graph.legs.map(async (leg) => [
+    leg.id,
+    await services.platformStore.getLatestLegSearchSnapshot(userId, trip.id, leg.id)
+  ] as const));
+  const latestSearches = Object.fromEntries(
+    latestSearchEntries.filter((entry): entry is readonly [string, NonNullable<typeof entry[1]>] =>
+      entry[1] !== null
+    )
+  );
   const priceHistory = toTrackedPriceHistory(tracked, trip.brief.departureWindow.start);
   const profile = await services.platformStore.ensureProfile(userId, new Date());
   return Response.json(
@@ -277,8 +329,140 @@ async function getTrip(
       selections,
       activity,
       priceHistory,
-      goal: formatTripGoal({ brief: trip.brief, rankingMode: profile.rankingMode })
+      goal: formatTripGoal({ brief: trip.brief, rankingMode: profile.rankingMode }),
+      ...(services.env.simplifiedMultiCityEnabled
+        ? { cities: graph.cities, legs: graph.legs, latestSearches }
+        : {})
     },
+    { headers: noStore() }
+  );
+}
+
+async function startTripLegSearch(
+  request: Request,
+  context: RouteContext,
+  userId: string
+): Promise<Response> {
+  const services = await getCaptainServices();
+  if (!services.env.simplifiedMultiCityEnabled) {
+    return Response.json({ error: "not_found" }, { status: 404 });
+  }
+  const trip = await services.platformStore.getActiveTrip(userId);
+  const legId = context.params.legId;
+  if (!trip || !legId) throw new TripNotFoundError();
+  const body = z.object({
+    requestedWindow: z.object({
+      start: z.iso.date(),
+      end: z.iso.date()
+    }).strict().optional()
+  }).strict().parse(await requestJson(request));
+  const result = await services.legSearch.start(userId, {
+    tripId: trip.id,
+    legId,
+    ...(body.requestedWindow ? { requestedWindow: body.requestedWindow } : {})
+  });
+  if (result.snapshot) return Response.json(result.snapshot, { status: 202, headers: noStore() });
+  const status = result.status === "not_found"
+    ? 404
+    : result.status === "window_too_large" || result.status === "invalid_window"
+      ? 422
+      : result.status === "conflict"
+        ? 409
+        : 503;
+  return Response.json(
+    { error: result.code ?? result.status, message: result.message },
+    { status, headers: noStore() }
+  );
+}
+
+async function getTripLegSearch(
+  _request: Request,
+  context: RouteContext,
+  userId: string
+): Promise<Response> {
+  const services = await getCaptainServices();
+  if (!services.env.simplifiedMultiCityEnabled) {
+    return Response.json({ error: "not_found" }, { status: 404 });
+  }
+  const trip = await services.platformStore.getActiveTrip(userId);
+  const legId = context.params.legId;
+  const searchId = context.params.searchId;
+  if (!trip || !legId || !searchId) throw new TripNotFoundError();
+  const snapshot = await services.legSearch.get(userId, trip.id, legId, searchId);
+  if (!snapshot) throw new TripNotFoundError();
+  return Response.json(snapshot, { headers: noStore() });
+}
+
+async function setTripLegSelection(
+  request: Request,
+  context: RouteContext,
+  userId: string
+): Promise<Response> {
+  const services = await getCaptainServices();
+  if (!services.env.simplifiedMultiCityEnabled) {
+    return Response.json({ error: "not_found" }, { status: 404 });
+  }
+  const trip = await services.platformStore.getActiveTrip(userId);
+  const legId = context.params.legId;
+  if (!trip || !legId) throw new TripNotFoundError();
+  const body = z.object({
+    flightKey: z.string().trim().min(1).max(500).nullable()
+  }).strict().parse(await requestJson(request));
+  const leg = await services.platformStore.setTripLegFlight(
+    userId,
+    trip.id,
+    legId,
+    body.flightKey,
+    new Date()
+  );
+  return Response.json(leg, { headers: noStore() });
+}
+
+async function getCanonicalFlight(
+  request: Request,
+  context: RouteContext
+): Promise<Response> {
+  const flightKey = context.params.flightKey?.trim();
+  if (!flightKey) return Response.json({ error: "not_found" }, { status: 404 });
+  const services = await getCaptainServices();
+  if (!services.env.simplifiedMultiCityEnabled) {
+    return Response.json({ error: "not_found" }, { status: 404 });
+  }
+  const resource = await services.legSearch.getFlight(flightKey);
+  if (!resource) return Response.json({ error: "not_found" }, { status: 404 });
+  const auth = await services.auth.resolve(request);
+  let privateContext: {
+    tripId: string;
+    legId: string;
+    routeLabel: string;
+    selected: true;
+  } | null = null;
+  if (auth?.credential === "session") {
+    const user = await services.platformStore.getUser(auth.userId);
+    const trip = user?.status === "active"
+      ? await services.platformStore.getActiveTrip(auth.userId)
+      : null;
+    if (trip) {
+      const graph = await services.platformStore.getTripGraph(auth.userId, trip.id);
+      const leg = graph.legs.find((candidate) => candidate.selectedFlightKey === flightKey);
+      const origin = leg
+        ? graph.cities.find((city) => city.id === leg.originCityId)
+        : null;
+      const destination = leg
+        ? graph.cities.find((city) => city.id === leg.destinationCityId)
+        : null;
+      if (leg && origin && destination) {
+        privateContext = {
+          tripId: trip.id,
+          legId: leg.id,
+          routeLabel: `${origin.label} → ${destination.label}`,
+          selected: true
+        };
+      }
+    }
+  }
+  return Response.json(
+    { ...resource, ...(privateContext ? { context: privateContext } : {}) },
     { headers: noStore() }
   );
 }

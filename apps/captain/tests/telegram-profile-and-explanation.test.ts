@@ -8,6 +8,8 @@ import {
   CAPTAIN_CLEAR_COMMAND,
   CAPTAIN_CLEAR_CONFIRMATION,
   CAPTAIN_DEFAULTS_INTRO,
+  CAPTAIN_FEEDBACK_COMMAND,
+  CAPTAIN_FEEDBACK_PROMPT,
   CAPTAIN_NEW_USER_GREETING,
   CAPTAIN_PROFILE_COMMAND,
   CAPTAIN_READY_PROMPT,
@@ -26,14 +28,14 @@ import {
 describe("Telegram profile onboarding", () => {
   it("starts every new traveller with the fixed three-message introduction", () => {
     expect(CAPTAIN_NEW_USER_GREETING).toBe(
-      "Hi, I’m Captain. I track your flight price and help you decide when to book.\n\n"
-      + "I’m still in early testing, so I can only watch one trip at a time. I never book or pay for anything."
+      "Hi, I’m Captain. I plan multi-city trips and compare real-time flight options across your possible dates.\n\n"
+      + "I’m still in early testing, so I can only keep one trip at a time. I never book or pay for anything."
     );
     expect(CAPTAIN_DEFAULTS_INTRO).toBe(
-      "You’re set up for USD fares, a balance of price and travel time, and at most one alert a day. You can change these anytime."
+      "You’re set up for USD fares and a balance of price and travel time. You can change these anytime."
     );
     expect(CAPTAIN_READY_PROMPT).toBe(
-      "Where to first? Type it or send a voice note."
+      "Send the cities and dates you’re considering by text or voice note. I’ll help turn them into flight legs and search the dates that work."
     );
   });
 
@@ -42,8 +44,10 @@ describe("Telegram profile onboarding", () => {
     // message has to carry the demo framing and the one-trip limit itself.
     expect(CAPTAIN_NEW_USER_GREETING).toContain("early testing");
     expect(CAPTAIN_NEW_USER_GREETING).toContain("one trip at a time");
-    expect(CAPTAIN_DEFAULTS_INTRO).toContain("at most one alert a day");
+    expect(CAPTAIN_DEFAULTS_INTRO).not.toContain("alert");
     expect(CAPTAIN_READY_PROMPT).toContain("voice note");
+    expect(CAPTAIN_READY_PROMPT).toContain("flight legs");
+    expect(CAPTAIN_NEW_USER_GREETING).toContain("real-time flight options");
   });
 
   it("introduces Captain once and welcomes returning travellers differently", () => {
@@ -57,9 +61,9 @@ describe("Telegram profile onboarding", () => {
   });
 
   it("welcomes a returning traveller back to an existing trip", () => {
-    const trip = "Your trip is tracking.\n\n• LOS → LHR\n\nOpen trip: https://captain.example/trip";
+    const trip = "Your trip is saved and ready to search.\n\n• LOS → LHR\n\nOpen trip: https://captain.example/trip";
     const welcome = returningTravellerWelcome(trip);
-    expect(welcome).toBe(`Welcome back. Here’s what I’m watching.\n\n${trip}`);
+    expect(welcome).toBe(`Welcome back. Here’s your saved trip.\n\n${trip}`);
     expect(welcome).not.toContain("Where to next?");
     expect(returningTravellerWelcome(null)).toBe(CAPTAIN_RETURNING_TRAVELLER_WELCOME);
   });
@@ -67,9 +71,17 @@ describe("Telegram profile onboarding", () => {
   it("accepts the singular and plural trip commands", () => {
     expect(CAPTAIN_TRIP_COMMAND).toBe("/trip");
     expect(CAPTAIN_TRIPS_COMMAND).toBe("/trips");
+    expect(CAPTAIN_FEEDBACK_COMMAND).toBe("/feedback");
     expect(telegramCommandName("/trip")).toBe("trip");
     expect(telegramCommandName(" /trips ")).toBe("trips");
     expect(telegramCommandName("/trips@CaptainBot")).toBe("trips");
+  });
+
+  it("offers a concise feedback form prompt", () => {
+    expect(CAPTAIN_FEEDBACK_PROMPT).toBe(
+      "Tell us what worked, what didn’t, or what you’d like Captain to do better."
+    );
+    expect(telegramCommandName("/feedback")).toBe("feedback");
   });
 
   it("only parses complete Telegram commands", () => {

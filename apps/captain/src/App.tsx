@@ -2,14 +2,18 @@ import { useEffect, useMemo, useRef, useState, Fragment, type Dispatch, type Set
 
 import {
   ApiError,
+  canonicalFlightHref,
   getProfile,
   getSession,
+  getTripLegSearch,
   flightHref,
   getTrip,
   bookHref,
   homeHref,
   initializeAccessToken,
+  selectTripLegFlight,
   setTripFlightSelection,
+  startTripLegSearch,
   tripAction,
   tripHref
 } from "./api";
@@ -17,11 +21,13 @@ import {
   EMPTY_BROWSE_PREFERENCES,
   sortAndFilterOffers,
   type BrowsePreferences,
+  type LegSearchSnapshot,
   type RankingMode,
   type Segment,
   type TravellerProfile,
   type TrackedPriceHistory,
   type TripPayload,
+  type TripCityLeg,
   type VerifiedOffer,
   type Watch
 } from "./domain";
@@ -60,7 +66,10 @@ import { inPageLink } from "./navigation";
 import { isWatchSearching, shouldAutoSearchOnOpen } from "./trip-stage";
 import { Home } from "./screens/Home";
 import { Profile } from "./screens/Profile";
+import { Feedback } from "./screens/Feedback";
 import { TripSettings } from "./screens/TripSettings";
+import { CanonicalFlightPage } from "./screens/CanonicalFlight";
+import { MultiCityTripOverview, TripLegResults } from "./screens/MultiCityTrip";
 
 type Tab = "flights" | "airlines" | "browse";
 const tabLabels: Record<Tab, string> = {
@@ -69,24 +78,37 @@ const tabLabels: Record<Tab, string> = {
   browse: "All flights"
 };
 
-type Page = "home" | "trip" | "trip-settings" | "profile";
+type Page = "home" | "trip" | "trip-leg" | "trip-settings" | "flight" | "profile" | "feedback";
 
 /** Account paths already sent to Telegram. They all land on the one profile page. */
 const profileAliases = new Set(["/profile", "/settings", "/preferences", "/travellers", "/payment"]);
 
 function currentPage(): Page {
+  if (/^\/feedback\/?$/u.test(window.location.pathname)) return "feedback";
   if (profileAliases.has(window.location.pathname)) return "profile";
   if (window.location.pathname === "/trips") return "home";
+  if (/^\/flight\/[^/]+\/?$/u.test(window.location.pathname)) return "flight";
+  if (/^\/trip\/[^/]+\/leg\/[^/]+\/?$/u.test(window.location.pathname)) return "trip-leg";
   return /^\/trip\/[^/]+\/settings\/?$/u.test(window.location.pathname)
     ? "trip-settings"
     : "trip";
 }
 
 function currentTripId(): string | undefined {
-  const match = /^\/trip\/([^/]+?)(?:\/settings|\/flight\/[^/]+(?:\/book)?)?\/?$/u
+  const match = /^\/trip\/([^/]+?)(?:\/settings|\/leg\/[^/]+|\/flight\/[^/]+(?:\/book)?)?\/?$/u
     .exec(window.location.pathname);
   if (match?.[1]) return decodeURIComponent(match[1]);
   return new URLSearchParams(window.location.search).get("trip") ?? undefined;
+}
+
+function currentLegId(): string | undefined {
+  const match = /^\/trip\/[^/]+\/leg\/([^/]+)\/?$/u.exec(window.location.pathname);
+  return match?.[1] ? decodeURIComponent(match[1]) : undefined;
+}
+
+function currentCanonicalFlightKey(): string | undefined {
+  const match = /^\/flight\/([^/]+)\/?$/u.exec(window.location.pathname);
+  return match?.[1] ? decodeURIComponent(match[1]) : undefined;
 }
 
 type WatchlistFocus = {
@@ -133,6 +155,8 @@ export function App() {
   const [dismissedItineraryKeys, setDismissedItineraryKeys] = useState<string[]>([]);
   const [watchedOfferCache, setWatchedOfferCache] = useState<Record<string, VerifiedOffer>>({});
   const [searchBusy, setSearchBusy] = useState(false);
+  const [legSearchProgress, setLegSearchProgress] = useState<Record<string, LegSearchSnapshot>>({});
+  const [legSearchErrors, setLegSearchErrors] = useState<Record<string, string>>({});
   /** Trips already checked on arrival, so a reload of state can't re-fire it. */
   const autoSearchedTripIds = useRef(new Set<string>());
 
@@ -141,9 +165,22 @@ export function App() {
     setError("");
     try {
       initializeAccessToken();
+      const targetPage = currentPage();
+      if (targetPage === "flight") {
+        try {
+          const session = await getSession();
+          setDisplayName(session.displayName);
+        } catch {
+          // Canonical flight pages are deliberately public. Authentication only
+          // adds optional trip context to the API response.
+        }
+        setAuthenticated(true);
+        return;
+      }
       const session = await getSession();
       setDisplayName(session.displayName);
       setAuthenticated(true);
+      if (currentPage() === "feedback") return;
       const requestedTripId = currentTripId();
       const [nextProfile, nextTrip] = await Promise.all([
         getProfile(),
@@ -168,6 +205,12 @@ export function App() {
     }
   }
 
+  const legSearchPollKey = Object.entries(legSearchProgress)
+    .filter(([, snapshot]) => snapshot.status === "queued" || snapshot.status === "running")
+    .map(([legId, snapshot]) => `${legId}:${snapshot.id}`)
+    .sort()
+    .join("|");
+
   useEffect(() => {
     if (profileAliases.has(window.location.pathname) && window.location.pathname !== "/profile") {
       const url = new URL(window.location.href);
@@ -180,28 +223,137 @@ export function App() {
 
   useEffect(() => {
     const sync = () => {
-      setPage(currentPage());
+      const nextPage = currentPage();
+      setPage(nextPage);
       setWatchlistFocus(currentFocus());
+      if (nextPage !== "flight" && !tripData) void load();
     };
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
-  }, []);
+  }, [tripData]);
+
+  // Simplified trips have no tracking settings. Old shared settings links land
+  // on the composed itinerary instead of exposing the legacy watch controls.
+  useEffect(() => {
+    const graphBacked = Boolean(
+      tripData?.trip
+      && (tripData.cities?.length ?? 0) >= 2
+      && (tripData.legs?.length ?? 0) >= 1
+    );
+    if (page !== "trip-settings" || !graphBacked || !tripData?.trip) return;
+    window.history.replaceState(null, "", tripHref(tripData.trip.id));
+    setPage("trip");
+  }, [page, tripData?.trip?.id, tripData?.cities?.length, tripData?.legs?.length]);
 
   /** Moves between screens without leaving the page. */
   function navigate(href: string) {
     setError("");
     window.history.pushState({ captainNavigation: true }, "", href);
-    setPage(currentPage());
+    const nextPage = currentPage();
+    setPage(nextPage);
     setWatchlistFocus(currentFocus());
     // Screens render from data already in hand, except a trip we have never
     // fetched. That one is worth a load; the rest are instant.
     const requestedTripId = currentTripId();
-    if (requestedTripId && requestedTripId !== tripData?.trip?.id) void load();
+    if (
+      (requestedTripId && requestedTripId !== tripData?.trip?.id)
+      || (nextPage !== "flight" && !tripData)
+    ) void load();
   }
 
   const trip = tripData?.trip ?? null;
   const watch = tripData?.watch ?? null;
   const searching = searchBusy || isWatchSearching(watch, trip);
+
+  async function searchTripLeg(leg: TripCityLeg) {
+    if (!trip) return;
+    setLegSearchErrors((current) => ({ ...current, [leg.id]: "" }));
+    try {
+      const snapshot = await startTripLegSearch(leg.id);
+      setLegSearchProgress((current) => ({ ...current, [leg.id]: snapshot }));
+    } catch (cause) {
+      setLegSearchErrors((current) => ({
+        ...current,
+        [leg.id]: cause instanceof ApiError && [400, 422].includes(cause.status)
+          ? "That date range is too wide. Ask Captain in Telegram to narrow it to seven days."
+          : "That search didn’t start. Try again."
+      }));
+    }
+  }
+
+  async function chooseTripLegFlight(leg: TripCityLeg, flightKey: string) {
+    if (!trip) return;
+    setLegSearchErrors((current) => ({ ...current, [leg.id]: "" }));
+    try {
+      const updated = await selectTripLegFlight(leg.id, flightKey);
+      setTripData((current) => current ? {
+        ...current,
+        legs: (current.legs ?? []).map((item) => item.id === updated.id ? updated : item)
+      } : current);
+    } catch {
+      setLegSearchErrors((current) => ({ ...current, [leg.id]: "Couldn’t select that flight. Try again." }));
+    }
+  }
+
+  useEffect(() => {
+    if (!trip) return;
+    const active = Object.entries(legSearchProgress).filter(([, snapshot]) =>
+      snapshot.status === "queued" || snapshot.status === "running"
+    );
+    if (active.length === 0) return;
+    let cancelled = false;
+    const tick = async () => {
+      const results = await Promise.all(active.map(async ([legId, snapshot]) => {
+        try {
+          return [legId, await getTripLegSearch(legId, snapshot.id)] as const;
+        } catch {
+          return null;
+        }
+      }));
+      if (cancelled) return;
+      for (const result of results) {
+        if (!result) continue;
+        const [legId, snapshot] = result;
+        if (snapshot.status === "queued" || snapshot.status === "running") {
+          setLegSearchProgress((current) => ({ ...current, [legId]: snapshot }));
+          continue;
+        }
+        setTripData((current) => current ? {
+          ...current,
+          latestSearches: { ...(current.latestSearches ?? {}), [legId]: snapshot },
+          legs: (current.legs ?? []).map((leg) => leg.id === legId
+            ? { ...leg, latestSearchId: snapshot.id }
+            : leg)
+        } : current);
+        setLegSearchProgress((current) => {
+          const next = { ...current };
+          delete next[legId];
+          return next;
+        });
+      }
+    };
+    void tick();
+    const id = window.setInterval(() => { void tick(); }, 2_500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [trip?.id, legSearchPollKey]);
+
+  // A legacy nested flight link can become canonical once its itinerary key
+  // is present in a graph-backed leg snapshot. Replace the URL so copied links
+  // no longer carry private trip identity.
+  useEffect(() => {
+    if (!watchlistFocus || !tripData?.latestSearches) return;
+    const canonical = Object.values(tripData.latestSearches).some((snapshot) =>
+      snapshot.flights.some((flight) => flight.key === watchlistFocus.itineraryKey)
+    );
+    if (!canonical) return;
+    const href = canonicalFlightHref(watchlistFocus.itineraryKey);
+    window.history.replaceState(null, "", href);
+    setWatchlistFocus(null);
+    setPage("flight");
+  }, [tripData?.latestSearches, watchlistFocus?.itineraryKey]);
 
   useEffect(() => {
     if ((!searching && watch?.status !== "active") || !trip) return;
@@ -334,7 +486,32 @@ export function App() {
     return (
       <CenteredState
         title="Open Captain from Telegram"
-        detail={error || "Use Open trip or Profile from Captain in Telegram."}
+        detail={error || "Use a link from Captain in Telegram."}
+      />
+    );
+  }
+  if (page === "feedback") {
+    return (
+      <Feedback
+        displayName={displayName}
+        onBack={() => window.location.assign(homeHref())}
+      />
+    );
+  }
+  if (page === "flight") {
+    const flightKey = currentCanonicalFlightKey();
+    if (!flightKey) return <CenteredState title="Flight unavailable" detail="That flight link is incomplete." />;
+    return (
+      <CanonicalFlightPage
+        flightKey={flightKey}
+        onNavigate={navigate}
+        onBack={() => {
+          if ((window.history.state as { captainNavigation?: boolean } | null)?.captainNavigation) {
+            window.history.back();
+          } else {
+            window.location.assign(homeHref());
+          }
+        }}
       />
     );
   }
@@ -368,6 +545,46 @@ export function App() {
         onTripError={setError}
         onBack={() => navigate(tripHref(trip?.id))}
       />
+    );
+  }
+
+  const hasTripGraph = Boolean(
+    trip && (tripData?.cities?.length ?? 0) >= 2 && (tripData?.legs?.length ?? 0) >= 1
+  );
+  if (trip && hasTripGraph && (page === "trip" || page === "trip-leg")) {
+    const shared = {
+      trip,
+      cities: tripData?.cities ?? [],
+      legs: tripData?.legs ?? [],
+      latestSearches: tripData?.latestSearches ?? {},
+      searchProgress: legSearchProgress,
+      searchErrors: legSearchErrors,
+      onSearch: (leg: TripCityLeg) => { void searchTripLeg(leg); },
+      onNavigate: navigate
+    };
+    return (
+      <main className="shell multi-city-shell">
+        <header className="topbar">
+          <a
+            className="brand"
+            href={homeHref()}
+            aria-label="Captain home"
+            onClick={inPageLink(homeHref(), navigate)}
+          >
+            <span className="brand-mark">C</span>
+            <span>Captain</span>
+          </a>
+        </header>
+        {page === "trip-leg" ? (
+          <TripLegResults
+            {...shared}
+            legId={currentLegId() ?? ""}
+            onSelect={(leg, flightKey) => { void chooseTripLegFlight(leg, flightKey); }}
+          />
+        ) : (
+          <MultiCityTripOverview {...shared} />
+        )}
+      </main>
     );
   }
 
@@ -442,8 +659,8 @@ export function App() {
 
       {!trip ? (
         <section className="empty-hero">
-          <h1>Track flight prices</h1>
-          <p>Text or send a voice note in Telegram to start a new trip</p>
+          <h1>Plan trips and track flight prices</h1>
+          <p>Send your trip by text or voice note in Telegram</p>
         </section>
       ) : watchlistFocus?.view === "book" ? (
         <BookHandoff

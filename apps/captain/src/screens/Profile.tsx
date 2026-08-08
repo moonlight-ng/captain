@@ -1,10 +1,7 @@
 import type { TravellerProfile } from "../domain";
 import { AccountPreferences } from "./AccountPreferences";
 
-/**
- * The whole account surface: how Captain notifies you, and how it ranks flights.
- * There is nothing else here — Captain tracks fares and never books them.
- */
+/** Flight-search preferences for manual leg searches. */
 export function Profile({
   profile,
   displayName,

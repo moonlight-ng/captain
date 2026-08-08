@@ -28,9 +28,9 @@ export function offerRangeSummary(offers: OfferSnapshot[]): OfferRangeSummary | 
 }
 
 /**
- * Facts every automatic message carries, so the worker can state what a trip
- * is for without re-reading the trip. The goal is stamped at enqueue time
- * because it is the goal the message was written against.
+ * Facts every automatic message carries. The goal is stamped at enqueue time
+ * as immutable decision context, but remains internal rather than being
+ * printed in the traveller-facing message.
  */
 export function notificationGoalPayload(
   trip: Trip,

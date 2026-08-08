@@ -47,21 +47,14 @@ describe("Flight lookup", () => {
     expect(await trips.list(user.id)).toHaveLength(0);
   });
 
-  it("returns matching stored offers without invoking a live search", async () => {
+  it("does not schedule a background run for a saved manual-search trip", async () => {
     const { store, trips, user } = await setup();
     const created = await trips.create(user.id, {
       title: "London to New York",
       brief: defaultTestBrief()
     });
-    await store.scheduleDueSearchRuns(now, 900_000, 1);
-    const run = (await store.claimSearchRuns("worker-test", now, 180_000, 1))[0]!;
-    await store.completeSearchRun(
-      "worker-test",
-      run.id,
-      "request-1",
-      [storedOffer("BA", "British Airways", 650)],
-      new Date("2026-08-07T12:00:01.000Z")
-    );
+    expect(await store.scheduleDueSearchRuns(now, 900_000, 1)).toBe(0);
+    expect(await store.claimSearchRuns("worker-test", now, 180_000, 1)).toEqual([]);
     const provider = fakeProvider([liveOffer("BA", "British Airways", "640.00")]);
     const lookup = new FlightLookupService({
       store,
@@ -77,31 +70,22 @@ describe("Flight lookup", () => {
 
     expect(result).toMatchObject({
       status: "found",
-      source: "stored_trip",
+      source: "live_trip",
       tripId: created.trip.id,
-      storedOfferCount: 1,
+      storedOfferCount: 0,
       matchingOfferCount: 1
     });
-    expect(result.offers[0]?.priceAmount).toBe("650.00");
-    expect(provider.calls).toBe(0);
+    expect(result.offers[0]?.priceAmount).toBe("640.00");
+    expect(provider.calls).toBe(1);
   });
 
-  it("runs a live search when stored results do not contain the requested airline", async () => {
+  it("reports no match when a requested airline is absent from live results", async () => {
     const { store, trips, user } = await setup();
     await trips.create(user.id, {
       title: "London to New York",
       brief: defaultTestBrief()
     });
-    await store.scheduleDueSearchRuns(now, 900_000, 1);
-    const run = (await store.claimSearchRuns("worker-test", now, 180_000, 1))[0]!;
-    await store.completeSearchRun(
-      "worker-test",
-      run.id,
-      "request-1",
-      [storedOffer("VS", "Virgin Atlantic", 620)],
-      new Date("2026-08-07T12:00:01.000Z")
-    );
-    const provider = fakeProvider([liveOffer("BA", "British Airways", "680.00")]);
+    const provider = fakeProvider([liveOffer("VS", "Virgin Atlantic", "680.00")]);
     const lookup = new FlightLookupService({
       store,
       trips,
@@ -112,12 +96,12 @@ describe("Flight lookup", () => {
     const result = await lookup.search(user.id, { airlineCode: "BA" });
 
     expect(result).toMatchObject({
-      status: "found",
+      status: "no_matches",
       source: "live_trip",
-      storedOfferCount: 1,
-      matchingOfferCount: 1
+      storedOfferCount: 0,
+      matchingOfferCount: 0
     });
-    expect(result.offers[0]?.primaryAirlineCode).toBe("BA");
+    expect(result.offers).toEqual([]);
     expect(provider.calls).toBe(1);
   });
 });
@@ -195,48 +179,5 @@ function liveOffer(
       title: `${airline} offer`,
       domain: "duffel.com"
     }]
-  };
-}
-
-function storedOffer(airlineCode: string, airline: string, price: number) {
-  return {
-    itineraryKey: `${airlineCode}-stored-itinerary`,
-    provider: "official_duffel" as const,
-    providerOfferId: `${airlineCode}-stored-offer`,
-    providerSearchId: "request-1",
-    price,
-    priceAmount: price.toFixed(2),
-    currency: "GBP",
-    expiresAt: "2026-08-08T12:00:00.000Z",
-    observedAt: "2026-08-07T12:00:01.000Z",
-    snapshot: {
-      route: "LHR → JFK",
-      airlineCodes: [airlineCode],
-      flightNumbers: [`${airlineCode}117`],
-      stops: 0,
-      durationSeconds: 27_000,
-      segments: [{
-        airlineCode,
-        airline,
-        flightNumber: `${airlineCode}117`,
-        origin: "LHR",
-        destination: "JFK",
-        departure: "2026-09-01T09:00:00.000Z",
-        arrival: "2026-09-01T16:30:00.000Z"
-      }]
-    },
-    fareBasis: "one_adult_total" as const,
-    primaryAirlineCode: airlineCode,
-    participatingAirlineCodes: [airlineCode],
-    evidence: [{
-      url: `https://duffel.com/air/offers/${airlineCode}-stored-offer`,
-      title: `${airline} stored offer`,
-      domain: "duffel.com"
-    }],
-    discoveryResponseId: "request-1",
-    verificationResponseId: "request-1",
-    promptVersion: "test",
-    model: "duffel",
-    verifiedAt: "2026-08-07T12:00:01.000Z"
   };
 }
