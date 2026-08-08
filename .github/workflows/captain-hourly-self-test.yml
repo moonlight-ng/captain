@@ -59,6 +59,7 @@ jobs:
           eval_ids=(
             inspection-only
             relative-date-correction
+            scope-discipline
             trip-creation-reliability
             trip-understanding-v2
           )
