@@ -54,14 +54,19 @@ records date coverage, failures, canonical flights, verified seller offers,
 and deterministic analysis. `/flight/:flightKey` exposes the canonical flight
 schedule without private trip state.
 
-trip setup uses a versioned turn interpreter. It keeps one ordered list of
-dated legs, records the pending question and field provenance, and applies
-validated draft operations instead of merging extracted fields. GPT-5.6 Luna
-handles the schema-constrained semantic pass with reasoning disabled for this
-latency-sensitive extraction role. Deterministic airport, calendar, and route
-validation either accepts that complete interpretation or replaces it with a
-complete deterministic fallback; the two results are never merged field by
-field. Terra remains the general Captain agent model. This follows OpenAI's
+Trip setup has two semantic inputs. Explicit flight routes use the versioned
+turn interpreter. Narrative itineraries first become a temporary set of
+city-presence constraints; a deterministic compiler then derives exactly one
+flight leg per adjacent city pair, including feasible departure and arrive-by
+boundaries. Gaps longer than seven days remain feasible envelopes while Captain
+proposes a bounded search window for the traveller to approve. Dates can
+constrain a leg but can never create one. The temporary constraints and event
+labels are discarded before the trip is saved.
+
+GPT-5.6 Luna handles the schema-constrained semantic passes. Deterministic
+airport, calendar, graph, and evidence validation accepts a complete result or
+uses a complete deterministic fallback; model and fallback fields are never
+merged piecemeal. Terra remains the general Captain agent model. This follows OpenAI's
 [tier-aware model guidance](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6)
 and [Structured Outputs guidance](https://developers.openai.com/api/docs/guides/structured-outputs).
 

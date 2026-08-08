@@ -2205,7 +2205,7 @@ function materializeTripGraph(tripId: string, brief: TripBrief): TripGraph {
     airportCodes: [...leg.originAirports],
     arrivalWindow: position === 0
       ? null
-      : { ...routeLegs[position - 1]!.departureWindow },
+      : arrivalWindowFor(routeLegs[position - 1]!),
     departureWindow: { ...leg.departureWindow }
   }));
   const finalLeg = routeLegs.at(-1);
@@ -2216,7 +2216,7 @@ function materializeTripGraph(tripId: string, brief: TripBrief): TripGraph {
       position: routeLegs.length,
       label: cityLabelForAirportCodes(finalLeg.destinationAirports),
       airportCodes: [...finalLeg.destinationAirports],
-      arrivalWindow: { ...finalLeg.departureWindow },
+      arrivalWindow: arrivalWindowFor(finalLeg),
       departureWindow: null
     });
   }
@@ -2227,25 +2227,36 @@ function materializeTripGraph(tripId: string, brief: TripBrief): TripGraph {
     originCityId: cities[position]!.id,
     destinationCityId: cities[position + 1]!.id,
     departureWindow: { ...leg.departureWindow },
-    arriveBy: null,
+    arriveBy: leg.arriveBy ?? null,
     selectedFlightKey: null,
     latestSearchId: null
   }));
   return { cities, legs };
 }
 
+function arrivalWindowFor(leg: {
+  departureWindow: { start: string; end: string };
+  arriveBy: string | null;
+}): { start: string; end: string } {
+  return leg.arriveBy
+    ? { start: leg.arriveBy, end: leg.arriveBy }
+    : { ...leg.departureWindow };
+}
+
 function legacyRouteLegs(brief: TripBrief): Array<{
   originAirports: string[];
   destinationAirports: string[];
   departureWindow: { start: string; end: string };
+  arriveBy: string | null;
 }> {
   if (brief.tripType === "multi_city" && brief.legs?.length) {
-    return structuredClone(brief.legs);
+    return structuredClone(brief.legs).map((leg) => ({ ...leg, arriveBy: leg.arriveBy ?? null }));
   }
   const outbound = {
     originAirports: [...brief.originAirports],
     destinationAirports: [...brief.destinationAirports],
-    departureWindow: { ...brief.departureWindow }
+    departureWindow: { ...brief.departureWindow },
+    arriveBy: null
   };
   if (brief.tripType !== "round_trip" || !brief.stayNights) return [outbound];
   return [outbound, {
@@ -2254,7 +2265,8 @@ function legacyRouteLegs(brief: TripBrief): Array<{
     departureWindow: {
       start: addUtcDays(brief.departureWindow.start, brief.stayNights.minimum),
       end: addUtcDays(brief.departureWindow.end, brief.stayNights.maximum)
-    }
+    },
+    arriveBy: null
   }];
 }
 

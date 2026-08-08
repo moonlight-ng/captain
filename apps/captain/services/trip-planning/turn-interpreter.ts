@@ -322,11 +322,9 @@ function deterministicRoute(
     if (previous.length > 1) {
       return [
         outbound,
-        ...previous.slice(1).map((leg, index) => ({
+        ...previous.slice(1).map((leg) => ({
           originAirports: [...leg.originAirports],
-          destinationAirports: index === previous.length - 2
-            ? [code]
-            : [...leg.destinationAirports]
+          destinationAirports: [...leg.destinationAirports]
         }))
       ];
     }
@@ -385,7 +383,12 @@ function appendDateOperations(
   }
 
   const weekday = /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/iu.exec(input.normalizedDateText);
-  const selectedTarget = targetForRequest(input.request, input.activeQuestion, 0);
+  const unresolvedLeg = input.state.legs.findIndex((leg) => !leg.departure);
+  const selectedTarget = targetForRequest(
+    input.request,
+    input.activeQuestion,
+    unresolvedLeg >= 0 ? unresolvedLeg : 0
+  );
   const selectedLeg = input.state.legs[
     selectedTarget.field === "return"
       ? Math.max(1, input.state.legs.length - 1)
@@ -410,7 +413,11 @@ function appendDateOperations(
   }
   if (
     explicitWindows[0]
-    && (input.routeLegCount === 1 || input.state.tripType === "one_way")
+    && (
+      input.routeLegCount === 1
+      || input.state.tripType === "one_way"
+      || input.activeQuestion === "itineraryLegs"
+    )
   ) {
     operations.push({
       type: "set_date",

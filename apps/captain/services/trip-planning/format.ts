@@ -28,6 +28,7 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
     ...(isMultiCity
       ? legs.map((leg, index) =>
           `• Leg ${index + 1}: ${leg.originAirports.join("/")} → ${leg.destinationAirports.join("/")} · ${formatDateWindow(leg.departureWindow)}`
+          + (leg.arriveBy ? ` · arrive by ${formatCalendarDate(leg.arriveBy)}` : "")
         )
       : [`• Depart: ${formatDateWindow(brief.departureWindow)}`]),
     ...(!isMultiCity && draft.confirmationSnapshot.returnDate

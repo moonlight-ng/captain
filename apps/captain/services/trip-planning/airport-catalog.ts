@@ -5,6 +5,12 @@ export type AirportMarket = {
   currency: string;
 };
 
+export type AirportMention = {
+  code: string;
+  index: number;
+  evidence: string;
+};
+
 const AIRPORTS: Readonly<Record<string, Omit<AirportMarket, "code">>> = {
   LOS: { label: "Lagos", country: "NG", currency: "NGN" },
   ANA: { label: "Anambra/Umuerri", country: "NG", currency: "NGN" },
@@ -190,11 +196,31 @@ export function airportCodeAtStart(value: string): string | null {
 }
 
 export function orderedAirportCodesFromText(value: string): string[] {
-  const normalized = normalizeText(value);
-  const codes = [...normalized.matchAll(LOCATION_PATTERN)]
-    .map((match) => LOCATION_CODES[match[1]!]!)
-    .filter(Boolean);
+  const codes = orderedAirportMentionsFromText(value).map((mention) => mention.code);
   return uniqueAdjacent(codes);
+}
+
+/**
+ * Location evidence with source offsets. Planning constraints use the offsets
+ * to associate presence dates with cities before any flight legs exist.
+ */
+export function orderedAirportMentionsFromText(value: string): AirportMention[] {
+  const normalized = normalizeTextWithOffsets(value);
+  return [...normalized.text.matchAll(LOCATION_PATTERN)]
+    .map((match) => {
+      const normalizedIndex = match.index;
+      const sourceStart = normalized.offsets[normalizedIndex] ?? 0;
+      const sourceEndIndex = normalizedIndex + match[0].length - 1;
+      const sourceEnd = (normalized.offsets[sourceEndIndex] ?? sourceStart) + 1;
+      return {
+        code: LOCATION_CODES[match[1]!]!,
+        index: sourceStart,
+        evidence: value.slice(sourceStart, sourceEnd)
+      };
+    })
+    .filter((mention, index, all) =>
+      index === 0 || mention.code !== all[index - 1]!.code
+    );
 }
 
 export function allowedModelAirportCodes(value: string): ReadonlySet<string> {
@@ -209,6 +235,30 @@ function normalizeText(value: string): string {
     .toLowerCase()
     .replace(/[^\p{Letter}\p{Number}']+/gu, " ")
     .trim();
+}
+
+function normalizeTextWithOffsets(value: string): { text: string; offsets: number[] } {
+  let text = "";
+  const offsets: number[] = [];
+  let pendingSpace = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const source = value[index]!;
+    const normalized = source.normalize("NFKD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+    for (const character of normalized) {
+      if (/[\p{Letter}\p{Number}']/u.test(character)) {
+        if (pendingSpace && text.length > 0) {
+          text += " ";
+          offsets.push(index);
+        }
+        pendingSpace = false;
+        text += character;
+        offsets.push(index);
+      } else {
+        pendingSpace = true;
+      }
+    }
+  }
+  return { text, offsets };
 }
 
 function escapeRegex(value: string): string {

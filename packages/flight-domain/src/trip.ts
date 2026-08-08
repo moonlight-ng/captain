@@ -15,7 +15,9 @@ const dateWindowSchema = z.object({
 export const tripLegSchema = z.object({
   originAirports: z.array(iataCodeSchema).min(1).max(4),
   destinationAirports: z.array(iataCodeSchema).min(1).max(6),
-  departureWindow: dateWindowSchema
+  departureWindow: dateWindowSchema,
+  /** Latest acceptable arrival derived from city-presence constraints. */
+  arriveBy: z.iso.date().nullable().optional()
 }).strict().superRefine((leg, context) => {
   validateDateWindow(leg.departureWindow, context, ["departureWindow"]);
   if (leg.originAirports.some((airport) => leg.destinationAirports.includes(airport))) {
@@ -23,6 +25,13 @@ export const tripLegSchema = z.object({
       code: "custom",
       path: ["destinationAirports"],
       message: "A leg's origin and destination airports must differ"
+    });
+  }
+  if (leg.arriveBy && leg.arriveBy < leg.departureWindow.end) {
+    context.addIssue({
+      code: "custom",
+      path: ["arriveBy"],
+      message: "A leg's arrival boundary must not precede its departure window"
     });
   }
 });

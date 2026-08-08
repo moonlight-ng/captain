@@ -48,7 +48,15 @@ export type TripDraftDateSelection = z.infer<typeof tripDraftDateSelectionSchema
 export const tripDraftRouteLegSchema = z.object({
   originAirports: z.array(z.string().regex(/^[A-Z]{3}$/u)).max(4),
   destinationAirports: z.array(z.string().regex(/^[A-Z]{3}$/u)).max(6),
-  departure: tripDraftDateSelectionSchema.nullable()
+  departure: tripDraftDateSelectionSchema.nullable(),
+  arriveBy: isoDateSchema.nullable().optional(),
+  /** Hard timing bounds inferred from city presence. Draft-only. */
+  feasibleDepartureWindow: z.object({
+    start: isoDateSchema,
+    end: isoDateSchema
+  }).strict().nullable().optional(),
+  /** A seven-day search window awaiting explicit traveller approval. Draft-only. */
+  proposedDeparture: tripDraftDateSelectionSchema.nullable().optional()
 }).strict();
 export type TripDraftRouteLeg = z.infer<typeof tripDraftRouteLegSchema>;
 

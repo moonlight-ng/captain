@@ -96,7 +96,10 @@ function applyRoute(
         ? unique(proposed!.destinationAirports)
         : [...(existing?.destinationAirports ?? [])],
       // A route operation cannot clear or change a date.
-      departure: existing?.departure ?? null
+      departure: existing?.departure ?? null,
+      arriveBy: existing?.arriveBy ?? null,
+      feasibleDepartureWindow: existing?.feasibleDepartureWindow ?? null,
+      proposedDeparture: existing?.proposedDeparture ?? null
     };
   });
 }
@@ -114,6 +117,7 @@ function applyDate(
   if ("issue" in resolved) return resolved.issue;
   ensureLeg(state, index);
   state.legs[index]!.departure = resolved.selection;
+  state.legs[index]!.proposedDeparture = null;
   return null;
 }
 
@@ -247,10 +251,18 @@ function applyClear(state: TripDraftState, target: ClearableField): void {
     case "dates":
       state.legs.forEach((leg) => {
         leg.departure = null;
+        leg.arriveBy = null;
+        leg.feasibleDepartureWindow = null;
+        leg.proposedDeparture = null;
       });
       break;
     case "departureDate":
-      if (state.legs[0]) state.legs[0].departure = null;
+      if (state.legs[0]) {
+        state.legs[0].departure = null;
+        state.legs[0].arriveBy = null;
+        state.legs[0].feasibleDepartureWindow = null;
+        state.legs[0].proposedDeparture = null;
+      }
       break;
     case "returnDate":
       if (state.legs.at(-1) && state.legs.length > 1) state.legs.at(-1)!.departure = null;
@@ -303,6 +315,24 @@ function validateStateDates(state: TripDraftState, now: Date, timeZone: string):
     const current = exactDates[index];
     if (prior && current && daysBetween(prior, current) < 0) {
       return "Trip leg dates must be in order. I kept the previous dates.";
+    }
+  }
+  for (const leg of state.legs) {
+    const selection = leg.departure;
+    if (!selection) continue;
+    const start = selection.kind === "exact" ? selection.date : selection.start;
+    const end = selection.kind === "exact" ? selection.date : selection.end;
+    if (
+      leg.feasibleDepartureWindow
+      && (
+        start < leg.feasibleDepartureWindow.start
+        || end > leg.feasibleDepartureWindow.end
+      )
+    ) {
+      return `That date is outside the feasible ${leg.feasibleDepartureWindow.start} to ${leg.feasibleDepartureWindow.end} travel window. I kept the previous dates.`;
+    }
+    if (leg.arriveBy && end > leg.arriveBy) {
+      return `That departure is after the ${leg.arriveBy} arrival deadline. I kept the previous dates.`;
     }
   }
   return null;

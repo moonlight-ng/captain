@@ -116,12 +116,14 @@ export function describeCaptainPlatformStore(
             {
               originAirports: ["LHR"],
               destinationAirports: ["NBO"],
-              departureWindow: { start: "2026-11-03", end: "2026-11-03" }
+              departureWindow: { start: "2026-11-03", end: "2026-11-03" },
+              arriveBy: "2026-11-04"
             },
             {
               originAirports: ["NBO"],
               destinationAirports: ["EBB"],
-              departureWindow: { start: "2026-11-15", end: "2026-11-18" }
+              departureWindow: { start: "2026-11-15", end: "2026-11-18" },
+              arriveBy: "2026-11-19"
             }
           ]
         }
@@ -137,12 +139,32 @@ export function describeCaptainPlatformStore(
       expect(await store.getTripGraph(ada.id, created.trip.id)).toMatchObject({
         cities: [
           { position: 0, label: "London", airportCodes: ["LHR"], departureWindow: { start: "2026-11-03", end: "2026-11-03" } },
-          { position: 1, label: "Nairobi", airportCodes: ["NBO"], departureWindow: { start: "2026-11-15", end: "2026-11-18" } },
-          { position: 2, label: "Entebbe", airportCodes: ["EBB"], departureWindow: null }
+          {
+            position: 1,
+            label: "Nairobi",
+            airportCodes: ["NBO"],
+            arrivalWindow: { start: "2026-11-04", end: "2026-11-04" },
+            departureWindow: { start: "2026-11-15", end: "2026-11-18" }
+          },
+          {
+            position: 2,
+            label: "Entebbe",
+            airportCodes: ["EBB"],
+            arrivalWindow: { start: "2026-11-19", end: "2026-11-19" },
+            departureWindow: null
+          }
         ],
         legs: [
-          { position: 0, departureWindow: { start: "2026-11-03", end: "2026-11-03" } },
-          { position: 1, departureWindow: { start: "2026-11-15", end: "2026-11-18" } }
+          {
+            position: 0,
+            departureWindow: { start: "2026-11-03", end: "2026-11-03" },
+            arriveBy: "2026-11-04"
+          },
+          {
+            position: 1,
+            departureWindow: { start: "2026-11-15", end: "2026-11-18" },
+            arriveBy: "2026-11-19"
+          }
         ]
       });
       await expect(store.getWatch(ada.id, created.trip.id)).resolves.toBeNull();
