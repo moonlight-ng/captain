@@ -59,7 +59,9 @@ primary error or empty result. The direct adapter gives suppliers up to 60
 seconds to respond, then retrieves the resulting offers through Duffel's
 paginated Offers endpoint until no cursor remains. Offers are deduplicated by
 itinerary, ordered across primary marketing airlines, and capped at 60 retained
-results per search.
+results per search. New trips and manual searches wake the worker through a
+transactional PostgreSQL notification; adaptive polling remains the recovery
+path if the worker was disconnected when the notification was sent.
 
 Captain and Pilot are independent. Captain has no Pilot client, route,
 principal, secret, tool, or redirect. Future provider adapters use the

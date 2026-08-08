@@ -59,6 +59,7 @@ import {
   trackingRunEndsAt,
   TRACKING_CHECK_INTERVAL_MS
 } from "./watch-policy.js";
+import { signalFlightWorker } from "./worker-wake.js";
 
 function truncateErrorDetail(detail: string | null | undefined): string | null {
   if (!detail) return null;
@@ -600,6 +601,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           ${tx.json(json(input.brief))}, ${now}
         )
       `;
+      await signalFlightWorker(tx);
       return toTrip(updated[0]!);
     });
   }
@@ -847,6 +849,9 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
         values (${randomUUID()}, ${tripId}, ${userId}, ${`trip_${action.type}`}, ${tx.json(json(action))}, ${now})
       `;
+      if (["resume", "refresh", "track"].includes(action.type)) {
+        await signalFlightWorker(tx);
+      }
       return toTrip(updated[0]!);
     });
   }
@@ -1963,6 +1968,7 @@ async function createTripInTransaction(
     update captain.conversations set active_trip_id = ${tripId}, updated_at = ${now}
     where user_id = ${userId}
   `;
+  await signalFlightWorker(sql);
   return {
     trip: {
       id: tripId,

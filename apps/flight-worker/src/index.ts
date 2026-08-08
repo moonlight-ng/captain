@@ -1,14 +1,19 @@
 import { createServer } from "node:http";
 
-import { PostgresCaptainPlatformStore } from "@agents/flight-store";
+import {
+  FLIGHT_WORKER_WAKE_CHANNEL,
+  PostgresCaptainPlatformStore
+} from "@agents/flight-store";
 import { logEvent } from "@agents/observability";
 import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
 import {
   FallbackFlightSearchProvider,
   FlysoarMcpFlightSearchProvider
 } from "@agents/provider-flysoar";
+import postgres from "postgres";
 
-import { idleTickDelayMs, loadWorkerEnv } from "./env.js";
+import { loadWorkerEnv } from "./env.js";
+import { InterruptibleWorkerScheduler } from "./scheduler.js";
 import { FlightWorker } from "./worker.js";
 
 const env = loadWorkerEnv();
@@ -38,25 +43,24 @@ const worker = new FlightWorker({
 });
 
 let ready = false;
-let timer: NodeJS.Timeout | undefined;
-let consecutiveIdleTicks = 0;
-
-async function tick(): Promise<void> {
-  let nextTickMs = env.tickMs;
-  try {
+const scheduler = new InterruptibleWorkerScheduler({
+  tickMs: env.tickMs,
+  maxIdleTickMs: env.maxIdleTickMs,
+  async run() {
     await worker.tick();
     ready = true;
-    consecutiveIdleTicks = worker.lastTickHadDueWork ? 0 : consecutiveIdleTicks + 1;
-    nextTickMs = idleTickDelayMs(env.tickMs, env.maxIdleTickMs, consecutiveIdleTicks);
-  } catch (error) {
+    return worker.lastTickHadDueWork;
+  },
+  onError(error) {
     ready = false;
-    consecutiveIdleTicks = 0;
     logEvent("error", "flight_worker.tick_failed", { error: error instanceof Error ? error.message : "Unknown error" });
-  } finally {
-    timer = setTimeout(() => void tick(), nextTickMs);
-    timer.unref();
   }
-}
+});
+const wakeSql = postgres(env.databaseUrl, {
+  max: 1,
+  connect_timeout: 15,
+  transform: { undefined: null }
+});
 
 const server = createServer((request, response) => {
   if (request.url === "/health") {
@@ -82,12 +86,25 @@ server.listen(env.port, "0.0.0.0", () => {
     provider: provider.provider,
     fallback_provider: fallbackProvider.provider
   });
-  void tick();
+  scheduler.start();
+  void wakeSql.listen(
+    FLIGHT_WORKER_WAKE_CHANNEL,
+    () => {
+      logEvent("info", "flight_worker.wake_received", {});
+      scheduler.wake();
+    },
+    () => logEvent("info", "flight_worker.wake_listener_ready", {})
+  ).catch((error) => {
+    logEvent("error", "flight_worker.wake_listener_failed", {
+      error: error instanceof Error ? error.message : "Unknown error"
+    });
+  });
 });
 
 async function shutdown(): Promise<void> {
-  if (timer) clearTimeout(timer);
+  scheduler.stop();
   server.close();
+  await wakeSql.end({ timeout: 5 });
   await store.close();
   process.exit(0);
 }
