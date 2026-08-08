@@ -21,6 +21,11 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
   ]);
   const legs = brief.legs ?? [];
   const isMultiCity = brief.tripType === "multi_city";
+  const captainChose = new Set(
+    draft.state.legs.flatMap((leg, index) =>
+      !leg.departure && leg.proposedDeparture ? [index] : []
+    )
+  );
   const lines = [
     "Ready to create this trip:",
     "",
@@ -28,6 +33,9 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
     ...(isMultiCity
       ? legs.map((leg, index) =>
           `• Leg ${index + 1}: ${leg.originAirports.join("/")} → ${leg.destinationAirports.join("/")} · ${formatDateWindow(leg.departureWindow)}`
+          // A date the traveller never named is marked as Captain's, so the
+          // review is a check of the guesses rather than of the whole plan.
+          + (captainChose.has(index) ? " (my pick)" : "")
           + (leg.arriveBy ? ` · arrive by ${formatCalendarDate(leg.arriveBy)}` : "")
         )
       : [`• Depart: ${formatDateWindow(brief.departureWindow)}`]),
@@ -44,7 +52,9 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
     `• Stops: ${stopLabel(brief.maxStops)}${defaults.has("maxStops") ? " (default)" : ""}`,
     `• Currency: ${brief.currency}${defaults.has("currency") ? " (default)" : ""}`,
     "",
-    "Tap Create or Cancel below, or reply with what you’d like to change."
+    captainChose.size > 0
+      ? "I filled the dates I marked from your itinerary. Tap Create or Cancel below, or reply with what you’d like to change."
+      : "Tap Create or Cancel below, or reply with what you’d like to change."
   ];
   return lines.join("\n");
 }

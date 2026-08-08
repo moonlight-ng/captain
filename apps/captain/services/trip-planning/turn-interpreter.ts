@@ -16,6 +16,17 @@ import {
 } from "./airport-catalog.js";
 import { fallbackTripFactExtraction } from "./extractor.js";
 
+const WEEKDAYS = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday"
+] as const;
+const WEEKDAY_WORDS = WEEKDAYS.join("|");
+
 const iata = z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/u);
 const evidence = z.string().trim().min(1).max(500);
 const routeLegSchema = z.object({
@@ -382,7 +393,7 @@ function appendDateOperations(
     return;
   }
 
-  const weekday = /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/iu.exec(input.normalizedDateText);
+  const weekday = weekdayAnswer(input.normalizedDateText);
   const unresolvedLeg = input.state.legs.findIndex((leg) => !leg.departure);
   const selectedTarget = targetForRequest(
     input.request,
@@ -438,8 +449,8 @@ function appendDateOperations(
     operations.push({
       type: "set_date",
       target: selectedTarget,
-      expression: weekday[0],
-      evidence: evidenceForNormalized(input.request, weekday[0])
+      expression: weekday,
+      evidence: evidenceForNormalized(input.request, weekday)
     });
     return;
   }
@@ -525,10 +536,30 @@ function appendDateOperations(
     operations.push({
       type: "set_date",
       target: selectedTarget,
-      expression: weekday[0],
-      evidence: evidenceForNormalized(input.request, weekday[0])
+      expression: weekday,
+      evidence: evidenceForNormalized(input.request, weekday)
     });
   }
+}
+
+/**
+ * A weekday answer, carrying the direction word that anchors it.
+ *
+ * “The Sunday before” is not the same answer as a bare “Sunday”: it names the
+ * last Sunday that still lands inside the leg's travel envelope. Dropping the
+ * direction here leaves the reducer with an ambiguous weekday it has to ask
+ * about, so the word travels with the weekday to the only place that knows
+ * which leg — and which deadline — it is being read against.
+ */
+function weekdayAnswer(text: string): string | null {
+  const match = new RegExp(
+    String.raw`\b(?:(previous|preceding|following)\s+)?(${WEEKDAY_WORDS})\b(?:\s+(before|prior|after))?`,
+    "iu"
+  ).exec(text);
+  if (!match) return null;
+  const direction = (match[1] ?? match[3])?.toLowerCase();
+  if (!direction) return match[2]!;
+  return `${match[2]} ${direction === "following" || direction === "after" ? "after" : "before"}`;
 }
 
 function explicitDateRangeExpressions(request: string): string[] {
@@ -663,7 +694,7 @@ function evidenceForNormalized(request: string, normalized: string): string {
 }
 
 function normalizeWeekdayTypos(request: string): string {
-  const weekdays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const weekdays: readonly string[] = WEEKDAYS;
   return request.replace(/\b[a-z]{5,9}\b/giu, (word) => {
     const lower = word.toLowerCase();
     if (weekdays.includes(lower)) return word;

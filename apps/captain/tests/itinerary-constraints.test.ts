@@ -39,7 +39,10 @@ describe("narrative itinerary constraints", () => {
     });
   });
 
-  it("keeps an unstated origin open and separates feasible gaps from search windows", () => {
+  // The origin is still asked for — Captain cannot guess where somebody
+  // starts. Every date it can derive is composed before it asks, so the answer
+  // to that one question completes the plan.
+  it("keeps an unstated origin open and proposes a window for every dated leg", () => {
     const constraints = deterministicItineraryConstraints({
       request,
       now,
@@ -59,8 +62,15 @@ describe("narrative itinerary constraints", () => {
         destinationAirports: ["NBO"],
         departure: null,
         arriveBy: "2026-11-04",
-        feasibleDepartureWindow: null,
-        proposedDeparture: null
+        // Nothing holds the traveller anywhere before this flight, so it can
+        // leave any day from today up to the day before the wedding.
+        feasibleDepartureWindow: { start: "2026-08-08", end: "2026-11-03" },
+        proposedDeparture: {
+          kind: "window",
+          start: "2026-10-28",
+          end: "2026-11-03",
+          source: "Captain’s proposed seven-day search window"
+        }
       },
       {
         originAirports: ["NBO"],

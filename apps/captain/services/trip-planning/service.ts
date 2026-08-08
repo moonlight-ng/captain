@@ -524,10 +524,11 @@ export class TripPlanningService {
     if (draft.status === "awaiting_confirmation" && CONFIRM_PATTERN.test(request.trim())) {
       return this.confirm(userId, draft.id, draft.revision);
     }
+    // Captain's own date guesses are declinable wherever they appear, now that
+    // they are composed straight into the plan rather than asked about first.
+    // “No” to a window Captain chose means those dates, not the whole trip.
     if (
-      draft.status === "collecting"
-      && !draft.confirmationSnapshot
-      && canAcceptProposedWindows(draft.state)
+      canAcceptProposedWindows(draft.state)
       && DECLINE_PROPOSAL_PATTERN.test(request.trim())
     ) {
       return this.#prepareTurn(userId, request, sourceMessageId, draft.id, false);
@@ -658,10 +659,14 @@ function missingTripFields(state: TripDraftState, dateIssue: string | null): str
       ...(!state.legs.at(-1) || state.legs.at(-1)!.destinationAirports.length === 0
         ? ["destinationAirports"]
         : []),
+      // A leg Captain has proposed a window for is planned, not missing. The
+      // traveller reviews every leg at the confirmation and changes the ones
+      // they want; asking them to approve each guess first only delays the
+      // plan they came for.
       ...(state.legs.length < 2 || state.legs.some((leg) =>
         leg.originAirports.length === 0
         || leg.destinationAirports.length === 0
-        || leg.departure === null
+        || (leg.departure === null && leg.proposedDeparture === null)
       )
         ? ["itineraryLegs"]
         : [])
@@ -783,18 +788,8 @@ function clarificationPrompt(missingFields: string[], state: TripDraftState): st
       }
       return `When can you fly ${route}?${unresolved.arriveBy ? ` You need to arrive by ${formatCalendarDate(unresolved.arriveBy)}.` : ""}`;
     }
-    const proposals = state.legs.filter((leg) => !leg.departure && leg.proposedDeparture);
-    if (proposals.length > 0) {
-      return [
-        "The longer gaps are possible travel envelopes, not search dates. I suggest checking:",
-        ...proposals.map((leg) => {
-          const feasible = leg.feasibleDepartureWindow;
-          return `• ${formatDraftLegRoute(leg)}: ${formatDraftSelection(leg.proposedDeparture!)} suggested`
-            + (feasible ? ` within ${formatShortWindow(feasible)}` : "");
-        }),
-        "Use these seven-day search windows?"
-      ].join("\n");
-    }
+    // A leg Captain proposed a window for is never asked about: it is composed
+    // into the plan and reviewed there.
     return "What departure window should I use for the next flight leg?";
   }
   return "What should I add to the trip?";
@@ -882,10 +877,11 @@ function exactDate(
 function selectionWindow(
   leg: TripDraftState["legs"][number] | undefined
 ): { start: string; end: string } | null {
-  if (!leg?.departure) return null;
-  return leg.departure.kind === "exact"
-    ? { start: leg.departure.date, end: leg.departure.date }
-    : { start: leg.departure.start, end: leg.departure.end };
+  const selection = leg?.departure ?? leg?.proposedDeparture ?? null;
+  if (!selection) return null;
+  return selection.kind === "exact"
+    ? { start: selection.date, end: selection.date }
+    : { start: selection.start, end: selection.end };
 }
 
 function buildReceipt(

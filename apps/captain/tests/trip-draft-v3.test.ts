@@ -197,6 +197,69 @@ describe("Trip planner v3 reducer invariants", () => {
     expect(reduced.issue).toContain("Which one should I use?");
     expect(reduced.state).toEqual(state);
   });
+
+  // The same window is not ambiguous once the traveller says which end they
+  // mean. “Before” is the last Sunday that still lands in time; “after” is the
+  // first one once the window opens.
+  it.each([
+    ["Sunday before", "2026-09-27"],
+    ["Sunday after", "2026-09-06"]
+  ])("resolves “%s” against the leg's window", (expression, expected) => {
+    const state = structuredClone(populated);
+    state.tripType = "one_way";
+    state.legs = [state.legs[0]!];
+    state.legs[0]!.departure = {
+      kind: "window",
+      start: "2026-09-01",
+      end: "2026-09-30",
+      source: "September"
+    };
+    const reduced = applyTripTurnPatch({
+      state,
+      patch: {
+        intent: "continue",
+        operations: [{
+          type: "set_date",
+          target: { field: "departure" },
+          expression,
+          evidence: expression
+        }]
+      },
+      now: clock,
+      timeZone: "UTC"
+    });
+    expect(reduced.issue).toBeNull();
+    expect(reduced.state.legs[0]!.departure).toEqual({ kind: "exact", date: expected });
+  });
+
+  // “The Sunday before” survives the trip from the traveller's words to the
+  // reducer: dropping the direction on the way turned it back into a question.
+  it("keeps the direction word on a weekday answer", () => {
+    const turn = deterministicTripTurn({
+      request: "The Sunday before",
+      conversation: ["The Sunday before"],
+      state: {
+        ...structuredClone(populated),
+        legs: [{
+          originAirports: ["LOS"],
+          destinationAirports: ["NBO"],
+          departure: null,
+          arriveBy: "2026-11-04",
+          feasibleDepartureWindow: { start: "2026-08-08", end: "2026-11-03" },
+          proposedDeparture: null
+        }]
+      },
+      activeQuestion: "itineraryLegs",
+      now: clock,
+      timeZone: "UTC"
+    });
+    expect(turn.operations).toEqual([{
+      type: "set_date",
+      target: { field: "leg", legIndex: 0 },
+      expression: "Sunday before",
+      evidence: "Sunday before"
+    }]);
+  });
 });
 
 function populatedPaths(value: unknown, prefix = ""): string[] {
