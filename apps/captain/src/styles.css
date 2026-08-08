@@ -8,6 +8,7 @@
   --accent: #bed4b3;
   --radius-card: 19px;
   --type-title: 22px;
+  --type-empty-title: 17px;
   --type-body: 13px;
   --type-caption: 10px;
   --weight-regular: 400;
@@ -971,6 +972,10 @@ textarea {
   justify-content: center;
   padding: 40px 30px 92px;
   text-align: center;
+}
+.results-empty h2, .empty-hero h1, .centered h1 {
+  font-size: var(--type-empty-title);
+  letter-spacing: -.025em;
 }
 .results-empty.compact {
   min-height: 220px;
