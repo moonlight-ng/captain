@@ -139,6 +139,12 @@ export type TripPlanResult =
       status: "needs_input";
       draft: TripPlanDraft;
       prompt: string;
+      /**
+       * The same prompt as the separate turns it is really made of, when it
+       * carries more than one. A chat channel sends one message each; anything
+       * that needs a single string uses `prompt`, which is these joined.
+       */
+      promptParts?: readonly string[];
       missingFields: string[];
     }
   | {

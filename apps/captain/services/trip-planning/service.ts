@@ -236,14 +236,16 @@ export class TripPlanningService {
         stableJson(trip.brief) === stableJson(confirmationSnapshot.input.brief)
       )
     );
-    const basePrompt = !confirmationSnapshot || tripLimitReached
+    // Only the replacement prompt is more than one turn; everything else is a
+    // single message that happens to be a one-element list.
+    const basePromptParts = !confirmationSnapshot || tripLimitReached
       ? tripLimitReached
         ? replacementPrompt(activeTrips[0]!, confirmationSnapshot!)
-        : unsupportedParty
-          ? "Captain’s beta currently tracks fares for exactly one adult. Reply “just me” to continue, or cancel this trip."
-          : unsupportedCurrency
-            ? SUPPORTED_CURRENCY_MESSAGE
-            : reduced.issue ?? clarificationPrompt(missingFields, state)
+        : [unsupportedParty
+            ? "Captain’s beta currently tracks fares for exactly one adult. Reply “just me” to continue, or cancel this trip."
+            : unsupportedCurrency
+              ? SUPPORTED_CURRENCY_MESSAGE
+              : reduced.issue ?? clarificationPrompt(missingFields, state)]
       : null;
     const revised = await this.#store.reviseTripPlanDraft(
       userId,
@@ -292,7 +294,8 @@ export class TripPlanningService {
       return {
         status: "needs_input",
         draft: revised,
-        prompt: basePrompt!,
+        prompt: basePromptParts!.join("\n\n"),
+        ...(basePromptParts!.length > 1 ? { promptParts: basePromptParts! } : {}),
         missingFields
       };
     }
@@ -598,24 +601,31 @@ export class TripPlanningService {
   }
 }
 
+/**
+ * Two turns, not one: a recap of the itinerary Captain read, then the question
+ * about the trip that is already there. Bundled into a single message the
+ * question arrives buried under a dozen dated bullets, which is where it is
+ * least likely to be read and answered.
+ */
 function replacementPrompt(
   activeTrip: Trip,
   candidate: TripPlanConfirmationSnapshot
-): string {
+): string[] {
   const legs = candidate.input.brief.legs ?? [];
-  const itinerary = legs.length > 0
-    ? [
-        "I mapped the flights as:",
-        ...legs.map((leg) =>
-          `• ${leg.originAirports.join("/")} → ${leg.destinationAirports.join("/")}: `
-          + formatPlanningWindow(leg.departureWindow)
-          + (leg.arriveBy ? ` · arrive by ${formatCalendarDate(leg.arriveBy)}` : "")
-        ),
-        ""
-      ].join("\n")
-    : "";
-  return `${itinerary}You already have “${activeTrip.title}” as your active trip. Replace it with this one? `
+  const question = `You already have “${activeTrip.title}” as your active trip. Replace it with this one? `
     + "If you want to keep both, use /feedback to let us know.";
+  if (legs.length === 0) return [question];
+  return [
+    [
+      "I mapped the flights as:",
+      ...legs.map((leg) =>
+        `• ${leg.originAirports.join("/")} → ${leg.destinationAirports.join("/")}: `
+        + formatPlanningWindow(leg.departureWindow)
+        + (leg.arriveBy ? ` · arrive by ${formatCalendarDate(leg.arriveBy)}` : "")
+      )
+    ].join("\n"),
+    question
+  ];
 }
 
 function formatPlanningWindow(window: { start: string; end: string }): string {

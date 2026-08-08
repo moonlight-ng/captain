@@ -875,25 +875,30 @@ async function postTripPlanResult(
   options: { acknowledgeVoice?: boolean } = {}
 ): Promise<void> {
   const services = await getCaptainServices();
-  let message = result.status === "needs_input"
-    ? result.prompt
-    : result.status === "awaiting_confirmation"
-      ? result.confirmation
-      : result.message;
+  // A prompt the service built from more than one turn is sent as more than one
+  // message: a question bundled under a dozen dated bullets is where it is
+  // least likely to be read and answered.
+  let parts = result.status === "needs_input"
+    ? [...(result.promptParts ?? [result.prompt])]
+    : [result.status === "awaiting_confirmation" ? result.confirmation : result.message];
   if (result.status === "needs_input" && options.acknowledgeVoice) {
-    message = acknowledgeVoiceClarification(message);
+    // The voice acknowledgement belongs on the first thing Captain says, not
+    // on whichever part happens to carry the question.
+    parts[0] = acknowledgeVoiceClarification(parts[0]!);
   }
-  message = reviewCaptainMessage(message);
+  parts = parts.map(reviewCaptainMessage);
   if (result.status === "awaiting_confirmation") {
-    await postTripConfirmationOnce(ctx.telegram, userId, result.draft, message);
+    await postTripConfirmationOnce(ctx.telegram, userId, result.draft, parts[0]!);
     return;
   }
-  await services.platformStore.appendMessage(userId, "assistant", message, new Date());
-  if (result.status === "started") {
-    await postTelegramDashboardMessage(ctx, message);
-    return;
+  for (const part of parts) {
+    await services.platformStore.appendMessage(userId, "assistant", part, new Date());
+    if (result.status === "started") {
+      await postTelegramDashboardMessage(ctx, part);
+      continue;
+    }
+    await ctx.telegram.post(part);
   }
-  await ctx.telegram.post(message);
 }
 
 export function acknowledgeVoiceClarification(prompt: string): string {

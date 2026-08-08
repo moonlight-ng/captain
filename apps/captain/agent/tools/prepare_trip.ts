@@ -17,11 +17,19 @@ export default defineTool({
   }).strict(),
   async execute({ request, draftId }, ctx) {
     const services = await getCaptainServices();
-    return services.tripPlanning.prepare(
+    const result = await services.tripPlanning.prepare(
       requireCaptainUser(ctx),
       request,
       null,
       draftId
     );
+    // How a chat channel splits the prompt into messages is delivery, not
+    // planning. Handing the agent both forms of the same words invites it to
+    // return them twice, so it only ever sees `prompt`.
+    if (result.status === "needs_input" && result.promptParts) {
+      const { promptParts, ...rest } = result;
+      return rest;
+    }
+    return result;
   }
 });
