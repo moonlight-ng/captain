@@ -61,7 +61,7 @@ describe("flight worker orchestration", () => {
     expect(notifications).not.toHaveBeenCalled();
   });
 
-  it("runs one shared search and fans results out", async () => {
+  it("does not schedule a newly created manual-search trip", async () => {
     const store = new MemoryCaptainPlatformStore();
     const user = await store.ensureTelegramUser({
       telegramUserId: 1, telegramChatId: 1, username: null, firstName: "Ada", lastName: null
@@ -128,21 +128,12 @@ describe("flight worker orchestration", () => {
       { status: 200, headers: { "content-type": "application/json" } }
     )));
     const result = await worker.tick(new Date("2026-08-01T12:00:00Z"));
-    expect(result).toEqual({ scheduled: 1, processed: 1, notified: 1 });
-    expect(search).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ scheduled: 0, processed: 0, notified: 0 });
+    expect(search).toHaveBeenCalledTimes(0);
     const trip = (await store.listTrips(user.id))[0]!;
-    expect(await store.getRecommendation(user.id, trip.id)).toMatchObject({
-      snapshot: {
-        current: {
-          provider: "flysoar_mcp",
-          evidence: [{ url: "https://ba.com/flight" }]
-        }
-      }
-    });
-    expect(await store.getNotificationByTelegramMessage(user.id, 42)).toMatchObject({
-      kind: "initial_results",
-      telegramMessageId: 42
-    });
+    expect(await store.getWatch(user.id, trip.id)).toBeNull();
+    expect(await store.getRecommendation(user.id, trip.id)).toBeNull();
+    expect(await store.getNotificationByTelegramMessage(user.id, 42)).toBeNull();
     vi.unstubAllGlobals();
   });
 
@@ -267,7 +258,7 @@ describe("flight worker orchestration", () => {
     );
   });
 
-  it("keeps an empty search quiet and exposes the coverage state in the watch", async () => {
+  it("keeps a manual-search trip out of legacy empty-search processing", async () => {
     const store = new MemoryCaptainPlatformStore();
     const user = await store.ensureTelegramUser({
       telegramUserId: 3,
@@ -328,18 +319,15 @@ describe("flight worker orchestration", () => {
     )));
 
     const first = await worker.tick(new Date("2026-08-01T12:00:00Z"));
-    expect(first).toEqual({ scheduled: 1, processed: 1, notified: 0 });
+    expect(first).toEqual({ scheduled: 0, processed: 0, notified: 0 });
     expect(await store.getNotificationByTelegramMessage(user.id, 77)).toBeNull();
     const createdTrip = (await store.listTrips(user.id))[0]!;
-    expect(await store.getWatch(user.id, createdTrip.id)).toMatchObject({
-      status: "active",
-      delayReason: "No fares were found in the latest check."
-    });
+    expect(await store.getWatch(user.id, createdTrip.id)).toBeNull();
 
     const specs = buildSearchSpecs(input.brief, false);
     expect(await store.enqueueInventoryGapForSearchSpec(specs[0]!.id, new Date("2026-08-01T18:00:00Z")))
       .toBe(0);
-    expect(search).toHaveBeenCalledTimes(1);
+    expect(search).toHaveBeenCalledTimes(0);
     expect(vi.mocked(fetch).mock.calls).toHaveLength(0);
     vi.unstubAllGlobals();
   });

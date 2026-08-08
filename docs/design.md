@@ -1,11 +1,19 @@
 # Captain design catalog
 
-Source of truth for **existing** web UI: `apps/captain/src/styles.css`, mounted screens/components under `apps/captain/src/`, and stage labels from `trip-stage.ts`.
+Source of truth for **existing** web UI: `apps/captain/src/styles.css` and
+mounted screens/components under `apps/captain/src/`.
 
 This file is a **utility catalog**. Assemble new screens from live entries. Do not invent parallel cards or offer layouts.
 
-Captain tracks flight prices. It has no booking, payment, or traveller-identity
-surface, and nothing here should reintroduce one.
+The primary experience is the chronological City → Flight → City composition
+in `screens/MultiCityTrip.tsx`, its per-leg date comparison, and the public
+canonical flight page. The tracking dashboard, stage labels, price-history
+cards, and tracking controls catalogued below are legacy fallback components;
+do not use them for a trip that has `cities` and `legs`.
+
+Captain plans and manually searches flights. It has no booking, payment,
+automatic tracking, alert, or traveller-identity surface, and nothing here
+should reintroduce one.
 
 **Status tags**
 

@@ -5,6 +5,7 @@ import {
   isoDate,
   parseIsoDate,
   resolveTripDateIntent,
+  resolveTripDateSequence,
   tripDraftStateSchema,
   weekdayName,
   type TripDraftDateSelection,
@@ -124,6 +125,20 @@ function resolveDateSelection(
 ): { selection: TripDraftDateSelection } | { issue: string } {
   const firstWeek = firstWeekSelection(expression, now, timeZone);
   if (firstWeek) return { selection: firstWeek };
+
+  if (/\d\s*(?:-|–|—|to)\s*\d|\bbetween\b/iu.test(expression)) {
+    const sequence = resolveTripDateSequence(expression, now, timeZone);
+    if (!sequence.issue && sequence.dates.length >= 2) {
+      return {
+        selection: {
+          kind: "window",
+          start: sequence.dates[0]!,
+          end: sequence.dates.at(-1)!,
+          source: expression
+        }
+      };
+    }
+  }
 
   const weekday = weekdayIn(expression);
   if (weekday && current?.kind === "window") {

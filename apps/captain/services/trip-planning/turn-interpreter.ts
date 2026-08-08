@@ -393,6 +393,33 @@ function appendDateOperations(
         ? selectedTarget.legIndex
         : 0
   ];
+  const explicitWindows = explicitDateRangeExpressions(input.normalizedDateText);
+  if (
+    input.routeLegCount > 1
+    && explicitWindows.length >= input.routeLegCount
+  ) {
+    explicitWindows.slice(0, input.routeLegCount).forEach((expression, index) => {
+      operations.push({
+        type: "set_date",
+        target: { field: "leg", legIndex: index },
+        expression,
+        evidence: expression
+      });
+    });
+    return;
+  }
+  if (
+    explicitWindows[0]
+    && (input.routeLegCount === 1 || input.state.tripType === "one_way")
+  ) {
+    operations.push({
+      type: "set_date",
+      target: selectedTarget,
+      expression: explicitWindows[0],
+      evidence: explicitWindows[0]
+    });
+    return;
+  }
   if (
     weekday
     && selectedLeg?.departure?.kind === "window"
@@ -492,6 +519,23 @@ function appendDateOperations(
       evidence: evidenceForNormalized(input.request, weekday[0])
     });
   }
+}
+
+function explicitDateRangeExpressions(request: string): string[] {
+  const month = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+  const patterns = [
+    new RegExp(String.raw`\b(?:${month})\s+\d{1,2}(?:st|nd|rd|th)?\s*(?:-|–|—|to)\s*\d{1,2}(?:st|nd|rd|th)?(?:[\s,]+20\d{2})?\b`, "giu"),
+    new RegExp(String.raw`\b\d{1,2}(?:st|nd|rd|th)?\s*(?:-|–|—|to)\s*\d{1,2}(?:st|nd|rd|th)?\s+(?:${month})(?:[\s,]+20\d{2})?\b`, "giu"),
+    /\b20\d{2}-\d{2}-\d{2}\s+(?:-|–|—|to)\s+20\d{2}-\d{2}-\d{2}\b/giu
+  ];
+  const matches = patterns.flatMap((pattern) => [...request.matchAll(pattern)].map((match) => ({
+    index: match.index,
+    value: match[0]
+  })));
+  return matches
+    .sort((left, right) => left.index - right.index)
+    .filter((match, index, all) => index === 0 || match.index !== all[index - 1]!.index)
+    .map((match) => match.value);
 }
 
 function targetFor(question: TripPlannerQuestion, fallbackLeg: number): DateTarget {

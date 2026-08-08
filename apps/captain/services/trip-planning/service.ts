@@ -3,7 +3,6 @@ import {
   MAX_ACTIVE_TRIPS_PER_USER,
   SUPPORTED_CURRENCY_MESSAGE,
   addIsoDays,
-  buildSearchSpecs,
   createTripSchema,
   daysBetween,
   formatTripGoal,
@@ -28,6 +27,7 @@ import {
   formatTripPlanConfirmation
 } from "./format.js";
 import { suggestedMaxStops, suggestedTripCurrency } from "./currency.js";
+import { orderedAirportCodesFromText } from "./airport-catalog.js";
 import {
   createTripTurnInterpreter,
   type TripPlannerQuestion,
@@ -36,6 +36,8 @@ import {
 
 const CONFIRM_PATTERN = /^(?:yes|y|confirm|confirmed|create(?:\s+it)?|start(?:\s+it)?|looks?\s+good|go\s+ahead)[.! ]*$/iu;
 const CANCEL_PATTERN = /^(?:no|cancel|never\s*mind|stop)[.! ]*$/iu;
+const REPLACE_CONSENT_PATTERN = /^(?:(?:yes|y|okay|ok|sure|continue)(?:,?\s+please)?|replace(?:\s+(?:it|the\s+(?:current|existing|old)\s+trip))?)[.! ]*$/iu;
+const KEEP_BOTH_PATTERN = /\b(?:keep|want|save|have)\s+(?:them\s+)?both\b|\b(?:two|multiple)\s+(?:active\s+)?trips\b/iu;
 const NEW_DRAFT_PATTERN = /\b(?:another|a new|new|different)\s+(?:flight|trip|journey)\b/iu;
 const FRESH_TRIP_DIRECTIVE_PATTERN = /^\s*(?:(?:let(?:'|’)s|please)\s+|i\s+(?:want|need|would\s+like)\s+to\s+|(?:can|could|would)\s+you\s+)?(?:track|start|create|plan|set\s*up|find|search(?:\s+for)?)\s+(?:(?:me|us)\s+)?(?:a\s+|the\s+|my\s+)?(?:flight|trip|journey)\b/iu;
 const WHERE_PATTERN = /^(?:where|where is it|where(?:'s| is) (?:the|my) trip)[?!. ]*$/iu;
@@ -181,7 +183,7 @@ export class TripPlanningService {
     );
     const basePrompt = !confirmationSnapshot || tripLimitReached
       ? tripLimitReached
-        ? "You’re already tracking a trip. Open /trip, stop tracking it, then reply “continue” here."
+        ? replacementPrompt(activeTrips[0]!)
         : unsupportedParty
           ? "Captain’s beta currently tracks fares for exactly one adult. Reply “just me” to continue, or cancel this trip."
           : unsupportedCurrency
@@ -198,7 +200,10 @@ export class TripPlanningService {
           : "collecting",
         conversation,
         state,
-        confirmationSnapshot: tripLimitReached ? null : confirmationSnapshot,
+        // Keep the fully parsed request while waiting for replacement consent.
+        // Event language never enters this snapshot; only the inferred route
+        // and flight-date windows do.
+        confirmationSnapshot,
         sourceMessageIds
       },
       now
@@ -237,14 +242,13 @@ export class TripPlanningService {
     const now = this.#now();
     const draft = await this.#store.getTripPlanDraft(userId, draftId, now);
     if (!draft?.confirmationSnapshot) throw new Error("Trip draft is incomplete or expired");
-    const specs = buildSearchSpecs(draft.confirmationSnapshot.input.brief);
     let confirmed;
     try {
       confirmed = await this.#store.confirmTripPlanDraft(
         userId,
         draftId,
         expectedRevision,
-        specs,
+        [],
         now
       );
     } catch (error) {
@@ -268,8 +272,7 @@ export class TripPlanningService {
       event: "captain.trip_plan_confirmed",
       draft_id: confirmed.draft.id,
       trip_id: receipt.tripId,
-      created: receipt.created,
-      search_combinations: specs.length
+      created: receipt.created
     }));
     return {
       status: "started",
@@ -427,6 +430,23 @@ export class TripPlanningService {
   ): Promise<TripPlanResult | null> {
     const draft = await this.findOpen(userId);
     if (!draft) return null;
+    if (draft.status === "collecting" && draft.confirmationSnapshot) {
+      if (KEEP_BOTH_PATTERN.test(request)) {
+        return {
+          status: "needs_input",
+          draft,
+          prompt: "Captain currently supports one active trip. If keeping both would be useful, send that through /feedback. Your current trip is unchanged.",
+          missingFields: []
+        };
+      }
+      if (REPLACE_CONSENT_PATTERN.test(request.trim())) {
+        const activeTrip = await this.#store.getActiveTrip(userId);
+        if (activeTrip) {
+          await this.#store.archiveTripForReplacement(userId, activeTrip.id, this.#now());
+        }
+        return this.#prepareTurn(userId, request, sourceMessageId, draft.id, false);
+      }
+    }
     if (draft.status === "awaiting_confirmation" && CONFIRM_PATTERN.test(request.trim())) {
       return this.confirm(userId, draft.id, draft.revision);
     }
@@ -446,11 +466,16 @@ export class TripPlanningService {
   static isTripPlanningRequest(text: string): boolean {
     const normalized = text.trim();
     if (!normalized) return false;
+    const orderedPlaces = orderedAirportCodesFromText(normalized);
     const travel = /\b(?:flight|flights|trip|travel|fly|flying|journey|itinerar(?:y|ies)|holiday|vacation|visit)\b/iu.test(normalized);
     const action = /\b(?:plan|start|create|set\s*up|track|search|find|book|want|need|compare|options?|best|cheapest|help|figure|work\s+out)\b/iu.test(normalized);
     const bareDatedRoute = BARE_ROUTE_PATTERN.test(normalized)
+      && orderedPlaces.length >= 2
       && TRAVEL_DATE_PATTERN.test(normalized);
-    return (travel && action) || bareDatedRoute;
+    const contextualMultiCityPlan = orderedPlaces.length >= 3
+      && TRAVEL_DATE_PATTERN.test(normalized)
+      && (action || /\b(?:be|stay|spend|going)\s+(?:in|to)\b/iu.test(normalized));
+    return (travel && action) || bareDatedRoute || contextualMultiCityPlan;
   }
 
   /**
@@ -461,12 +486,22 @@ export class TripPlanningService {
   static needsItineraryPlanningConversation(text: string): boolean {
     const normalized = text.trim();
     return normalized.length > 0
-      && EXPLORATORY_DATE_PLANNING_PATTERNS.some((pattern) => pattern.test(normalized));
+      && (
+        EXPLORATORY_DATE_PLANNING_PATTERNS.some((pattern) => pattern.test(normalized))
+        || orderedAirportCodesFromText(normalized).length >= 3
+        || /\b(?:wedding|birthday|christmas|conference|meeting|event)\b/iu.test(normalized)
+        || [...normalized.matchAll(/\b(?:from\s+)?(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)?\s*\d{1,2}\s*[-–]\s*\d{1,2}\b/giu)].length >= 2
+      );
   }
 
   static isWhereQuestion(text: string): boolean {
     return WHERE_PATTERN.test(text.trim());
   }
+}
+
+function replacementPrompt(activeTrip: Trip): string {
+  return `You already have “${activeTrip.title}” as your active trip. Replace it with this one? `
+    + "If you want to keep both, use /feedback to let us know.";
 }
 
 function missingTripFields(state: TripDraftState, dateIssue: string | null): string[] {
@@ -482,7 +517,7 @@ function missingTripFields(state: TripDraftState, dateIssue: string | null): str
       ...(state.legs.length < 2 || state.legs.some((leg) =>
         leg.originAirports.length === 0
         || leg.destinationAirports.length === 0
-        || leg.departure?.kind !== "exact"
+        || leg.departure === null
       )
         ? ["itineraryLegs"]
         : [])
@@ -491,7 +526,15 @@ function missingTripFields(state: TripDraftState, dateIssue: string | null): str
     missing = [
       ...(!first || first.originAirports.length === 0 ? ["originAirports"] : []),
       ...(!first || first.destinationAirports.length === 0 ? ["destinationAirports"] : []),
-      ...(first?.departure?.kind !== "exact" ? ["departureDate"] : []),
+      ...(
+        tripType === "round_trip"
+          ? first?.departure?.kind !== "exact"
+            ? ["departureDate"]
+            : []
+          : !first?.departure
+            ? ["departureDate"]
+            : []
+      ),
       ...(tripType === "round_trip" && state.legs.at(-1)?.departure?.kind !== "exact"
         ? ["returnDate"]
         : [])
@@ -508,7 +551,8 @@ function completePlan(
   const first = state.legs[0];
   const last = state.legs.at(-1);
   const tripType = effectiveTripType(state);
-  const departureDate = exactDate(first);
+  const departureWindow = selectionWindow(first);
+  const departureDate = departureWindow?.start ?? null;
   const returnDate = tripType === "round_trip" ? exactDate(last) : null;
   if (!first || !last || !departureDate || (tripType === "round_trip" && !returnDate)) {
     throw new Error("Cannot complete a trip with unresolved fields");
@@ -533,7 +577,7 @@ function completePlan(
         ? last.destinationAirports
         : first.destinationAirports,
       tripType,
-      departureWindow: { start: departureDate, end: departureDate },
+      departureWindow,
       stayNights: stayNights
         ? { minimum: stayNights, preferred: stayNights, maximum: stayNights }
         : null,
@@ -541,10 +585,7 @@ function completePlan(
         ? state.legs.map((leg) => ({
             originAirports: leg.originAirports,
             destinationAirports: leg.destinationAirports,
-            departureWindow: {
-              start: exactDate(leg)!,
-              end: exactDate(leg)!
-            }
+            departureWindow: selectionWindow(leg)!
           }))
         : undefined,
       travellers,
@@ -604,6 +645,15 @@ function exactDate(
   leg: TripDraftState["legs"][number] | undefined
 ): string | null {
   return leg?.departure?.kind === "exact" ? leg.departure.date : null;
+}
+
+function selectionWindow(
+  leg: TripDraftState["legs"][number] | undefined
+): { start: string; end: string } | null {
+  if (!leg?.departure) return null;
+  return leg.departure.kind === "exact"
+    ? { start: leg.departure.date, end: leg.departure.date }
+    : { start: leg.departure.start, end: leg.departure.end };
 }
 
 function buildReceipt(

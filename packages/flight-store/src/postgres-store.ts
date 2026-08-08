@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import {
   DEFAULT_PROFILE,
+  cityLabelForAirportCodes,
   formatTripGoal,
+  legSearchSnapshotSchema,
+  MAX_MANUAL_SEARCH_DAYS,
   MAX_ACTIVE_TRIPS_PER_USER,
   TripLimitError,
   TripNotFoundError,
@@ -11,13 +14,21 @@ import {
   tripPlanConfirmationSnapshotSchema,
   tripDraftStateSchema,
   type CaptainSessionPath,
+  type CanonicalFlight,
   type CreateTripInput,
+  type FlightOfferSnapshot,
   type FlightSearchProviderId,
+  type LegSearchSnapshot,
+  type LegSearchSnapshotRevision,
   type OfferSnapshot,
   type SearchSpec,
   type Trip,
   type TripAction,
+  type TripBrief,
+  type TripCity,
+  type TripCityLeg,
   type TripCreationResult,
+  type TripGraph,
   type TripPlanDraft,
   type TripPlanDraftRevision,
   type TripStatus,
@@ -56,10 +67,8 @@ import {
   PRICE_HISTORY_RETENTION_MS,
   retainSearchOffers,
   TRACKING_SEARCH_SPEC_LIMIT,
-  trackingRunEndsAt,
   TRACKING_CHECK_INTERVAL_MS
 } from "./watch-policy.js";
-import { signalFlightWorker } from "./worker-wake.js";
 
 function truncateErrorDetail(detail: string | null | undefined): string | null {
   if (!detail) return null;
@@ -481,6 +490,39 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     `;
   }
 
+  async archiveTripForReplacement(userId: string, tripId: string, now: Date): Promise<Trip> {
+    return this.#sql.begin(async (tx) => {
+      const rows = await tx<TripRow[]>`
+        update captain.trips set
+          status = 'archived',
+          version = version + 1,
+          archived_at = ${now},
+          archive_reason = 'replaced',
+          updated_at = ${now}
+        where id = ${tripId} and user_id = ${userId}
+        returning *
+      `;
+      if (!rows[0]) throw new TripNotFoundError();
+      await tx`
+        update captain.watches set
+          status = 'completed',
+          next_check_at = null,
+          completed_at = coalesce(completed_at, ${now}),
+          updated_at = ${now}
+        where trip_id = ${tripId}
+      `;
+      await tx`
+        update captain.conversations set active_trip_id = null, updated_at = ${now}
+        where user_id = ${userId} and active_trip_id = ${tripId}
+      `;
+      await tx`
+        insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
+        values (${randomUUID()}, ${tripId}, ${userId}, 'trip_replaced', '{}'::jsonb, ${now})
+      `;
+      return toTrip(rows[0]);
+    });
+  }
+
   async listTrips(userId: string): Promise<Trip[]> {
     const rows = await this.#sql<TripRow[]>`
       select * from captain.trips where user_id = ${userId} order by updated_at desc
@@ -517,6 +559,225 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     return rows[0] ? toTrip(rows[0]) : null;
   }
 
+  async getTripGraph(userId: string, tripId: string): Promise<TripGraph> {
+    if (!await this.getTrip(userId, tripId)) throw new TripNotFoundError();
+    const [cities, legs] = await Promise.all([
+      this.#sql<TripCityRow[]>`
+        select city.* from captain.trip_cities city
+        join captain.trips trip on trip.id = city.trip_id
+        where city.trip_id = ${tripId} and trip.user_id = ${userId}
+        order by city.position
+      `,
+      this.#sql<TripCityLegRow[]>`
+        select leg.* from captain.trip_legs leg
+        join captain.trips trip on trip.id = leg.trip_id
+        where leg.trip_id = ${tripId} and trip.user_id = ${userId}
+        order by leg.position
+      `
+    ]);
+    return { cities: cities.map(toTripCity), legs: legs.map(toTripCityLeg) };
+  }
+
+  async getTripLeg(
+    userId: string,
+    tripId: string,
+    legId: string
+  ): Promise<TripCityLeg | null> {
+    const rows = await this.#sql<TripCityLegRow[]>`
+      select leg.* from captain.trip_legs leg
+      join captain.trips trip on trip.id = leg.trip_id
+      where leg.id = ${legId} and leg.trip_id = ${tripId} and trip.user_id = ${userId}
+    `;
+    return rows[0] ? toTripCityLeg(rows[0]) : null;
+  }
+
+  async createLegSearchSnapshot(
+    userId: string,
+    tripId: string,
+    legId: string,
+    requestedWindow: { start: string; end: string },
+    datesRequested: string[],
+    now: Date
+  ): Promise<LegSearchSnapshot> {
+    return this.#sql.begin(async (tx) => {
+      const legs = await tx<TripCityLegRow[]>`
+        select leg.* from captain.trip_legs leg
+        join captain.trips trip on trip.id = leg.trip_id
+        where leg.id = ${legId} and leg.trip_id = ${tripId} and trip.user_id = ${userId}
+        for update of leg
+      `;
+      if (!legs[0]) throw new TripNotFoundError();
+      assertLegSearchRequest(toTripCityLeg(legs[0]), requestedWindow, datesRequested);
+      const id = randomUUID();
+      const analysis: LegSearchSnapshot["analysis"] = {
+        complete: false,
+        datesRequested,
+        datesCompleted: [],
+        failedDates: [],
+        optionsChecked: 0,
+        cheapest: null,
+        fastest: null,
+        balanced: null,
+        cheapestByDate: [],
+        observedAt: null
+      };
+      const rows = await tx<LegSearchSnapshotRow[]>`
+        insert into captain.leg_search_snapshots (
+          id, trip_id, leg_id, revision, status,
+          requested_start, requested_end, analysis, flights, offers,
+          created_at, updated_at, completed_at
+        ) values (
+          ${id}, ${tripId}, ${legId}, 1, 'queued',
+          ${requestedWindow.start}, ${requestedWindow.end},
+          ${tx.json(json(analysis))}, ${tx.json([])}, ${tx.json([])},
+          ${now}, ${now}, null
+        )
+        returning *
+      `;
+      await tx`
+        update captain.trip_legs set latest_search_id = ${id}, updated_at = ${now}
+        where id = ${legId}
+      `;
+      return toLegSearchSnapshot(rows[0]!);
+    });
+  }
+
+  async reviseLegSearchSnapshot(
+    userId: string,
+    searchId: string,
+    expectedRevision: number,
+    revision: LegSearchSnapshotRevision,
+    now: Date
+  ): Promise<LegSearchSnapshot | null> {
+    assertLegSearchRevision(revision);
+    const rows = await this.#sql<LegSearchSnapshotRow[]>`
+      update captain.leg_search_snapshots snapshot set
+        revision = snapshot.revision + 1,
+        status = ${revision.status},
+        analysis = ${this.#sql.json(json(revision.analysis))},
+        flights = ${this.#sql.json(json(revision.flights))},
+        offers = ${this.#sql.json(json(revision.offers))},
+        completed_at = ${revision.completedAt ? new Date(revision.completedAt) : null},
+        updated_at = ${now}
+      from captain.trips trip
+      where snapshot.id = ${searchId}
+        and snapshot.revision = ${expectedRevision}
+        and trip.id = snapshot.trip_id
+        and trip.user_id = ${userId}
+      returning snapshot.*
+    `;
+    return rows[0] ? toLegSearchSnapshot(rows[0]) : null;
+  }
+
+  async getLegSearchSnapshot(
+    userId: string,
+    searchId: string
+  ): Promise<LegSearchSnapshot | null> {
+    const rows = await this.#sql<LegSearchSnapshotRow[]>`
+      select snapshot.* from captain.leg_search_snapshots snapshot
+      join captain.trips trip on trip.id = snapshot.trip_id
+      where snapshot.id = ${searchId} and trip.user_id = ${userId}
+    `;
+    return rows[0] ? toLegSearchSnapshot(rows[0]) : null;
+  }
+
+  async getLatestLegSearchSnapshot(
+    userId: string,
+    tripId: string,
+    legId: string
+  ): Promise<LegSearchSnapshot | null> {
+    const rows = await this.#sql<LegSearchSnapshotRow[]>`
+      select snapshot.* from captain.trip_legs leg
+      join captain.trips trip on trip.id = leg.trip_id
+      join captain.leg_search_snapshots snapshot on snapshot.id = leg.latest_search_id
+      where leg.id = ${legId} and leg.trip_id = ${tripId} and trip.user_id = ${userId}
+    `;
+    return rows[0] ? toLegSearchSnapshot(rows[0]) : null;
+  }
+
+  async setTripLegFlight(
+    userId: string,
+    tripId: string,
+    legId: string,
+    flightKey: string | null,
+    now: Date
+  ): Promise<TripCityLeg> {
+    return this.#sql.begin(async (tx) => {
+      const trips = await tx<TripRow[]>`
+        select * from captain.trips
+        where id = ${tripId} and user_id = ${userId}
+        for update
+      `;
+      if (!trips[0]) throw new TripNotFoundError();
+      const legs = await tx<TripCityLegRow[]>`
+        select * from captain.trip_legs
+        where id = ${legId} and trip_id = ${tripId}
+        for update
+      `;
+      if (!legs[0]) throw new TripNotFoundError();
+      if (flightKey) {
+        const matching = await tx<Array<{ present: boolean }>>`
+          select exists (
+            select 1
+            from captain.leg_search_snapshots snapshot,
+              jsonb_array_elements(snapshot.flights) flight
+            where snapshot.trip_id = ${tripId}
+              and snapshot.leg_id = ${legId}
+              and flight ->> 'key' = ${flightKey}
+          ) as present
+        `;
+        if (matching[0]?.present !== true) throw new Error("Flight not found for Trip leg");
+      }
+      const updated = await tx<TripCityLegRow[]>`
+        update captain.trip_legs set selected_flight_key = ${flightKey}, updated_at = ${now}
+        where id = ${legId}
+        returning *
+      `;
+      await tx`
+        update captain.trips set version = version + 1, updated_at = ${now}
+        where id = ${tripId}
+      `;
+      await tx`
+        insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
+        values (
+          ${randomUUID()}, ${tripId}, ${userId}, 'trip_leg_flight_selected',
+          ${tx.json(json({ legId, flightKey }))}, ${now}
+        )
+      `;
+      return toTripCityLeg(updated[0]!);
+    });
+  }
+
+  async getCanonicalFlight(
+    flightKey: string,
+    now: Date
+  ): Promise<{ flight: CanonicalFlight; offers: FlightOfferSnapshot[] } | null> {
+    const flights = await this.#sql<Array<{ flight: CanonicalFlight }>>`
+      select flight as flight
+      from captain.leg_search_snapshots snapshot,
+        jsonb_array_elements(snapshot.flights) flight
+      where flight ->> 'key' = ${flightKey}
+      order by snapshot.updated_at desc
+      limit 1
+    `;
+    if (!flights[0]) return null;
+    const offers = await this.#sql<Array<{ offer: FlightOfferSnapshot }>>`
+      select offer as offer
+      from captain.leg_search_snapshots snapshot,
+        jsonb_array_elements(snapshot.offers) offer
+      where offer ->> 'flightKey' = ${flightKey}
+        and (
+          offer ->> 'expiresAt' is null
+          or (offer ->> 'expiresAt')::timestamptz > ${now}
+        )
+      order by snapshot.updated_at desc
+    `;
+    return {
+      flight: flights[0].flight,
+      offers: dedupeFlightOffers(offers.map((row) => row.offer))
+    };
+  }
+
   async getWatch(userId: string, tripId: string): Promise<Watch | null> {
     const rows = await this.#sql<WatchRow[]>`
       select watch.* from captain.watches watch
@@ -527,20 +788,10 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
   }
 
   async createTrip(userId: string, input: CreateTripInput, specs: SearchSpec[], now: Date): Promise<TripCreationResult> {
-    const created = await this.#sql.begin(async (tx) => {
+    return this.#sql.begin(async (tx) => {
       await tx`select pg_advisory_xact_lock(hashtext(${userId}))`;
       return createTripInTransaction(tx, userId, input, specs, now);
     });
-    for (const specId of new Set(specs.map((spec) => spec.id))) {
-      await this.evaluateTripsForSearchSpec(specId, now);
-      const recommendation = await this.getRecommendation(userId, created.trip.id);
-      if (recommendation) await this.finalizeFarFutureBaseline(specId, now);
-    }
-    return {
-      ...created,
-      trip: await this.getTrip(userId, created.trip.id) ?? created.trip,
-      watch: await this.getWatch(userId, created.trip.id) ?? created.watch
-    };
   }
 
   async updateTripBrief(
@@ -565,34 +816,23 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       const updated = await tx<TripRow[]>`
         update captain.trips set
           brief = ${tx.json(json(input.brief))},
-          status = 'tracking',
+          status = 'draft',
           version = version + 1,
           updated_at = ${now}
         where id = ${tripId}
         returning *
       `;
-      const watches = await tx<Array<{ id: string }>>`
+      await tx`
         update captain.watches set
-          status = 'active',
-          run_started_at = ${now},
-          run_ends_at = ${trackingRunEndsAt(now, input.brief.departureWindow.start)},
-          completed_at = null,
-          checks_completed = 0,
-          next_check_at = ${now},
-          tracking_starts_at = null,
-          baseline_completed_at = null,
-          activated_at = ${now},
+          status = 'completed',
+          completed_at = coalesce(completed_at, ${now}),
+          next_check_at = null,
           last_user_activity_at = ${now},
-          price_rise_itinerary_key = null,
-          price_rise_armed = true,
-          delayed_at = null,
-          delay_reason = null,
           updated_at = ${now}
         where trip_id = ${tripId}
-        returning id
       `;
-      if (!watches[0]) throw new Error("Trip Watch not found");
-      await syncSpecs(tx, watches[0].id, specs, now);
+      await tx`delete from captain.trip_cities where trip_id = ${tripId}`;
+      await insertTripGraph(tx, materializeTripGraph(tripId, input.brief), now);
       await tx`delete from captain.trip_recommendations where trip_id = ${tripId}`;
       await tx`
         insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
@@ -601,7 +841,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           ${tx.json(json(input.brief))}, ${now}
         )
       `;
-      await signalFlightWorker(tx);
+      void specs;
       return toTrip(updated[0]!);
     });
   }
@@ -744,10 +984,14 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         const watches = trips[0]
           ? await tx<WatchRow[]>`select * from captain.watches where trip_id = ${current.tripId}`
           : [];
-        return trips[0] && watches[0]
+        return trips[0]
           ? {
               draft: current,
-              result: { trip: toTrip(trips[0]), watch: toWatch(watches[0]), created: false }
+              result: {
+                trip: toTrip(trips[0]),
+                watch: watches[0] ? toWatch(watches[0]) : null,
+                created: false
+              }
             }
           : null;
       }
@@ -786,19 +1030,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       return { draft: toTripPlanDraft(startedRows[0]!), result };
     });
     if (!confirmed) return null;
-    for (const specId of new Set(specs.map((spec) => spec.id))) {
-      await this.evaluateTripsForSearchSpec(specId, now);
-      const recommendation = await this.getRecommendation(userId, confirmed.result.trip.id);
-      if (recommendation) await this.finalizeFarFutureBaseline(specId, now);
-    }
-    return {
-      draft: confirmed.draft,
-      result: {
-        ...confirmed.result,
-        trip: await this.getTrip(userId, confirmed.result.trip.id) ?? confirmed.result.trip,
-        watch: await this.getWatch(userId, confirmed.result.trip.id) ?? confirmed.result.watch
-      }
-    };
+    return confirmed;
   }
 
   async applyTripAction(userId: string, tripId: string, action: TripAction, now: Date): Promise<Trip> {
@@ -815,32 +1047,10 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       await tx<WatchRow[]>`
         select * from captain.watches where trip_id = ${tripId} for update
       `;
-      const watchStatus = status === "paused"
-        ? "paused"
-        : ["cancelled", "completed"].includes(status)
-          ? "completed"
-          : "active";
-      const departureStart = (current.brief as { departureWindow?: { start?: string } })
-        .departureWindow?.start ?? "";
       await tx`
-        update captain.watches set status = ${watchStatus},
-          run_started_at = case when ${action.type} = 'track' then ${now} else run_started_at end,
-          run_ends_at = case
-            when ${action.type} = 'track' then ${trackingRunEndsAt(now, departureStart)}
-            else run_ends_at
-          end,
-          completed_at = case when ${action.type} = 'track' then null else completed_at end,
-          checks_completed = case when ${action.type} = 'track' then 0 else checks_completed end,
-          next_check_at = case
-            when ${action.type} = 'track' then ${now}
-            when ${action.type} = 'refresh' then ${now}
-            when ${action.type} = 'resume' then ${now}
-            else next_check_at
-          end,
-          activated_at = case when ${action.type} = 'track' then ${now} else activated_at end,
-          delayed_at = case when ${action.type} = 'track' then null else delayed_at end,
-          delay_reason = case when ${action.type} = 'track' then null else delay_reason end,
-          last_manual_refresh_at = case when ${action.type} = 'refresh' then ${now} else last_manual_refresh_at end,
+        update captain.watches set status = 'completed',
+          completed_at = coalesce(completed_at, ${now}),
+          next_check_at = null,
           last_user_activity_at = ${now},
           updated_at = ${now}
         where trip_id = ${tripId}
@@ -849,9 +1059,6 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
         values (${randomUUID()}, ${tripId}, ${userId}, ${`trip_${action.type}`}, ${tx.json(json(action))}, ${now})
       `;
-      if (["resume", "refresh", "track"].includes(action.type)) {
-        await signalFlightWorker(tx);
-      }
       return toTrip(updated[0]!);
     });
   }
@@ -1018,16 +1225,15 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
 
   async markTripActivity(userId: string, tripId: string, now: Date): Promise<void> {
     const rows = await this.#sql<Array<{ id: string }>>`
-      update captain.watches watch set
-        last_user_activity_at = ${now},
-        updated_at = ${now}
-      from captain.trips trip
-      where watch.trip_id = trip.id
-        and trip.id = ${tripId}
-        and trip.user_id = ${userId}
-      returning watch.id
+      update captain.trips set updated_at = ${now}
+      where id = ${tripId} and user_id = ${userId}
+      returning id
     `;
     if (!rows[0]) throw new TripNotFoundError();
+    await this.#sql`
+      update captain.watches set last_user_activity_at = ${now}, updated_at = ${now}
+      where trip_id = ${tripId}
+    `;
   }
 
   async hasDueWorkerWork(now: Date): Promise<boolean> {
@@ -1883,23 +2089,6 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
 
 }
 
-async function syncSpecs(sql: Sql, watchId: string, specs: SearchSpec[], now: Date): Promise<void> {
-  for (const spec of specs) {
-    await sql`
-      insert into captain.search_specs (id, spec_key, provider, request, created_at, updated_at)
-      values (${spec.id}, ${spec.key}, ${spec.request.provider}, ${sql.json(json(spec.request))}, ${now}, ${now})
-      on conflict (id) do update set request = excluded.request, updated_at = excluded.updated_at
-    `;
-  }
-  await sql`delete from captain.watch_search_specs where watch_id = ${watchId}`;
-  for (const spec of specs) {
-    await sql`
-      insert into captain.watch_search_specs (watch_id, search_spec_id, created_at)
-      values (${watchId}, ${spec.id}, ${now}) on conflict do nothing
-    `;
-  }
-}
-
 async function createTripInTransaction(
   sql: Sql,
   userId: string,
@@ -1918,12 +2107,15 @@ async function createTripInTransaction(
     const watches = await sql<WatchRow[]>`
       select * from captain.watches where trip_id = ${duplicates[0].id}
     `;
-    if (!watches[0]) throw new Error("Trip Watch not found");
     await sql`
       update captain.conversations set active_trip_id = ${duplicates[0].id}, updated_at = ${now}
       where user_id = ${userId}
     `;
-    return { trip: toTrip(duplicates[0]), watch: toWatch(watches[0]), created: false };
+    return {
+      trip: toTrip(duplicates[0]),
+      watch: watches[0] ? toWatch(watches[0]) : null,
+      created: false
+    };
   }
   const activeCounts = await sql<Array<{ count: string }>>`
     select count(*)::text as count
@@ -1935,30 +2127,15 @@ async function createTripInTransaction(
     throw new TripLimitError();
   }
   const tripId = randomUUID();
-  const watchId = randomUUID();
-  const runEndsAt = trackingRunEndsAt(now, input.brief.departureWindow.start);
   await sql`
     insert into captain.trips (
       id, user_id, title, status, version, brief, created_at, updated_at
     ) values (
-      ${tripId}, ${userId}, ${input.title}, 'tracking', 1,
+      ${tripId}, ${userId}, ${input.title}, 'draft', 1,
       ${sql.json(json(input.brief))}, ${now}, ${now}
     )
   `;
-  await sql`
-    insert into captain.watches (
-      id, trip_id, status,
-      run_started_at, run_ends_at, checks_completed, next_check_at,
-      tracking_starts_at, activated_at, last_user_activity_at,
-      created_at, updated_at
-    ) values (
-      ${watchId}, ${tripId}, 'active',
-      ${now}, ${runEndsAt}, 0, ${now},
-      null, ${now}, ${now},
-      ${now}, ${now}
-    )
-  `;
-  await syncSpecs(sql, watchId, specs, now);
+  await insertTripGraph(sql, materializeTripGraph(tripId, input.brief), now);
   await sql`
     insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
     values (${randomUUID()}, ${tripId}, ${userId}, 'trip_created', ${sql.json(json(input))}, ${now})
@@ -1967,13 +2144,13 @@ async function createTripInTransaction(
     update captain.conversations set active_trip_id = ${tripId}, updated_at = ${now}
     where user_id = ${userId}
   `;
-  await signalFlightWorker(sql);
+  void specs;
   return {
     trip: {
       id: tripId,
       userId,
       title: input.title,
-      status: "tracking",
+      status: "draft",
       version: 1,
       brief: input.brief,
       archivedAt: null,
@@ -1981,30 +2158,110 @@ async function createTripInTransaction(
       createdAt: now.toISOString(),
       updatedAt: now.toISOString()
     },
-    watch: {
-      id: watchId,
-      tripId,
-      status: "active",
-      runStartedAt: now.toISOString(),
-      runEndsAt: runEndsAt.toISOString(),
-      completedAt: null,
-      checksCompleted: 0,
-      nextCheckAt: now.toISOString(),
-      lastCheckAt: null,
-      lastManualRefreshAt: null,
-      trackingStartsAt: null,
-      baselineCompletedAt: null,
-      activatedAt: now.toISOString(),
-      lastUserActivityAt: now.toISOString(),
-      priceRiseItineraryKey: null,
-      priceRiseArmed: true,
-      delayedAt: null,
-      delayReason: null,
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString()
-    },
+    watch: null,
     created: true
   };
+}
+
+async function insertTripGraph(sql: Sql, graph: TripGraph, now: Date): Promise<void> {
+  for (const city of graph.cities) {
+    await sql`
+      insert into captain.trip_cities (
+        id, trip_id, position, label, airport_codes,
+        arrival_start, arrival_end, departure_start, departure_end,
+        created_at, updated_at
+      ) values (
+        ${city.id}, ${city.tripId}, ${city.position}, ${city.label},
+        ${sql.json(json(city.airportCodes))},
+        ${city.arrivalWindow?.start ?? null}, ${city.arrivalWindow?.end ?? null},
+        ${city.departureWindow?.start ?? null}, ${city.departureWindow?.end ?? null},
+        ${now}, ${now}
+      )
+    `;
+  }
+  for (const leg of graph.legs) {
+    await sql`
+      insert into captain.trip_legs (
+        id, trip_id, position, origin_city_id, destination_city_id,
+        departure_start, departure_end, arrive_by,
+        selected_flight_key, latest_search_id, created_at, updated_at
+      ) values (
+        ${leg.id}, ${leg.tripId}, ${leg.position}, ${leg.originCityId},
+        ${leg.destinationCityId}, ${leg.departureWindow.start},
+        ${leg.departureWindow.end}, ${leg.arriveBy}, ${leg.selectedFlightKey},
+        ${leg.latestSearchId}, ${now}, ${now}
+      )
+    `;
+  }
+}
+
+function materializeTripGraph(tripId: string, brief: TripBrief): TripGraph {
+  const routeLegs = legacyRouteLegs(brief);
+  const cities: TripCity[] = routeLegs.map((leg, position) => ({
+    id: randomUUID(),
+    tripId,
+    position,
+    label: cityLabelForAirportCodes(leg.originAirports),
+    airportCodes: [...leg.originAirports],
+    arrivalWindow: position === 0
+      ? null
+      : { ...routeLegs[position - 1]!.departureWindow },
+    departureWindow: { ...leg.departureWindow }
+  }));
+  const finalLeg = routeLegs.at(-1);
+  if (finalLeg) {
+    cities.push({
+      id: randomUUID(),
+      tripId,
+      position: routeLegs.length,
+      label: cityLabelForAirportCodes(finalLeg.destinationAirports),
+      airportCodes: [...finalLeg.destinationAirports],
+      arrivalWindow: { ...finalLeg.departureWindow },
+      departureWindow: null
+    });
+  }
+  const legs: TripCityLeg[] = routeLegs.map((leg, position) => ({
+    id: randomUUID(),
+    tripId,
+    position,
+    originCityId: cities[position]!.id,
+    destinationCityId: cities[position + 1]!.id,
+    departureWindow: { ...leg.departureWindow },
+    arriveBy: null,
+    selectedFlightKey: null,
+    latestSearchId: null
+  }));
+  return { cities, legs };
+}
+
+function legacyRouteLegs(brief: TripBrief): Array<{
+  originAirports: string[];
+  destinationAirports: string[];
+  departureWindow: { start: string; end: string };
+}> {
+  if (brief.tripType === "multi_city" && brief.legs?.length) {
+    return structuredClone(brief.legs);
+  }
+  const outbound = {
+    originAirports: [...brief.originAirports],
+    destinationAirports: [...brief.destinationAirports],
+    departureWindow: { ...brief.departureWindow }
+  };
+  if (brief.tripType !== "round_trip" || !brief.stayNights) return [outbound];
+  return [outbound, {
+    originAirports: [...brief.destinationAirports],
+    destinationAirports: [...brief.originAirports],
+    departureWindow: {
+      start: addUtcDays(brief.departureWindow.start, brief.stayNights.minimum),
+      end: addUtcDays(brief.departureWindow.end, brief.stayNights.maximum)
+    }
+  }];
+}
+
+function addUtcDays(date: string, days: number): string {
+  return new Date(Date.parse(`${date}T00:00:00.000Z`) + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
 }
 
 async function expireTripPlanDrafts(sql: Sql, userId: string, now: Date): Promise<void> {
@@ -2107,7 +2364,7 @@ function localParts(now: Date, timezone: string): { date: string; hour: number }
 
 function actionStatus(action: TripAction["type"], current: TripStatus): TripStatus {
   if (action === "pause") return "paused";
-  if (["resume", "refresh", "track"].includes(action)) return "tracking";
+  if (["resume", "refresh", "track"].includes(action)) return "draft";
   if (action === "cancel") return "cancelled";
   if (action === "complete") return "completed";
   return current;
@@ -2126,6 +2383,27 @@ type TripRow = {
   id: string; user_id: string; title: string; status: TripStatus;
   version: number; brief: Trip["brief"]; archived_at: Date | null;
   archive_reason: Trip["archiveReason"]; created_at: Date; updated_at: Date;
+};
+type TripCityRow = {
+  id: string; trip_id: string; position: number; label: string; airport_codes: string[];
+  arrival_start: Date | string | null; arrival_end: Date | string | null;
+  departure_start: Date | string | null; departure_end: Date | string | null;
+};
+type TripCityLegRow = {
+  id: string; trip_id: string; position: number;
+  origin_city_id: string; destination_city_id: string;
+  departure_start: Date | string; departure_end: Date | string;
+  arrive_by: Date | string | null;
+  selected_flight_key: string | null; latest_search_id: string | null;
+};
+type LegSearchSnapshotRow = {
+  id: string; trip_id: string; leg_id: string; revision: number;
+  status: LegSearchSnapshot["status"];
+  requested_start: Date | string; requested_end: Date | string;
+  analysis: LegSearchSnapshot["analysis"];
+  flights: LegSearchSnapshot["flights"];
+  offers: LegSearchSnapshot["offers"];
+  created_at: Date | string; updated_at: Date | string; completed_at: Date | string | null;
 };
 type OfferRow = {
   id: string; search_run_id: string; search_spec_id: string; itinerary_key: string;
@@ -2215,6 +2493,59 @@ function toTrip(row: TripRow): Trip {
     archivedAt: row.archived_at ? iso(row.archived_at) : null,
     archiveReason: row.archive_reason,
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
+  };
+}
+
+function toTripCity(row: TripCityRow): TripCity {
+  return {
+    id: row.id,
+    tripId: row.trip_id,
+    position: row.position,
+    label: row.label,
+    airportCodes: row.airport_codes,
+    arrivalWindow: row.arrival_start && row.arrival_end
+      ? { start: isoDate(row.arrival_start), end: isoDate(row.arrival_end) }
+      : null,
+    departureWindow: row.departure_start && row.departure_end
+      ? { start: isoDate(row.departure_start), end: isoDate(row.departure_end) }
+      : null
+  };
+}
+
+function toTripCityLeg(row: TripCityLegRow): TripCityLeg {
+  return {
+    id: row.id,
+    tripId: row.trip_id,
+    position: row.position,
+    originCityId: row.origin_city_id,
+    destinationCityId: row.destination_city_id,
+    departureWindow: {
+      start: isoDate(row.departure_start),
+      end: isoDate(row.departure_end)
+    },
+    arriveBy: row.arrive_by ? isoDate(row.arrive_by) : null,
+    selectedFlightKey: row.selected_flight_key,
+    latestSearchId: row.latest_search_id
+  };
+}
+
+function toLegSearchSnapshot(row: LegSearchSnapshotRow): LegSearchSnapshot {
+  return {
+    id: row.id,
+    tripId: row.trip_id,
+    legId: row.leg_id,
+    revision: row.revision,
+    status: row.status,
+    requestedWindow: {
+      start: isoDate(row.requested_start),
+      end: isoDate(row.requested_end)
+    },
+    analysis: row.analysis,
+    flights: row.flights,
+    offers: row.offers,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+    completedAt: row.completed_at ? iso(row.completed_at) : null
   };
 }
 
@@ -2325,6 +2656,11 @@ function iso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
+function isoDate(value: Date | string): string {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(value)) return value;
+  return (value instanceof Date ? value : new Date(value)).toISOString().slice(0, 10);
+}
+
 function json(value: unknown): Parameters<Sql["json"]>[0] {
   return value as Parameters<Sql["json"]>[0];
 }
@@ -2345,4 +2681,62 @@ function decimalString(value: string | number): string {
     return value.includes(".") ? value.replace(/0+$/u, "").replace(/\.$/u, "") : value;
   }
   return Number.isInteger(value) ? String(value) : String(value);
+}
+
+function assertLegSearchRequest(
+  leg: Pick<TripCityLeg, "departureWindow">,
+  requestedWindow: { start: string; end: string },
+  datesRequested: string[]
+): void {
+  const requestedDates = enumerateIsoDates(requestedWindow.start, requestedWindow.end);
+  if (
+    requestedDates.length === 0
+    || requestedDates.length > MAX_MANUAL_SEARCH_DAYS
+    || requestedWindow.start < leg.departureWindow.start
+    || requestedWindow.end > leg.departureWindow.end
+    || JSON.stringify(datesRequested) !== JSON.stringify(requestedDates)
+  ) {
+    throw new RangeError("Leg search must cover every date in a valid window of at most 7 days");
+  }
+}
+
+function enumerateIsoDates(start: string, end: string): string[] {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(start) || !/^\d{4}-\d{2}-\d{2}$/u.test(end)) return [];
+  const startMs = Date.parse(`${start}T00:00:00.000Z`);
+  const endMs = Date.parse(`${end}T00:00:00.000Z`);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return [];
+  const result: string[] = [];
+  for (
+    let value = startMs;
+    value <= endMs && result.length <= MAX_MANUAL_SEARCH_DAYS;
+    value += 86_400_000
+  ) {
+    result.push(new Date(value).toISOString().slice(0, 10));
+  }
+  return result;
+}
+
+function assertLegSearchRevision(revision: LegSearchSnapshotRevision): void {
+  legSearchSnapshotSchema.shape.status.parse(revision.status);
+  legSearchSnapshotSchema.shape.analysis.parse(revision.analysis);
+  legSearchSnapshotSchema.shape.flights.parse(revision.flights);
+  legSearchSnapshotSchema.shape.offers.parse(revision.offers);
+  legSearchSnapshotSchema.shape.completedAt.parse(revision.completedAt);
+  const flightKeys = new Set(revision.flights.map((flight) => flight.key));
+  if (revision.offers.some((offer) => !flightKeys.has(offer.flightKey))) {
+    throw new Error("Every offer must reference a canonical flight in the same snapshot");
+  }
+}
+
+function dedupeFlightOffers(offers: FlightOfferSnapshot[]): FlightOfferSnapshot[] {
+  const byProviderOffer = new Map<string, FlightOfferSnapshot>();
+  for (const offer of offers) {
+    const key = `${offer.provider}:${offer.offerId}`;
+    const current = byProviderOffer.get(key);
+    if (!current || offer.observedAt > current.observedAt) byProviderOffer.set(key, offer);
+  }
+  return [...byProviderOffer.values()].sort((left, right) =>
+    Number(left.priceAmount) - Number(right.priceAmount)
+    || right.observedAt.localeCompare(left.observedAt)
+  );
 }

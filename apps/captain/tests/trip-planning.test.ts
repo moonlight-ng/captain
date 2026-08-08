@@ -162,6 +162,38 @@ describe("Captain trip planning", () => {
     )).toBe(false);
   });
 
+  it("recognises event context as a multi-city flight-planning request", () => {
+    const request = "Let's plan for Nairobi in November. I'm going to a wedding from Nov 4 - 8, "
+      + "a birthday from Nov 10 - 14. Then 19 - 22, Uganda. Then a wedding, Dec 10. "
+      + "I'll be in London and want to spend Christmas in Lagos.";
+
+    expect(TripPlanningService.isTripPlanningRequest(request)).toBe(true);
+    expect(TripPlanningService.needsItineraryPlanningConversation(request)).toBe(true);
+  });
+
+  it("persists grounded flight windows for each adjacent city pair", async () => {
+    const { planning, user } = await setup();
+    const planned = await planning.prepare(
+      user.id,
+      "Create a multi-city trip Nairobi to Uganda November 15-18, "
+        + "Uganda to London November 23-29, and London to Lagos December 18-24."
+    );
+
+    expect(planned.status).toBe("awaiting_confirmation");
+    if (planned.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(planned.draft.confirmationSnapshot?.input.brief).toMatchObject({
+      tripType: "multi_city",
+      originAirports: ["NBO"],
+      destinationAirports: ["LOS"],
+      context: "",
+      legs: [
+        { originAirports: ["NBO"], destinationAirports: ["EBB"], departureWindow: { start: "2025-11-15", end: "2025-11-18" } },
+        { originAirports: ["EBB"], destinationAirports: ["LON"], departureWindow: { start: "2025-11-23", end: "2025-11-29" } },
+        { originAirports: ["LON"], destinationAirports: ["LOS"], departureWindow: { start: "2025-12-18", end: "2025-12-24" } }
+      ]
+    });
+  });
+
   it("reproduces the Lagos-to-New-York conversation without changing dates", async () => {
     const { planning, trips, user } = await setup();
     const first = await planning.prepare(
@@ -207,10 +239,10 @@ describe("Captain trip planning", () => {
     // printed as internal planning language in the traveller-facing receipt.
     expect(started.receipt.goal)
       .toBe("Get you LOS → NYC and back on 17 Aug for the best balance of fare and "
-        + "journey time, and tell you when it's the moment to buy.");
+        + "journey time, using verified fares when you search.");
     expect(started.message).not.toContain("Goal:");
     expect(started.message).not.toContain(started.receipt.goal);
-    expect(started.message).toContain("I’m checking flights now");
+    expect(started.message).toContain("ready to search each flight leg with live fares");
     expect(started.message).toContain(`Open trip: https://captain.example/t#test-${started.receipt.tripId}`);
     expect(started.message).not.toContain("Trip reference");
     const renderedReceipt = telegramDashboardMessage(started.message);
@@ -258,8 +290,8 @@ describe("Captain trip planning", () => {
       "Find the best flights from Lagos to New York and back to London from Aug 16 - 23."
     );
 
-    expect(ready.status).toBe("awaiting_confirmation");
-    if (ready.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(ready?.status).toBe("awaiting_confirmation");
+    if (ready?.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
     expect(ready.draft.confirmationSnapshot?.input).toMatchObject({
       title: "LOS to NYC to LON",
       brief: {
@@ -311,8 +343,8 @@ describe("Captain trip planning", () => {
       user.id,
       "Fly from Lagos to New York on Aug 17, to London on the 20th, to Paris on the 23rd"
     );
-    expect(ready.status).toBe("awaiting_confirmation");
-    if (ready.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(ready?.status).toBe("awaiting_confirmation");
+    if (ready?.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
     expect(ready.draft.confirmationSnapshot?.input.brief.legs).toEqual([
       expect.objectContaining({
         originAirports: ["LOS"],
@@ -645,11 +677,8 @@ describe("Captain trip planning", () => {
       user.id,
       "Check for Lagos to London first week of September"
     );
-    expect(first.status).toBe("needs_input");
-    if (first.status !== "needs_input") throw new Error("Expected a departure-date question");
-    expect(first.prompt).toBe(
-      "Which exact departure date should I use within 2026-09-01 to 2026-09-07?"
-    );
+    expect(first.status).toBe("awaiting_confirmation");
+    if (first.status !== "awaiting_confirmation") throw new Error("Expected a window confirmation");
 
     const completed = await planning.prepare(
       user.id,
@@ -750,7 +779,7 @@ describe("Captain trip planning", () => {
     expect(await trips.list(user.id)).toHaveLength(0);
   });
 
-  it("holds a second trip back while one is already tracking", async () => {
+  it("preserves a second request, then archives the active trip on replacement consent", async () => {
     const { planning, trips, user } = await setup();
     const current = await trips.create(user.id, {
       title: "Existing London trip",
@@ -767,33 +796,45 @@ describe("Captain trip planning", () => {
     );
     expect(blocked.status).toBe("needs_input");
     if (blocked.status !== "needs_input") throw new Error("Expected the trip limit prompt");
-    expect(blocked.prompt).toContain("You’re already tracking a trip.");
-    expect(blocked.prompt).toContain("Open /trip");
-    expect(blocked.prompt).not.toContain("/profile");
-    expect(blocked.draft.confirmationSnapshot).toBeNull();
+    expect(blocked.prompt).toContain("Existing London trip");
+    expect(blocked.prompt).toContain("Replace it");
+    expect(blocked.prompt).toContain("/feedback");
+    expect(blocked.draft.confirmationSnapshot).toMatchObject({
+      input: { brief: { originAirports: ["LOS"], destinationAirports: ["NYC"] } }
+    });
 
     const saved = await trips.list(user.id);
     expect(saved).toHaveLength(1);
     expect(saved[0]).toMatchObject({
       id: current.trip.id,
-      status: "tracking",
+      status: "draft",
       archiveReason: null
     });
 
-    // Stopping the current trip frees the slot, and the held draft continues.
-    await trips.action(user.id, current.trip.id, {
-      type: "cancel",
-      expectedVersion: current.trip.version
+    const both = await planning.handleOpenDraftText(user.id, "I want to keep both", null);
+    expect(both).toMatchObject({
+      status: "needs_input",
+      prompt: expect.stringContaining("/feedback")
     });
-    const ready = await planning.prepare(user.id, "continue", null, blocked.draft.id);
-    expect(ready.status).toBe("awaiting_confirmation");
-    if (ready.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(await trips.get(user.id, current.trip.id)).toMatchObject({
+      status: "draft",
+      archiveReason: null
+    });
+
+    const ready = await planning.handleOpenDraftText(user.id, "Yes", null);
+    expect(ready?.status).toBe("awaiting_confirmation");
+    if (!ready || ready.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(ready.draft.id).toBe(blocked.draft.id);
+    expect(await trips.get(user.id, current.trip.id)).toMatchObject({
+      status: "archived",
+      archiveReason: "replaced"
+    });
     const added = await planning.confirm(user.id, ready.draft.id, ready.draft.revision);
     expect(added.status).toBe("started");
     if (added.status !== "started") throw new Error("Expected started trip");
     expect(await trips.list(user.id)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: current.trip.id, status: "cancelled" }),
-      expect.objectContaining({ id: added.receipt.tripId, status: "tracking" })
+      expect.objectContaining({ id: current.trip.id, status: "archived", archiveReason: "replaced" }),
+      expect.objectContaining({ id: added.receipt.tripId, status: "draft" })
     ]));
   });
 
@@ -830,7 +871,7 @@ describe("Captain trip planning", () => {
     const started = await planning.handleOpenDraftText(user.id, "Yes", null);
     expect(started?.status).toBe("started");
     expect(await planning.activeTripLocation(user.id)).toBe(
-      "Your trip is tracking.\n\n"
+      "Your trip is saved and ready to search.\n\n"
       + "• LOS → NYC\n"
       + "• Depart: Sunday, 17 Aug 2025\n"
       + "• 1 traveller, Economy, At most 2 stops, USD\n\n"
@@ -873,7 +914,7 @@ describe("Captain trip planning", () => {
     });
 
     const message = await planning.activeTripsLocation(user.id);
-    expect(message).toContain("Your trip is tracking.");
+    expect(message).toContain("Your trip is saved and ready to search.");
     expect(message).toContain("• LOS → ANA");
     const rendered = telegramDashboardMessage(message!);
     expect(rendered.links).toEqual([
@@ -896,7 +937,7 @@ describe("Captain trip planning", () => {
       { text: "Open LOS → ANA", url: "https://captain.example/t#test-anambra" },
       { text: "Open LOS → LHR", url: "https://captain.example/t#test-london" }
     ]);
-    expect(rendered.text).toContain("You’re tracking 2 trips:");
+    expect(rendered.text).toContain("You have 2 saved trips:");
     expect(rendered.text).not.toContain("https://");
   });
 });

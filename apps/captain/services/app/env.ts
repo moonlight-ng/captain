@@ -11,6 +11,7 @@ export type CaptainEnv = {
   aiGatewayApiKey: string | null;
   betaUserLimit: number;
   publicBetaEnabled: boolean;
+  simplifiedMultiCityEnabled: boolean;
   duffelAccessToken: string | null;
   duffelBaseUrl: string;
 };
@@ -45,6 +46,10 @@ export function loadEnv(): CaptainEnv {
     betaUserLimit: positiveInteger("CAPTAIN_BETA_USER_LIMIT", 25),
     publicBetaEnabled: booleanValue(
       process.env.CAPTAIN_PUBLIC_BETA_ENABLED,
+      mode !== "production"
+    ),
+    simplifiedMultiCityEnabled: booleanValue(
+      process.env.CAPTAIN_SIMPLIFIED_MULTI_CITY_ENABLED,
       mode !== "production"
     ),
     duffelAccessToken: optional("DUFFEL_ACCESS_TOKEN"),

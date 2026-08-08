@@ -160,7 +160,8 @@ export type TripPlanDraftRevision = {
 
 export type TripCreationResult = {
   trip: import("./trip.js").Trip;
-  watch: import("./trip.js").Watch;
+  /** Manual-search trips do not create a scheduled Watch. */
+  watch: import("./trip.js").Watch | null;
   created: boolean;
 };
 

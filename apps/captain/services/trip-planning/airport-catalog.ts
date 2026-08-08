@@ -122,6 +122,8 @@ const LOCATION_CODES: Readonly<Record<string, string>> = {
   durban: "DUR",
   "addis ababa": "ADD",
   kigali: "KGL",
+  kampala: "EBB",
+  uganda: "EBB",
   entebbe: "EBB",
   cairo: "CAI",
   casablanca: "CMN",

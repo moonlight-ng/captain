@@ -1,4 +1,10 @@
-import type { TravellerProfile, TripPayload } from "./domain";
+import type {
+  CanonicalFlightPayload,
+  LegSearchSnapshot,
+  TravellerProfile,
+  TripCityLeg,
+  TripPayload
+} from "./domain.js";
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string, readonly body?: unknown) {
@@ -22,6 +28,17 @@ export function initializeAccessToken(): boolean {
 export function flightHref(tripId: string, itineraryKey: string, mode?: string): string {
   const path = `/trip/${encodeURIComponent(tripId)}/flight/${encodeURIComponent(itineraryKey)}`;
   return withAccess(mode ? `${path}?${new URLSearchParams({ mode }).toString()}` : path);
+}
+
+/** The canonical flight URL contains no private trip identity. */
+export function canonicalFlightHref(flightKey: string): string {
+  // Never carry a legacy bearer fragment onto a URL intended for sharing.
+  return `/flight/${encodeURIComponent(flightKey)}`;
+}
+
+/** Results for one edge of a multi-city trip. */
+export function tripLegHref(tripId: string, legId: string): string {
+  return withAccess(`/trip/${encodeURIComponent(tripId)}/leg/${encodeURIComponent(legId)}`);
 }
 
 /**
@@ -105,6 +122,37 @@ export async function submitFeedback(text: string): Promise<{
 export function getTrip(tripId?: string): Promise<TripPayload> {
   const search = tripId ? `?${new URLSearchParams({ trip: tripId }).toString()}` : "";
   return api(`/api/me/trip${search}`);
+}
+
+export function startTripLegSearch(legId: string): Promise<LegSearchSnapshot> {
+  return api(`/api/me/trip/legs/${encodeURIComponent(legId)}/searches`, {
+    method: "POST",
+    body: "{}"
+  });
+}
+
+export function getTripLegSearch(
+  legId: string,
+  searchId: string
+): Promise<LegSearchSnapshot> {
+  return api(
+    `/api/me/trip/legs/${encodeURIComponent(legId)}/searches/${encodeURIComponent(searchId)}`
+  );
+}
+
+export async function selectTripLegFlight(
+  legId: string,
+  flightKey: string
+): Promise<TripCityLeg> {
+  const result = await api<TripCityLeg | { leg: TripCityLeg }>(
+    `/api/me/trip/legs/${encodeURIComponent(legId)}/selection`,
+    { method: "POST", body: JSON.stringify({ flightKey }) }
+  );
+  return "leg" in result ? result.leg : result;
+}
+
+export function getCanonicalFlight(flightKey: string): Promise<CanonicalFlightPayload> {
+  return api(`/api/flights/${encodeURIComponent(flightKey)}`);
 }
 
 export async function tripAction(

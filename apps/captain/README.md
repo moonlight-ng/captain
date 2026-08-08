@@ -1,10 +1,11 @@
 # Captain
 
-Captain is a Telegram-first trip planner and flight price tracker. You can send
-a trip by text or voice note. If its route or dates are uncertain, Captain can
-help work them out; otherwise it goes straight to finding flights. You pick one
-to watch, and it tells you how the price moves and when to buy. It does not book,
-take payments, or collect any traveller identity.
+Captain is a Telegram-first multi-city trip planner and manual real-time flight
+search product. You can send a trip by text or voice note. Captain extracts the
+ordered cities and the timing constraints that determine when each flight can
+leave, then searches an individual city pair when the traveller asks. It does
+not book, take payments, collect traveller identity, or recheck prices in the
+background.
 
 ## Product contract
 
@@ -13,28 +14,29 @@ take payments, or collect any traveller identity.
   availability claims to justify a date suggestion.
 - `/start` sets a default currency, ranking mode, and optional preferred or
   avoided airlines.
-- A traveller can have one active or paused trip at a time. A second trip
-  requires stopping or completing the existing one.
+- A traveller can have one active trip at a time. When a new request is fully
+  understood, Captain asks whether to replace the current trip and archives it
+  only after explicit consent. `/feedback` captures demand for simultaneous trips.
 - Captain currently supports USD and GBP trips. The confirmed display
   currency stays fixed; Duffel and Flysoar USD/GBP results are normalized into it.
-- **One flight is watched at a time.** Captain finds and ranks options; the
-  traveller picks which one to track. The watched flight leads the dashboard,
-  with its price history, its low and high, and a read on whether to buy now.
-  The result tabs below — **Top picks**, **Airlines**, **All flights** — are
-  the alternatives to it, and only ever show verified provider offers.
-- Period-over-period and date-range questions use a dedicated price-history
-  analysis tool, so averages, changes, percentages, and coverage counts come
-  from deterministic calculations rather than model arithmetic.
-- Prices are checked once a day, and tracking runs until the day the trip
-  departs. There is no cadence or duration to choose.
+- A trip is an ordered list of city occurrences. Every adjacent pair is one
+  independently searchable flight leg; the same city may occur more than once.
+- A manual leg search fans a date window of at most seven days into one exact
+  provider request per date with bounded concurrency. Partial failures preserve
+  successful dates and prevent exhaustive “cheapest in the range” wording.
+- Search snapshots deterministically calculate cheapest, fastest, balanced,
+  and cheapest-per-date results. A traveller may select one canonical Flight
+  per leg without starting tracking.
+- Event language such as weddings or birthdays is transient evidence for city
+  arrival/departure timing. It is not stored as a product entity or shown in the UI.
 - `/profile` is notification and flight-ranking preferences, and nothing else.
   `/preferences`, `/settings`, `/travellers`, and `/payment` redirect to it.
   Account deletion requires a revocable HttpOnly session cookie (via a
   single-use login token).
 - Captain has no booking flow, no card, and no passenger record. When a
   traveller wants to buy, it points them at whoever is selling the fare.
-- Archived trips and their evidence are retained for 90 days; price history is
-  kept long enough to cover a full tracking run. `/clear` resets preferences to
+- Archived trips and retained legacy evidence follow the existing retention
+  policy. `/clear` resets preferences to
   defaults. Account deletion removes the traveller, trip, sessions, and
   retained evidence.
 - `/feedback` opens a session-authenticated text form. A signed, one-way bridge
@@ -44,14 +46,13 @@ take payments, or collect any traveller identity.
 ## Architecture
 
 `apps/captain` owns Telegram onboarding, trip setup, authenticated profile and
-trip APIs, and the dashboard. `apps/flight-worker` owns scheduled searches and
-notifications. Both use `@agents/flight-store` and share
-`@agents/provider-duffel` for Duffel access.
+trip APIs, manual multi-day search, and the dashboard. `apps/flight-worker`
+retains legacy history behavior but receives no scheduled work from new trips.
 
-`summarizePriceHistory` in `@agents/flight-domain` is the single read of the
-watched flight's price series. The dashboard card, the flight detail chart, and
-the `get_trip` agent tool all render from it, so Captain cannot say one thing on
-the web and another in Telegram.
+`TripCity` and `TripLeg` form the durable route graph. `LegSearchSnapshot`
+records date coverage, failures, canonical flights, verified seller offers,
+and deterministic analysis. `/flight/:flightKey` exposes the canonical flight
+schedule without private trip state.
 
 trip setup uses a versioned turn interpreter. It keeps one ordered list of
 dated legs, records the pending question and field provenance, and applies
@@ -64,15 +65,10 @@ field. Terra remains the general Captain agent model. This follows OpenAI's
 [tier-aware model guidance](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6)
 and [Structured Outputs guidance](https://developers.openai.com/api/docs/guides/structured-outputs).
 
-The worker uses the provider-neutral `FlightSearchProvider` contract with
-`official_duffel` as primary and `flysoar_mcp` as its automatic backup after a
-primary error or empty result. The direct adapter gives suppliers up to 60
-seconds to respond, then retrieves the resulting offers through Duffel's
-paginated Offers endpoint until no cursor remains. Offers are deduplicated by
-itinerary, ordered across primary marketing airlines, and capped at 60 retained
-results per search. New trips and manual searches wake the worker through a
-transactional PostgreSQL notification; adaptive polling remains the recovery
-path if the worker was disconnected when the notification was sent.
+Manual searches use the provider-neutral `FlightSearchProvider` contract. Each
+date is independent, and successful results are committed progressively so the
+web UI can show exact coverage while a request is running. New trips create no
+Watch, SearchSpec schedule, notification, or worker wake-up.
 
 Captain and Pilot remain independent flight and agent products. The only
 cross-product connection is the notification-only feedback ingress described
@@ -92,7 +88,7 @@ pnpm --filter @agents/captain db:migrate
 pnpm --filter @agents/captain dev:agent
 ```
 
-After pulling schema changes (for example `012_price_tracker_only`), run
+After pulling schema changes (including `017_simplified_multi_city`), run
 `db:migrate` again before starting the agent. Production applies pending
 migrations automatically via Fly `release_command` on deploy.
 
@@ -106,7 +102,7 @@ Build the web dashboard separately with:
 pnpm --filter @agents/captain build:web
 ```
 
-The flight worker has its own ignored `.env`. It requires:
+The retained legacy flight worker has its own ignored `.env`. It requires:
 
 - `DATABASE_URL`
 - `DUFFEL_ACCESS_TOKEN`
@@ -125,14 +121,17 @@ Production now runs with `CAPTAIN_PUBLIC_BETA_ENABLED=true`, admitting new
 travellers up to the capped beta limit. Set it back to `false` to close
 onboarding without interrupting existing travellers.
 
+`CAPTAIN_SIMPLIFIED_MULTI_CITY_ENABLED` gates the graph-backed web/API
+experience. It defaults on in development and off in production so migration
+structure can be verified before the simplified view is enabled.
+
 ## Public beta limits
 
 - Maximum 25 travellers.
-- One check a day per trip, until the day the trip departs.
-- Messages only when something changed, plus one overview per new trip.
-- One improvement alert in a rolling 24-hour period, or two if the traveller
-  raises the cap in Profile.
-- Deferred searches keep the last verified results and show delayed tracking.
+- One active trip and one adult in USD or GBP.
+- Up to seven departure dates per manual leg search.
+- Independent city-pair searches; bundled multi-city fares are not compared.
+- No watches, automatic alerts, scheduled refreshes, cards, or booking state.
 
 Public launch remains gated by the live evaluation corpus against Duffel. It
 must demonstrate representative airline coverage and three or more usable

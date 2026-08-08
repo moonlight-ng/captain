@@ -1,5 +1,4 @@
 import {
-  buildSearchSpecs,
   createTripSchema,
   tripActionSchema,
   updateTripBriefSchema,
@@ -28,9 +27,8 @@ export class TripService {
 
   async create(userId: string, value: CreateTripInput) {
     const input = createTripSchema.parse(value);
-    const specs = buildSearchSpecs(input.brief);
-    const created = await this.#store.createTrip(userId, input, specs, this.#now());
-    return { ...created, searchCombinations: specs.length };
+    const created = await this.#store.createTrip(userId, input, [], this.#now());
+    return { ...created, searchCombinations: 0 };
   }
 
   async action(userId: string, tripId: string, value: TripAction) {
@@ -40,8 +38,7 @@ export class TripService {
 
   async update(userId: string, tripId: string, value: UpdateTripBrief) {
     const input = updateTripBriefSchema.parse(value);
-    const specs = buildSearchSpecs(input.brief);
-    return this.#store.updateTripBrief(userId, tripId, input, specs, this.#now());
+    return this.#store.updateTripBrief(userId, tripId, input, [], this.#now());
   }
 
   async offers(userId: string, tripId: string) {

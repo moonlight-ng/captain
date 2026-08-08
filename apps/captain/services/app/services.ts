@@ -6,6 +6,7 @@ import {
 import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
 
 import { CaptainWebAuth } from "../auth/web-session.js";
+import { LegSearchService } from "../flights/leg-search.js";
 import { FlightLookupService } from "../flights/lookup.js";
 import {
   DisabledFeedbackBridge,
@@ -24,6 +25,7 @@ export type CaptainServices = {
   trips: TripService;
   tripPlanning: TripPlanningService;
   flightLookup: FlightLookupService;
+  legSearch: LegSearchService;
   feedback: FeedbackBridge;
 };
 
@@ -74,6 +76,10 @@ export async function createCaptainServices(): Promise<CaptainServices> {
     flightLookup: new FlightLookupService({
       store: platformStore,
       trips,
+      provider: flightProvider
+    }),
+    legSearch: new LegSearchService({
+      store: platformStore,
       provider: flightProvider
     }),
     tripPlanning: new TripPlanningService({

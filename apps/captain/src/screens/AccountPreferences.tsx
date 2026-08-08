@@ -12,12 +12,7 @@ export function AccountPreferences({
   profile: TravellerProfile;
   onSaved: (profile: TravellerProfile) => void;
 }) {
-  return (
-    <>
-      <NotificationsCard profile={profile} onSaved={onSaved} />
-      <FlightPreferencesCard profile={profile} onSaved={onSaved} />
-    </>
-  );
+  return <FlightPreferencesCard profile={profile} onSaved={onSaved} />;
 }
 
 /** Every PATCH sends the whole preference set, so each form starts from the saved profile. */
@@ -41,143 +36,6 @@ function saveProfile(
     quietHoursStart: next.quietHoursStart,
     quietHoursEnd: next.quietHoursEnd
   });
-}
-
-function NotificationsCard({
-  profile,
-  onSaved
-}: {
-  profile: TravellerProfile;
-  onSaved: (profile: TravellerProfile) => void;
-}) {
-  const [mode, setMode] = useState(profile.notificationMode);
-  const [priceRise, setPriceRise] = useState(profile.priceRiseAlertsEnabled);
-  const [betterOption, setBetterOption] = useState(profile.betterOptionAlertsEnabled);
-  const [maxAlerts, setMaxAlerts] = useState<1 | 2>(profile.maxAlertsPerDay);
-  const [quietEnabled, setQuietEnabled] = useState(profile.quietHoursEnabled);
-  const [quietStart, setQuietStart] = useState(profile.quietHoursStart);
-  const [quietEnd, setQuietEnd] = useState(profile.quietHoursEnd);
-  const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState("");
-
-  async function save(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setSaved(false);
-    setError("");
-    try {
-      onSaved(await saveProfile(profile, {
-        notificationMode: mode,
-        priceRiseAlertsEnabled: priceRise,
-        betterOptionAlertsEnabled: betterOption,
-        maxAlertsPerDay: maxAlerts,
-        quietHoursEnabled: quietEnabled,
-        quietHoursStart: quietStart,
-        quietHoursEnd: quietEnd
-      }));
-      setSaved(true);
-    } catch {
-      setError("Captain couldn’t save that. Try again.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <details className="settings-card settings-disclosure" open>
-      <summary>
-        <span><strong>Notifications</strong></span>
-        <em>{notificationModeLabel(mode)}</em>
-      </summary>
-      <div className="settings-body">
-        <form onSubmit={(event) => void save(event)}>
-          {/*
-            There is no cadence to pick. Captain either tells you when
-            something moves, or it watches in silence.
-          */}
-          <label className="switch-setting">
-            <span>
-              <strong>Tell me when prices move</strong>
-              <small>{notificationModeDescription(mode)}</small>
-            </span>
-            <input
-              type="checkbox"
-              role="switch"
-              checked={mode !== "off"}
-              onChange={(event) => setMode(event.target.checked ? "changes_only" : "off")}
-            />
-          </label>
-          <label className="switch-setting">
-            <span><strong>Price rises</strong></span>
-            <input
-              type="checkbox"
-              role="switch"
-              disabled={mode === "off"}
-              checked={priceRise}
-              onChange={(event) => setPriceRise(event.target.checked)}
-            />
-          </label>
-          <label className="switch-setting">
-            <span><strong>Better options</strong></span>
-            <input
-              type="checkbox"
-              role="switch"
-              disabled={mode === "off"}
-              checked={betterOption}
-              onChange={(event) => setBetterOption(event.target.checked)}
-            />
-          </label>
-          <label>
-            Immediate alert limit
-            <select
-              value={maxAlerts}
-              disabled={mode === "off"}
-              onChange={(event) => setMaxAlerts(Number(event.target.value) as 1 | 2)}
-            >
-              <option value={1}>1 in 24 hours</option>
-              <option value={2}>2 in 24 hours</option>
-            </select>
-          </label>
-          <label className="switch-setting">
-            <span><strong>Quiet hours</strong></span>
-            <input
-              type="checkbox"
-              role="switch"
-              checked={quietEnabled}
-              onChange={(event) => setQuietEnabled(event.target.checked)}
-            />
-          </label>
-          <div className="form-grid two">
-            <label>
-              From
-              <input
-                type="time"
-                step={3600}
-                disabled={!quietEnabled}
-                value={`${String(quietStart).padStart(2, "0")}:00`}
-                onChange={(event) => setQuietStart(Number(event.target.value.slice(0, 2)))}
-              />
-            </label>
-            <label>
-              Until
-              <input
-                type="time"
-                step={3600}
-                disabled={!quietEnabled}
-                value={`${String(quietEnd).padStart(2, "0")}:00`}
-                onChange={(event) => setQuietEnd(Number(event.target.value.slice(0, 2)))}
-              />
-            </label>
-          </div>
-          {error && <p className="form-error" role="alert">{error}</p>}
-          <button className="save-button" disabled={busy}>
-            {busy ? "Saving…" : saved ? "Saved" : "Save"}
-          </button>
-        </form>
-      </div>
-    </details>
-  );
 }
 
 function FlightPreferencesCard({
@@ -294,14 +152,4 @@ function FlightPreferencesCard({
       </div>
     </details>
   );
-}
-
-function notificationModeLabel(mode: TravellerProfile["notificationMode"]): string {
-  return mode === "off" ? "Off" : "On";
-}
-
-function notificationModeDescription(mode: TravellerProfile["notificationMode"]): string {
-  return mode === "off"
-    ? "Captain tracks silently. Nothing arrives in Telegram."
-    : "Only when the price range shifts or your watched fare moves.";
 }

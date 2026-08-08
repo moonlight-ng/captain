@@ -12,10 +12,12 @@ describe("Captain public environment", () => {
     vi.stubEnv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "telegram-webhook-secret");
     vi.stubEnv("CAPTAIN_BETA_USER_LIMIT", undefined);
     vi.stubEnv("CAPTAIN_PUBLIC_BETA_ENABLED", undefined);
+    vi.stubEnv("CAPTAIN_SIMPLIFIED_MULTI_CITY_ENABLED", undefined);
     expect(loadEnv()).toMatchObject({
       mode: "production",
       betaUserLimit: 25,
-      publicBetaEnabled: false
+      publicBetaEnabled: false,
+      simplifiedMultiCityEnabled: false
     });
   });
 

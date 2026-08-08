@@ -59,32 +59,33 @@ const pendingConfirmationPosts = new Set<string>();
 // —reading recent context, for one—run under the typing indicator alone.
 const CAPTAIN_TOOL_STATUS: Readonly<Record<string, string>> = {
   prepare_trip: "Working through the route and dates…",
+  search_trip_leg: "Checking dates and verified fares…",
   search_flights: "Checking verified fares…",
   select_trip_flight: "Comparing the flight options…",
-  start_prepared_trip: "Starting your trip…",
+  start_prepared_trip: "Saving your trip…",
   manage_trip: "Updating your trip…"
 };
 const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. Your saved trip is unchanged—please try again.";
 // Onboarding is three messages and no questions. Everything the old interview
 // asked for is seeded by DEFAULT_PROFILE and editable on /profile, so a new
-// traveller learns what Captain is and can start tracking without answering
+// traveller learns what Captain is and can start planning without answering
 // anything first.
 export const CAPTAIN_NEW_USER_GREETING =
-  "Hi, I’m Captain. I plan trips, check flight prices, and help you decide when to book.\n\n"
-  + "I’m still in early testing, so I can only watch one trip at a time. I never book or pay for anything.";
+  "Hi, I’m Captain. I plan multi-city trips and compare real-time flight options across your possible dates.\n\n"
+  + "I’m still in early testing, so I can only keep one trip at a time. I never book or pay for anything.";
 export const CAPTAIN_DEFAULTS_INTRO =
-  "You’re set up for USD fares, a balance of price and travel time, and at most one alert a day. You can change these anytime.";
+  "You’re set up for USD fares and a balance of price and travel time. You can change these anytime.";
 export const CAPTAIN_READY_PROMPT =
-  "Send your trip by text or voice note. If you’re unsure about the dates, I’ll help you work them out.";
+  "Send the cities and dates you’re considering by text or voice note. I’ll help turn them into flight legs and search the dates that work.";
 // Captain introduces itself once, at the welcome step. A traveller who has
 // already onboarded gets this instead.
 export const CAPTAIN_RETURNING_TRAVELLER_WELCOME =
   "Welcome back. Where to next?";
-// Someone who is already tracking something is not being asked for a trip
+// Someone who already has a trip is not being asked for one
 // again—the welcome hands straight over to the one they have. Worded for one
 // trip or several, since the summary below it counts them itself.
 export const CAPTAIN_RETURNING_TRAVELLER_TRIP_WELCOME =
-  "Welcome back. Here’s what I’m watching.";
+  "Welcome back. Here’s your saved trip.";
 export const CAPTAIN_PROFILE_COMMAND = "/profile";
 export const CAPTAIN_TRIP_COMMAND = "/trip";
 export const CAPTAIN_TRIPS_COMMAND = "/trips";
@@ -170,7 +171,7 @@ export default telegramChannel({
       // Claiming the welcome step completes onboarding, so anyone reaching
       // here has already been introduced.
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
-      // Someone already tracking a trip is welcomed back to that trip rather
+      // Someone who already has a trip is welcomed back to it rather
       // than asked for one they have—same summary /trip would give them.
       const tracked = await services.tripPlanning.activeTripsLocation(user.id);
       const welcome = returningTravellerWelcome(tracked);
@@ -325,7 +326,7 @@ export default telegramChannel({
       }
     } catch (error) {
       if (error instanceof TripLimitError) {
-        const message = "You’re already tracking a trip. Open /trip and stop tracking it before creating another.";
+        const message = "You already have an active trip. Send the new itinerary and I’ll ask whether you want to replace the current one.";
         await services.platformStore.appendMessage(user.id, "assistant", message, new Date());
         await postWithLink(
           ctx,
@@ -450,7 +451,7 @@ export default telegramChannel({
         });
         await postWithLink(
           ctx,
-          "You’re already tracking a trip. Open /trip and stop tracking it before creating another.",
+          "You already have an active trip. Send the new itinerary and I’ll ask whether you want to replace the current one.",
           "Open trip",
           await services.auth.createLoginLink(user.id, "/trip")
         );
