@@ -17,6 +17,9 @@ to buy. It does not book, take payments, or collect any traveller identity.
   with its price history, its low and high, and a read on whether to buy now.
   The result tabs below — **Top picks**, **Airlines**, **All flights** — are
   the alternatives to it, and only ever show verified provider offers.
+- Period-over-period and date-range questions use a dedicated price-history
+  analysis tool, so averages, changes, percentages, and coverage counts come
+  from deterministic calculations rather than model arithmetic.
 - Prices are checked once a day, and tracking runs until the day the trip
   departs. There is no cadence or duration to choose.
 - `/profile` is notification and flight-ranking preferences, and nothing else.
