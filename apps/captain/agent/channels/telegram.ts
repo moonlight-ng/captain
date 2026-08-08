@@ -26,6 +26,7 @@ import {
   type SessionLimitInputRequest
 } from "@agents/telegram-core";
 import {
+  reviewCaptainMessage,
   TripLimitError,
   type OfferSnapshot,
   type TripPlanDraft,
@@ -69,12 +70,12 @@ const PROCESSING_FAILURE_TEXT = "I hit a problem while processing that message. 
 // traveller learns what Captain is and can start tracking without answering
 // anything first.
 export const CAPTAIN_NEW_USER_GREETING =
-  "Hi, I’m Captain. I track your flight price and help you decide when to book.\n\n"
+  "Hi, I’m Captain. I plan trips, check flight prices, and help you decide when to book.\n\n"
   + "I’m still in early testing, so I can only watch one trip at a time. I never book or pay for anything.";
 export const CAPTAIN_DEFAULTS_INTRO =
   "You’re set up for USD fares, a balance of price and travel time, and at most one alert a day. You can change these anytime.";
 export const CAPTAIN_READY_PROMPT =
-  "Where to first? Type it or send a voice note.";
+  "Send your trip by text or voice note. If you’re unsure about the dates, I’ll help you work them out.";
 // Captain introduces itself once, at the welcome step. A traveller who has
 // already onboarded gets this instead.
 export const CAPTAIN_RETURNING_TRAVELLER_WELCOME =
@@ -88,11 +89,18 @@ export const CAPTAIN_PROFILE_COMMAND = "/profile";
 export const CAPTAIN_TRIP_COMMAND = "/trip";
 export const CAPTAIN_TRIPS_COMMAND = "/trips";
 export const CAPTAIN_CLEAR_COMMAND = "/clear";
+export const CAPTAIN_FEEDBACK_COMMAND = "/feedback";
+export const CAPTAIN_FEEDBACK_PROMPT =
+  "Tell us what worked, what didn’t, or what you’d like Captain to do better.";
 // Clearing drops the traveller's trips as well as their preferences, so the
 // confirmation has to name both—otherwise the next /trip comes back empty
 // and reads as Captain having lost something.
 export const CAPTAIN_CLEAR_CONFIRMATION =
   "Your trips and preferences have been cleared. Looking forward to your next trip.";
+export const CAPTAIN_VOICE_TURN_CONTEXT =
+  "The current user message was transcribed from a Telegram voice note. "
+  + "Treat it as the traveller’s actual current request. Briefly acknowledge what you understood, "
+  + "then answer it or ask only for genuinely missing information. Do not replace it with a generic trip-opening question.";
 
 export default telegramChannel({
   route: "/eve/v1/telegram",
@@ -133,9 +141,12 @@ export default telegramChannel({
 
     let content = (message.text || message.caption || "").trim();
     const voice = voiceAttachment(message.raw);
+    let voiceTranscript: string | null = null;
     if (!content && voice) {
       try {
         content = await transcribeVoice(voice);
+        if (!content) throw new Error("No voice transcript was generated");
+        voiceTranscript = content;
       } catch {
         await ctx.telegram.post("I couldn’t understand that voice note. Please try again or send the details as text.");
         return null;
@@ -190,6 +201,16 @@ export default telegramChannel({
       );
       return null;
     }
+    if (command === CAPTAIN_FEEDBACK_COMMAND.slice(1)) {
+      await services.platformStore.appendMessage(user.id, "user", content, new Date());
+      await postWithLink(
+        ctx,
+        CAPTAIN_FEEDBACK_PROMPT,
+        "Open feedback form",
+        await services.auth.createLoginLink(user.id, "/feedback")
+      );
+      return null;
+    }
     if (
       command === CAPTAIN_TRIP_COMMAND.slice(1)
       || command === CAPTAIN_TRIPS_COMMAND.slice(1)
@@ -210,14 +231,14 @@ export default telegramChannel({
       return null;
     }
     if (content.trimStart().startsWith("/")) {
-      const response = "I don’t recognise that command. Use /trip to view your trip or /profile for preferences.";
+      const response = "I don’t recognise that command. Use /trip to view your trip, /profile for preferences, or /feedback to share feedback.";
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
       await ctx.telegram.post(response);
       return null;
     }
     if (!content) {
-      await ctx.telegram.post("Send me a destination and the dates you’re considering, by text or voice note.");
+      await ctx.telegram.post("Send your trip by text or voice note. If you’re unsure about the dates, I’ll help you work them out.");
       return null;
     }
 
@@ -274,7 +295,9 @@ export default telegramChannel({
           sourceMessageId
         );
         if (openDraftResult) {
-          await postTripPlanResult(ctx, user.id, openDraftResult);
+          await postTripPlanResult(ctx, user.id, openDraftResult, {
+            acknowledgeVoice: voiceTranscript !== null
+          });
           return true;
         }
         if (TripPlanningService.isWhereQuestion(content)) {
@@ -285,9 +308,14 @@ export default telegramChannel({
             return true;
           }
         }
-        if (TripPlanningService.isTripPlanningRequest(content)) {
+        if (
+          TripPlanningService.isTripPlanningRequest(content)
+          && !TripPlanningService.needsItineraryPlanningConversation(content)
+        ) {
           const planned = await services.tripPlanning.prepare(user.id, content, sourceMessageId);
-          await postTripPlanResult(ctx, user.id, planned);
+          await postTripPlanResult(ctx, user.id, planned, {
+            acknowledgeVoice: voiceTranscript !== null
+          });
           return true;
         }
         return false;
@@ -321,6 +349,9 @@ export default telegramChannel({
       return null;
     }
 
+    if (voiceTranscript !== null) {
+      promoteVoiceTranscriptToTelegramTurn(message, voiceTranscript);
+    }
     return {
       auth: {
         attributes: {
@@ -336,7 +367,7 @@ export default telegramChannel({
         principalType: "user",
         subject: String(telegramUserId)
       },
-      ...(voice ? { context: [`The traveller sent a voice note. Its transcript is: ${content}`] } : {})
+      ...(voiceTranscript !== null ? { context: [CAPTAIN_VOICE_TURN_CONTEXT] } : {})
     };
   },
   async onCallbackQuery(ctx, query) {
@@ -586,7 +617,7 @@ export default telegramChannel({
           }
         }
         const grounded = await services.tripPlanning.groundAssistantMessage(userId, message);
-        message = grounded.message;
+        message = reviewCaptainMessage(grounded.message);
         await services.platformStore.appendMessage(userId, "assistant", message, new Date());
       }
       await channel.telegram.post(message);
@@ -785,6 +816,17 @@ function voiceAttachment(raw: Record<string, unknown>): { fileId: string; size?:
   };
 }
 
+// Eve builds the model turn from this same parsed message after onMessage
+// returns. Its Telegram hook does not currently expose a message override, so
+// promoting the transcript here makes the spoken words the actual user turn
+// instead of leaving the model with an empty message and background context.
+export function promoteVoiceTranscriptToTelegramTurn(
+  message: TelegramMessage,
+  transcript: string
+): void {
+  Object.assign(message, { text: transcript });
+}
+
 async function transcribeVoice(input: { fileId: string; size?: number }): Promise<string> {
   if (input.size !== undefined && input.size > MAX_VOICE_BYTES) throw new Error("Voice note is too large");
   const file = await getTelegramFile({ credentials, fileId: input.fileId });
@@ -825,7 +867,8 @@ function required(name: string): string {
 async function postTripPlanResult(
   ctx: TelegramContext,
   userId: string,
-  result: TripPlanResult
+  result: TripPlanResult,
+  options: { acknowledgeVoice?: boolean } = {}
 ): Promise<void> {
   const services = await getCaptainServices();
   let message = result.status === "needs_input"
@@ -833,6 +876,10 @@ async function postTripPlanResult(
     : result.status === "awaiting_confirmation"
       ? result.confirmation
       : result.message;
+  if (result.status === "needs_input" && options.acknowledgeVoice) {
+    message = acknowledgeVoiceClarification(message);
+  }
+  message = reviewCaptainMessage(message);
   if (result.status === "awaiting_confirmation") {
     await postTripConfirmationOnce(ctx.telegram, userId, result.draft, message);
     return;
@@ -843,6 +890,10 @@ async function postTripPlanResult(
     return;
   }
   await ctx.telegram.post(message);
+}
+
+export function acknowledgeVoiceClarification(prompt: string): string {
+  return `I understood your voice note as a trip request. ${prompt}`;
 }
 
 async function recoverUndeliveredTripConfirmation(

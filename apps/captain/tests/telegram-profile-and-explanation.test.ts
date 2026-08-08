@@ -4,17 +4,22 @@ import type { OfferSnapshot } from "@agents/flight-domain";
 import type { RecommendationSnapshot } from "@agents/flight-store";
 
 import {
+  acknowledgeVoiceClarification,
   CAPTAIN_CLEAR_COMMAND,
   CAPTAIN_CLEAR_CONFIRMATION,
   CAPTAIN_DEFAULTS_INTRO,
+  CAPTAIN_FEEDBACK_COMMAND,
+  CAPTAIN_FEEDBACK_PROMPT,
   CAPTAIN_NEW_USER_GREETING,
   CAPTAIN_PROFILE_COMMAND,
   CAPTAIN_READY_PROMPT,
   CAPTAIN_RETURNING_TRAVELLER_WELCOME,
   CAPTAIN_TRIP_COMMAND,
   CAPTAIN_TRIPS_COMMAND,
+  CAPTAIN_VOICE_TURN_CONTEXT,
   explainNotification,
   explainRecommendation,
+  promoteVoiceTranscriptToTelegramTurn,
   repliedToTelegramMessageId,
   returningTravellerWelcome,
   telegramCommandName
@@ -23,14 +28,14 @@ import {
 describe("Telegram profile onboarding", () => {
   it("starts every new traveller with the fixed three-message introduction", () => {
     expect(CAPTAIN_NEW_USER_GREETING).toBe(
-      "Hi, I’m Captain. I track your flight price and help you decide when to book.\n\n"
+      "Hi, I’m Captain. I plan trips, check flight prices, and help you decide when to book.\n\n"
       + "I’m still in early testing, so I can only watch one trip at a time. I never book or pay for anything."
     );
     expect(CAPTAIN_DEFAULTS_INTRO).toBe(
       "You’re set up for USD fares, a balance of price and travel time, and at most one alert a day. You can change these anytime."
     );
     expect(CAPTAIN_READY_PROMPT).toBe(
-      "Where to first? Type it or send a voice note."
+      "Send your trip by text or voice note. If you’re unsure about the dates, I’ll help you work them out."
     );
   });
 
@@ -41,6 +46,8 @@ describe("Telegram profile onboarding", () => {
     expect(CAPTAIN_NEW_USER_GREETING).toContain("one trip at a time");
     expect(CAPTAIN_DEFAULTS_INTRO).toContain("at most one alert a day");
     expect(CAPTAIN_READY_PROMPT).toContain("voice note");
+    expect(CAPTAIN_READY_PROMPT).toContain("unsure about the dates");
+    expect(CAPTAIN_NEW_USER_GREETING).toContain("check flight prices");
   });
 
   it("introduces Captain once and welcomes returning travellers differently", () => {
@@ -64,9 +71,17 @@ describe("Telegram profile onboarding", () => {
   it("accepts the singular and plural trip commands", () => {
     expect(CAPTAIN_TRIP_COMMAND).toBe("/trip");
     expect(CAPTAIN_TRIPS_COMMAND).toBe("/trips");
+    expect(CAPTAIN_FEEDBACK_COMMAND).toBe("/feedback");
     expect(telegramCommandName("/trip")).toBe("trip");
     expect(telegramCommandName(" /trips ")).toBe("trips");
     expect(telegramCommandName("/trips@CaptainBot")).toBe("trips");
+  });
+
+  it("offers a concise feedback form prompt", () => {
+    expect(CAPTAIN_FEEDBACK_PROMPT).toBe(
+      "Tell us what worked, what didn’t, or what you’d like Captain to do better."
+    );
+    expect(telegramCommandName("/feedback")).toBe("feedback");
   });
 
   it("only parses complete Telegram commands", () => {
@@ -83,6 +98,33 @@ describe("Telegram profile onboarding", () => {
     expect(CAPTAIN_CLEAR_COMMAND).toBe("/clear");
     expect(CAPTAIN_CLEAR_CONFIRMATION).toBe(
       "Your trips and preferences have been cleared. Looking forward to your next trip."
+    );
+  });
+});
+
+describe("Telegram voice notes", () => {
+  it("promotes a transcript into the user turn for the agent to answer", () => {
+    const message = {
+      attachments: [],
+      caption: "",
+      chat: { id: "1", type: "private" as const },
+      from: { id: "1", isBot: false },
+      messageId: "42",
+      raw: {},
+      text: ""
+    };
+
+    promoteVoiceTranscriptToTelegramTurn(message, "Why did the fare go up?");
+
+    expect(message.text).toBe("Why did the fare go up?");
+    expect(CAPTAIN_VOICE_TURN_CONTEXT).toContain("actual current request");
+    expect(CAPTAIN_VOICE_TURN_CONTEXT).toContain("acknowledge what you understood");
+    expect(CAPTAIN_VOICE_TURN_CONTEXT).not.toContain("Where would you like to fly to");
+  });
+
+  it("acknowledges a spoken trip request before asking for a missing detail", () => {
+    expect(acknowledgeVoiceClarification("Where would you like to fly to?")).toBe(
+      "I understood your voice note as a trip request. Where would you like to fly to?"
     );
   });
 });

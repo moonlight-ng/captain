@@ -171,7 +171,7 @@ describe("flight worker orchestration", () => {
     })).toContain("£10.00 less");
   });
 
-  it("opens a trip with an overview of the route, not one fare", () => {
+  it("opens a trip with a concise, goal-oriented overview", () => {
     expect(notificationText({
       id: "first",
       userId: "user",
@@ -194,15 +194,9 @@ describe("flight worker orchestration", () => {
         }
       }
     })).toBe(
-      "Lagos → London is set up. Here’s the first look.\n"
-      + "\n"
-      + "14 fares today, $393.26–$812.50.\n"
-      + "My goal: Get you LOS → LON on 10 Sept for the cheapest fare, "
-      + "and tell you when it's the moment to buy.\n"
-      + "I’ll check once a day and only message you when something moves.\n"
-      + "\n"
-      + "Open the trip to pick the flight you want me to watch, or just reply here "
-      + "to change the dates, airports, or anything else."
+      "I found 14 fares for Lagos → London on 10 Sept, starting at $393.26.\n"
+      + "Open the trip to compare the best options and choose one to watch. "
+      + "I’ll check prices daily and only message you when something changes."
     );
   });
 
@@ -221,10 +215,14 @@ describe("flight worker orchestration", () => {
         range: { count: 1, low: 400, high: 400, currency: "USD" },
         trackingStartsAt: "2026-11-10"
       }
-    })).toContain("1 fare today, around $400.00.");
+    })).toBe(
+      "I found 1 fare for Lagos → London at $400.00.\n"
+      + "Open the trip to compare the best options and choose one to watch. "
+      + "Daily price checks start 10 Nov."
+    );
   });
 
-  it("closes a price rise on the goal it threatens", () => {
+  it("turns a price rise into a clear booking decision", () => {
     expect(notificationText({
       id: "rise",
       userId: "user",
@@ -242,9 +240,8 @@ describe("flight worker orchestration", () => {
         percent: 9
       }
     })).toBe(
-      "Heads up — the BA option you’re watching is up £37.00 (9%) this week.\n"
-      + "It may be worth checking now.\n"
-      + "Goal: Get you LOS → LON on 10 Sept for under $400."
+      "The BA fare you’re watching is up £37.00 (9%) this week.\n"
+      + "Open the trip to decide whether to book now."
     );
   });
 
@@ -375,6 +372,13 @@ function offerSnapshot(
     verifiedAt: "2026-08-01T12:00:00.000Z",
     expiresAt: null,
     observedAt: "2026-08-01T12:00:00.000Z",
-    snapshot: { durationSeconds, stops: 0 }
+    snapshot: {
+      durationSeconds,
+      stops: 0,
+      segments: [{
+        airline: "BA",
+        departure: "2026-09-10T09:00:00.000Z"
+      }]
+    }
   };
 }

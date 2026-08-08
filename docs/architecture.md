@@ -7,8 +7,10 @@ Captain's PostgreSQL database and public Telegram bot token. Captain owns
 onboarding, the one-active-trip flow, secure web sessions, and the dashboard.
 The worker owns scheduled fare research and Telegram alerts.
 
-Pilot is a separate private product. It has no Captain client, flight tools,
-shared credentials, redirects, or access to Captain profiles and trips.
+Pilot is a separate private product. It has no Captain flight tools, redirects,
+or access to Captain profiles and trips. Captain's only Pilot-facing operation
+is a signed, one-way `/feedback` notification carrying bounded text and basic
+reporter attribution to Telegram; it never enters Pilot's agent session.
 
 ## Profile, trip, and authentication flow
 
@@ -69,10 +71,10 @@ is the sum of each leg's elapsed flight time, excluding destination stays.
 
 Captain speaks only when something has changed. There is no digest and no
 cadence to configure: `notification_mode` is `changes_only` or `off`. The one
-exception is a trip's first search, which always sends an overview — the
-route's price range, the trip's goal, and an invitation to adjust it — because
-a traveller who has just described a journey needs to know what Captain
-understood.
+exception is a trip's first search, which always sends a concise overview of
+the route, date, starting fare, and next action. A traveller who has just
+described a journey needs to know what Captain found without seeing its
+internal planning state.
 
 Improvement alerts require a 5% price reduction, 10% journey-time reduction,
 or 10% Balanced-score improvement, with at most one improvement alert per
@@ -82,11 +84,11 @@ opening overview is never superseded by a later one. Each sent Telegram message
 ID points to an immutable recommendation snapshot so a quoted reply explains
 that exact historical comparison.
 
-Every trip has a goal, derived by `formatTripGoal` from its route, departure
-date, ranking mode, and any maximum fare. It is never stored or authored, so
-it cannot drift from the trip. The creation receipt, the dashboard, the
-`get_trip` tool, and every automatic message render from it, which is what
-lets an alert say what its news means rather than just quoting a number.
+Every trip has an internal goal, derived by `formatTripGoal` from its route,
+departure date, ranking mode, and any maximum fare. It is never stored or
+authored, so it cannot drift from the trip. The dashboard and `get_trip` tool
+can use it to evaluate results, but traveller-facing messages express the
+relevant outcome and next action instead of printing the goal field.
 
 `summarizePriceHistory` in `@agents/flight-domain` turns the watched flight's
 observations into the current price, its range, and a verdict. The dashboard,

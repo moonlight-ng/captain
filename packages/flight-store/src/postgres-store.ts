@@ -1576,9 +1576,9 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           createdAt: now.toISOString()
         }
       };
-      // The first search always earns a message: it is the overview that tells
-      // the traveller what Captain found and what it is now chasing. After
-      // that, only a change worth the interruption speaks.
+      // The first search always earns a message: it tells the traveller what
+      // Captain found and what to do next. After that, only a change worth the
+      // interruption speaks.
       const kind = profile.notificationMode === "off"
         ? null
         : !previous
@@ -1749,8 +1749,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           and kind in ('inventory_gap', 'watch_attention')
       `;
       // A stale "better option" is worth dropping for a fresher one. The
-      // opening overview is not one of those: it states the goal, and it is
-      // the only message that does, so it always gets delivered.
+      // opening overview is not one of those, so it always gets delivered.
       await tx`
         with ranked as (
           select id,

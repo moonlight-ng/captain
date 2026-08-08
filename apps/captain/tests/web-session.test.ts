@@ -52,6 +52,13 @@ describe("Captain web auth", () => {
     });
   });
 
+  it("can send a single-use login directly to the feedback form", async () => {
+    const { auth, userId: id } = await setup();
+    const link = await auth.createLoginLink(id, "/feedback");
+    const exchanged = await auth.exchangeLoginToken(new URL(link).searchParams.get("t")!);
+    expect(exchanged).toMatchObject({ userId: id, redirectPath: "/feedback" });
+  });
+
   it("rejects expired login tokens", async () => {
     const { auth, store, userId: id } = await setup();
     const link = await auth.createLoginLink(id, "/profile");

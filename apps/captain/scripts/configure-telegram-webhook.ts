@@ -37,6 +37,7 @@ if (deleting) {
     commands: [
       { command: "trip", description: "Show your active trip" },
       { command: "profile", description: "Manage your Captain profile" },
+      { command: "feedback", description: "Share feedback about Captain" },
       { command: "clear", description: "Clear all data" }
     ]
   });

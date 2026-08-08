@@ -313,6 +313,14 @@ const server = createServer(async (req, res) => {
     return json(res, 200, { profile });
   }
 
+  if (method === "POST" && path === "/api/me/feedback") {
+    await readBody(req);
+    return json(res, 200, {
+      feedbackId: randomUUID(),
+      submittedAt: new Date().toISOString()
+    });
+  }
+
   if (method === "GET" && path === "/api/me/trip") {
     return json(res, 200, {
       ...tripPayload,

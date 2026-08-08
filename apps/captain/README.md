@@ -1,11 +1,16 @@
 # Captain
 
-Captain is a Telegram-first flight price tracker. You describe a trip, it finds
-flights, you pick one to watch, and it tells you how the price moves and when
-to buy. It does not book, take payments, or collect any traveller identity.
+Captain is a Telegram-first trip planner and flight price tracker. You can send
+a trip by text or voice note. If its route or dates are uncertain, Captain can
+help work them out; otherwise it goes straight to finding flights. You pick one
+to watch, and it tells you how the price moves and when to buy. It does not book,
+take payments, or collect any traveller identity.
 
 ## Product contract
 
+- Itinerary planning is an optional capability for uncertain routes or dates,
+  not a required step for every trip. Captain does not use unverified fare or
+  availability claims to justify a date suggestion.
 - `/start` sets a default currency, ranking mode, and optional preferred or
   avoided airlines.
 - A traveller can have one active or paused trip at a time. A second trip
@@ -32,6 +37,9 @@ to buy. It does not book, take payments, or collect any traveller identity.
   kept long enough to cover a full tracking run. `/clear` resets preferences to
   defaults. Account deletion removes the traveller, trip, sessions, and
   retained evidence.
+- `/feedback` opens a session-authenticated text form. A signed, one-way bridge
+  sends the bounded submission to Pilot's owner in Telegram without exposing
+  Pilot memory or opening a private agent turn.
 
 ## Architecture
 
@@ -66,9 +74,11 @@ results per search. New trips and manual searches wake the worker through a
 transactional PostgreSQL notification; adaptive polling remains the recovery
 path if the worker was disconnected when the notification was sent.
 
-Captain and Pilot are independent. Captain has no Pilot client, route,
-principal, secret, tool, or redirect. Future provider adapters use the
-reserved `official_*` namespace and require documented access.
+Captain and Pilot remain independent flight and agent products. The only
+cross-product connection is the notification-only feedback ingress described
+above: it cannot read Pilot or Captain data, invoke Pilot tools, or enter a
+Pilot model session. Future provider adapters use the reserved `official_*`
+namespace and require documented access.
 
 ## Local development
 

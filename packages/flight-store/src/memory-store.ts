@@ -1245,9 +1245,9 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         }
       };
       this.#recommendations.set(trip.id, recommendation);
-      // The first search always earns a message: it is the overview that tells
-      // the traveller what Captain found and what it is now chasing. After
-      // that, only a change worth the interruption speaks.
+      // The first search always earns a message: it tells the traveller what
+      // Captain found and what to do next. After that, only a change worth the
+      // interruption speaks.
       const kind = profile.notificationMode === "off"
         ? null
         : !previous
@@ -1282,9 +1282,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         this.#notifications.set(notification.id, { ...notification, status: "superseded" });
       }
     }
-    // A stale "better option" is worth dropping for a fresher one. The
-    // opening overview is not one of those: it states the goal, and it is the
-    // only message that does, so it always gets delivered.
+    // A stale "better option" is worth dropping for a fresher one. The opening
+    // overview is not one of those, so it always gets delivered.
     const resultKinds = new Set<CaptainNotification["kind"]>(["price_drop", "new_best"]);
     const resultGroups = new Map<string, StoredNotification[]>();
     for (const notification of [...this.#notifications.values()].filter((candidate) =>
@@ -1556,7 +1555,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       tripId: trip.id,
       telegramChatId: user.telegramChatId,
       kind,
-      // Every automatic message states the goal it is reporting against.
+      // The immutable goal remains available as internal decision context.
       payload: { ...notificationGoalPayload(trip, profile), ...payload },
       attempts: 0,
       telegramMessageId: null,

@@ -5,8 +5,8 @@
  * they put on the fare. Deriving it means the goal can never drift from the
  * trip it describes, and onboarding stays free of questions.
  *
- * The dashboard, the creation receipt, and every automatic message render from
- * here, so all three say the same thing about what Captain is trying to do.
+ * The dashboard and agent use it as decision context so recommendations stay
+ * aligned without printing this internal sentence to the traveller.
  */
 import type { RankingMode } from "./profile.js";
 import type { TripBrief } from "./trip.js";

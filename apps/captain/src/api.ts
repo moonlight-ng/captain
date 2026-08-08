@@ -92,6 +92,16 @@ export async function updateProfile(
   })).profile;
 }
 
+export async function submitFeedback(text: string): Promise<{
+  feedbackId: string;
+  submittedAt: string;
+}> {
+  return api("/api/me/feedback", {
+    method: "POST",
+    body: JSON.stringify({ text })
+  });
+}
+
 export function getTrip(tripId?: string): Promise<TripPayload> {
   const search = tripId ? `?${new URLSearchParams({ trip: tripId }).toString()}` : "";
   return api(`/api/me/trip${search}`);

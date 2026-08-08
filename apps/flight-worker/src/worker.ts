@@ -2,6 +2,7 @@ import {
   createCaptainAccessLink,
   deriveOfferMetrics,
   FlightSearchProviderError,
+  reviewCaptainMessage,
   type FlightSearchProvider
 } from "@agents/flight-domain";
 import {
@@ -261,25 +262,20 @@ export class FlightWorker {
   }
 }
 
-/**
- * Captain only writes when something happened, so every message here has news
- * in it. Each one names the goal it is reporting against: an alert that does
- * not say what a fare means for the thing the traveller asked for is just a
- * number.
- */
+/** Captain only writes when something happened, so every message has news. */
 export function notificationText(notification: CaptainNotification): string {
+  return reviewCaptainMessage(notificationDraftText(notification));
+}
+
+function notificationDraftText(notification: CaptainNotification): string {
   const title = stringField(notification.payload, "tripTitle") || "your trip";
   const route = shortRoute(title);
-  const goal = stringField(notification.payload, "tripGoal");
   if (notification.kind === "initial_results") {
-    return firstUpdateText(notification, route, goal);
+    return firstUpdateText(notification, route);
   }
   if (notification.kind === "tracking_activation") {
-    return withGoal(
-      `I’m starting regular tracking for ${route} now.\n`
-      + "I’ll check the fare once a day and only write when something moves.",
-      goal
-    );
+    return `Daily price checks are now running for ${route}.\n`
+      + "I’ll only message you when something changes.";
   }
   if (notification.kind === "tracking_summary") {
     const checksCompleted = numericField(notification.payload, "checksCompleted");
@@ -297,67 +293,48 @@ export function notificationText(notification: CaptainNotification): string {
     const percent = numericField(notification.payload, "percent");
     const airline = current ? airlineName(current) : "flight";
     const currency = current?.currency || stringField(notification.payload, "currency") || "USD";
-    return withGoal(
-      `Heads up — the ${airline} option you’re watching is up `
+    return `The ${airline} fare you’re watching is up `
       + `${formatAmount(increase, currency)} (${Math.round(percent)}%) this week.\n`
-      + "It may be worth checking now.",
-      goal
-    );
+      + "Open the trip to decide whether to book now.";
   }
   const snapshot = recommendationSnapshot(notification.payload.snapshot);
   const current = snapshot?.current ?? offerSnapshot(notification.payload.current);
   const details = current ? offerLine(current) : stringField(notification.payload, "summary");
   if (!snapshot?.previous) {
-    return firstUpdateText(notification, route, goal);
+    return firstUpdateText(notification, route);
   }
-  return withGoal(
-    `Good news — I found a better option for ${route}: ${improvementText(snapshot)}.\n${details}.`,
-    goal
-  );
+  return `I found a better option for ${route}: ${improvementText(snapshot)}.\n${details}.`;
 }
 
 /**
  * The first thing Captain ever says about a trip. It is an overview, not a
- * quote: the traveller has just described a journey and wants to know Captain
- * understood it, what the route costs today, and that the conversation is
- * still open. A single fare answers none of that.
+ * quote: the traveller has just described a journey and wants to know what
+ * Captain found and what to do next.
  */
 function firstUpdateText(
   notification: CaptainNotification,
-  route: string,
-  goal: string
+  route: string
 ): string {
   const range = recordField(notification.payload, "range");
   const count = numericField(range, "count");
   const low = numericField(range, "low");
-  const high = numericField(range, "high");
   const currency = stringField(range ?? {}, "currency") || "USD";
   const trackingStartsAt = stringField(notification.payload, "trackingStartsAt");
-  const spread = count > 0 && high > low
-    ? `${count} fare${count === 1 ? "" : "s"} today, `
-      + `${formatAmount(low, currency)}–${formatAmount(high, currency)}.`
-    : count > 0
-      ? `${count} fare${count === 1 ? "" : "s"} today, around ${formatAmount(low, currency)}.`
-      : "No fares came back on this first look. I’ll keep checking.";
-  // The blank lines are deliberate: in Telegram they separate the three things
-  // this message does — report, state the goal, and invite a reply.
-  return [
-    `${route} is set up. Here’s the first look.`,
-    "",
-    spread,
-    ...(goal ? [`My goal: ${goal}`] : []),
-    trackingStartsAt
-      ? `Daily tracking starts ${formatDate(trackingStartsAt)}, 30 days before departure.`
-      : "I’ll check once a day and only message you when something moves.",
-    "",
-    "Open the trip to pick the flight you want me to watch, or just reply here "
-    + "to change the dates, airports, or anything else."
-  ].join("\n");
-}
-
-/** Closes a message on the goal it is reporting against. */
-function withGoal(body: string, goal: string): string {
-  return goal ? `${body}\nGoal: ${goal}` : body;
+  const snapshot = recommendationSnapshot(notification.payload.snapshot);
+  const departure = stringField(notification.payload, "tripDepartureDate")
+    || (snapshot?.current ? offerDepartureDate(snapshot.current) : "");
+  const trip = `${route}${departure ? ` on ${formatDate(departure)}` : ""}`;
+  if (count <= 0) {
+    return `I didn’t find any fares for ${trip} yet.\n`
+      + "I’ll keep checking. Open the trip if you want to change the route or dates.";
+  }
+  const finding = count === 1
+    ? `I found 1 fare for ${trip} at ${formatAmount(low, currency)}.`
+    : `I found ${count} fares for ${trip}, starting at ${formatAmount(low, currency)}.`;
+  const followUp = trackingStartsAt
+    ? `Daily price checks start ${formatDate(trackingStartsAt)}.`
+    : "I’ll check prices daily and only message you when something changes.";
+  return `${finding}\nOpen the trip to compare the best options and choose one to watch. ${followUp}`;
 }
 
 function duffelOfferId(url: string | undefined): string | null {

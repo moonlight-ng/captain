@@ -60,6 +60,7 @@ import { inPageLink } from "./navigation";
 import { isWatchSearching, shouldAutoSearchOnOpen } from "./trip-stage";
 import { Home } from "./screens/Home";
 import { Profile } from "./screens/Profile";
+import { Feedback } from "./screens/Feedback";
 import { TripSettings } from "./screens/TripSettings";
 
 type Tab = "flights" | "airlines" | "browse";
@@ -69,12 +70,13 @@ const tabLabels: Record<Tab, string> = {
   browse: "All flights"
 };
 
-type Page = "home" | "trip" | "trip-settings" | "profile";
+type Page = "home" | "trip" | "trip-settings" | "profile" | "feedback";
 
 /** Account paths already sent to Telegram. They all land on the one profile page. */
 const profileAliases = new Set(["/profile", "/settings", "/preferences", "/travellers", "/payment"]);
 
 function currentPage(): Page {
+  if (/^\/feedback\/?$/u.test(window.location.pathname)) return "feedback";
   if (profileAliases.has(window.location.pathname)) return "profile";
   if (window.location.pathname === "/trips") return "home";
   return /^\/trip\/[^/]+\/settings\/?$/u.test(window.location.pathname)
@@ -144,6 +146,7 @@ export function App() {
       const session = await getSession();
       setDisplayName(session.displayName);
       setAuthenticated(true);
+      if (currentPage() === "feedback") return;
       const requestedTripId = currentTripId();
       const [nextProfile, nextTrip] = await Promise.all([
         getProfile(),
@@ -334,7 +337,15 @@ export function App() {
     return (
       <CenteredState
         title="Open Captain from Telegram"
-        detail={error || "Use Open trip or Profile from Captain in Telegram."}
+        detail={error || "Use a link from Captain in Telegram."}
+      />
+    );
+  }
+  if (page === "feedback") {
+    return (
+      <Feedback
+        displayName={displayName}
+        onBack={() => window.location.assign(homeHref())}
       />
     );
   }
@@ -442,8 +453,8 @@ export function App() {
 
       {!trip ? (
         <section className="empty-hero">
-          <h1>Track flight prices</h1>
-          <p>Text or send a voice note in Telegram to start a new trip</p>
+          <h1>Plan trips and track flight prices</h1>
+          <p>Send your trip by text or voice note in Telegram</p>
         </section>
       ) : watchlistFocus?.view === "book" ? (
         <BookHandoff

@@ -147,6 +147,21 @@ describe("Captain trip planning", () => {
     )).toBe(false);
   });
 
+  it("keeps exploratory itinerary and date planning in the conversation", () => {
+    for (const request of [
+      "I have a potential itinerary and need help figuring out what dates work",
+      "Help me plan an itinerary to London and Paris; my dates are flexible",
+      "I want to travel in September but I’m not sure which dates make sense"
+    ]) {
+      expect(TripPlanningService.isTripPlanningRequest(request)).toBe(true);
+      expect(TripPlanningService.needsItineraryPlanningConversation(request)).toBe(true);
+    }
+
+    expect(TripPlanningService.needsItineraryPlanningConversation(
+      "Lagos to London on 6 September 2026"
+    )).toBe(false);
+  });
+
   it("reproduces the Lagos-to-New-York conversation without changing dates", async () => {
     const { planning, trips, user } = await setup();
     const first = await planning.prepare(
@@ -188,11 +203,14 @@ describe("Captain trip planning", () => {
       stayNights: 7
     });
     expect(started.message).toContain("Send /trip");
-    // A trip states what it is for the moment it exists.
+    // The structured goal stays available for decision-making without being
+    // printed as internal planning language in the traveller-facing receipt.
     expect(started.receipt.goal)
       .toBe("Get you LOS → NYC and back on 17 Aug for the best balance of fare and "
         + "journey time, and tell you when it's the moment to buy.");
-    expect(started.message).toContain(`Goal: ${started.receipt.goal}`);
+    expect(started.message).not.toContain("Goal:");
+    expect(started.message).not.toContain(started.receipt.goal);
+    expect(started.message).toContain("I’m checking flights now");
     expect(started.message).toContain(`Open trip: https://captain.example/t#test-${started.receipt.tripId}`);
     expect(started.message).not.toContain("Trip reference");
     const renderedReceipt = telegramDashboardMessage(started.message);
