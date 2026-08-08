@@ -146,9 +146,14 @@ export class TripPlanningService {
       ? [...draft.sourceMessageIds, sourceMessageId].slice(-40)
       : draft.sourceMessageIds;
     const priorMissingFields = missingTripFields(draft.state, null);
+    // “Create” in front of proposed windows is consent to them, not a separate
+    // instruction: the traveller still reviews the trip before it starts.
     const acceptProposedWindows = !compiledConstraints
       && canAcceptProposedWindows(draft.state)
-      && REPLACE_CONSENT_PATTERN.test(request.trim());
+      && (
+        REPLACE_CONSENT_PATTERN.test(request.trim())
+        || CONFIRM_PATTERN.test(request.trim())
+      );
     const declineProposedWindows = !compiledConstraints
       && canAcceptProposedWindows(draft.state)
       && DECLINE_PROPOSAL_PATTERN.test(request.trim());
@@ -527,6 +532,25 @@ export class TripPlanningService {
     if (CANCEL_PATTERN.test(request.trim())) {
       return this.cancel(userId, draft.id, draft.revision);
     }
+    // There is nothing to confirm on a draft that is still being collected, and
+    // no proposal for a “yes” to land on. Saying so and re-asking beats revising
+    // the draft into the identical question the traveller is already looking at.
+    if (
+      CONFIRM_PATTERN.test(request.trim())
+      && !canAcceptProposedWindows(draft.state)
+    ) {
+      const missingFields = missingTripFields(draft.state, null);
+      const missing = missingSummary(missingFields);
+      if (missing) {
+        return {
+          status: "needs_input",
+          draft,
+          prompt: `I can’t start tracking yet — the trip still needs ${missing}.\n\n`
+            + clarificationPrompt(missingFields, draft.state),
+          missingFields
+        };
+      }
+    }
     if (
       (NEW_DRAFT_PATTERN.test(request) || FRESH_TRIP_DIRECTIVE_PATTERN.test(request))
       && TripPlanningService.isTripPlanningRequest(request)
@@ -714,6 +738,18 @@ function completePlan(
     departureDate,
     returnDate
   };
+}
+
+/** Names what a draft is still short of, or null when nothing is. */
+function missingSummary(missingFields: string[]): string | null {
+  const missing = new Set(missingFields);
+  if (missing.has("originAirports")) return "a departure city";
+  if (missing.has("destinationAirports")) return "a destination";
+  if (missing.has("departureDate")) return "a departure date";
+  if (missing.has("returnDate")) return "a return date";
+  if (missing.has("itineraryLegs")) return "a date for every flight";
+  if (missing.has("travellers")) return "a supported party size";
+  return null;
 }
 
 function clarificationPrompt(missingFields: string[], state: TripDraftState): string {

@@ -427,9 +427,12 @@ function appendDateOperations(
     });
     return;
   }
+  // A bare weekday only means something next to the leg it answers for. Pass
+  // the word through so the reducer can read it against that leg's window or
+  // arrival deadline; resolving it here would measure it from today instead.
   if (
     weekday
-    && selectedLeg?.departure?.kind === "window"
+    && legAnchorsWeekday(selectedLeg)
     && !/\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|\d{1,2})\b/iu.test(input.normalizedDateText)
   ) {
     operations.push({
@@ -543,6 +546,12 @@ function explicitDateRangeExpressions(request: string): string[] {
     .sort((left, right) => left.index - right.index)
     .filter((match, index, all) => index === 0 || match.index !== all[index - 1]!.index)
     .map((match) => match.value);
+}
+
+function legAnchorsWeekday(leg: TripDraftState["legs"][number] | undefined): boolean {
+  if (!leg) return false;
+  if (leg.departure) return leg.departure.kind === "window";
+  return Boolean(leg.feasibleDepartureWindow || leg.arriveBy);
 }
 
 function targetFor(question: TripPlannerQuestion, fallbackLeg: number): DateTarget {

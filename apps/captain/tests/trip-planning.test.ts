@@ -1079,4 +1079,112 @@ describe("Captain trip planning", () => {
     expect(rendered.text).toContain("You have 2 saved trips:");
     expect(rendered.text).not.toContain("https://");
   });
+
+  // A weekday answer to a leg question means the weekday that gets the
+  // traveller there in time, not the next one on the calendar.
+  it("reads a bare weekday against the leg's arrive-by deadline", async () => {
+    const clock = new Date("2026-08-08T12:00:00Z");
+    const { planning, user } = await setup(clock);
+    await planning.prepare(
+      user.id,
+      "Let's plan for Nairobi in November. I'm going to a wedding from Nov 4 - 8, "
+      + "a birthday from Nov 10 - 14. Then 19 - 22, Uganda. Then a wedding, Dec 10. "
+      + "I'll be in London and want to spend Christmas in Lagos."
+    );
+
+    const dateQuestion = await planning.handleOpenDraftText(user.id, "From London", null);
+    if (dateQuestion?.status !== "needs_input") {
+      throw new Error("Expected the first-flight date question");
+    }
+    expect(dateQuestion.prompt).toContain("When can you fly London → Nairobi?");
+    expect(dateQuestion.prompt).toContain("arrive by Wednesday, 4 Nov 2026");
+
+    const answered = await planning.handleOpenDraftText(user.id, "The sunday before", null);
+    if (answered?.status !== "needs_input") {
+      throw new Error("Expected the itinerary to continue");
+    }
+    // The Sunday before Wednesday 4 Nov 2026 — not 9 Aug 2026, the next
+    // Sunday after today.
+    expect(answered.draft.state.legs[0]).toMatchObject({
+      originAirports: ["LON"],
+      destinationAirports: ["NBO"],
+      departure: { kind: "exact", date: "2026-11-01" }
+    });
+  });
+
+  // A date past the deadline is refused rather than stored, and the traveller
+  // is told which deadline it missed.
+  it("refuses a departure that lands after the arrival deadline", async () => {
+    const clock = new Date("2026-08-08T12:00:00Z");
+    const { planning, user } = await setup(clock);
+    await planning.prepare(
+      user.id,
+      "Let's plan for Nairobi in November. I'm going to a wedding from Nov 4 - 8, "
+      + "a birthday from Nov 10 - 14. Then 19 - 22, Uganda. Then a wedding, Dec 10. "
+      + "I'll be in London and want to spend Christmas in Lagos."
+    );
+    await planning.handleOpenDraftText(user.id, "From London", null);
+
+    const answered = await planning.handleOpenDraftText(user.id, "5 November", null);
+    if (answered?.status !== "needs_input") {
+      throw new Error("Expected the deadline question again");
+    }
+    expect(answered.prompt).toContain("after the 2026-11-04 arrival deadline");
+    expect(answered.draft.state.legs[0]!.departure).toBeNull();
+  });
+
+  // “Create” in front of proposed search windows accepts them, the same as
+  // “yes” — it never re-posts the proposal the traveller just answered.
+  it("reads create as consent to the proposed search windows", async () => {
+    const clock = new Date("2026-08-08T12:00:00Z");
+    const { planning, user } = await setup(clock);
+    await planning.prepare(
+      user.id,
+      "Let's plan for Nairobi in November. I'm going to a wedding from Nov 4 - 8, "
+      + "a birthday from Nov 10 - 14. Then 19 - 22, Uganda. Then a wedding, Dec 10. "
+      + "I'll be in London and want to spend Christmas in Lagos."
+    );
+    await planning.handleOpenDraftText(user.id, "From London", null);
+    const proposals = await planning.handleOpenDraftText(user.id, "The sunday before", null);
+    if (proposals?.status !== "needs_input") {
+      throw new Error("Expected proposed search windows");
+    }
+    expect(proposals.prompt).toContain("Use these seven-day search windows?");
+
+    const created = await planning.handleOpenDraftText(user.id, "Create", null);
+    expect(created?.status).toBe("awaiting_confirmation");
+    if (created?.status !== "awaiting_confirmation") {
+      throw new Error("Expected the trip to reach its confirmation");
+    }
+    expect(created.confirmation).not.toBe(proposals.prompt);
+    expect(created.draft.state.legs.every((leg) => leg.departure !== null)).toBe(true);
+  });
+
+  // With nothing proposed to say yes to, “Create” explains what is missing
+  // rather than silently re-asking the same question.
+  it("explains why an incomplete draft cannot be created yet", async () => {
+    const clock = new Date("2026-08-08T12:00:00Z");
+    const { planning, user } = await setup(clock);
+    await planning.prepare(
+      user.id,
+      "Let's plan for Nairobi in November. I'm going to a wedding from Nov 4 - 8, "
+      + "a birthday from Nov 10 - 14. Then 19 - 22, Uganda. Then a wedding, Dec 10. "
+      + "I'll be in London and want to spend Christmas in Lagos."
+    );
+    const dateQuestion = await planning.handleOpenDraftText(user.id, "From London", null);
+    if (dateQuestion?.status !== "needs_input") {
+      throw new Error("Expected the first-flight date question");
+    }
+
+    const created = await planning.handleOpenDraftText(user.id, "Create", null);
+    if (created?.status !== "needs_input") {
+      throw new Error("Expected an explanation rather than a trip");
+    }
+    expect(created.prompt).not.toBe(dateQuestion.prompt);
+    expect(created.prompt).toContain("I can’t start tracking yet");
+    expect(created.prompt).toContain("a date for every flight");
+    expect(created.prompt).toContain("When can you fly London → Nairobi?");
+    // A message that changes nothing must not burn a draft revision.
+    expect(created.draft.revision).toBe(dateQuestion.draft.revision);
+  });
 });

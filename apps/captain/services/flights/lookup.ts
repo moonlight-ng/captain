@@ -44,7 +44,9 @@ export type FlightLookupOffer = {
 };
 
 export type FlightLookupResult = {
-  status: "found" | "no_matches" | "needs_confirmation" | "no_trip" | "unavailable";
+  // `draft_incomplete` is only ever returned for a draft that cannot be
+  // confirmed yet, so it must never read as “the traveller just has to confirm”.
+  status: "found" | "no_matches" | "draft_incomplete" | "no_trip" | "unavailable";
   source: "stored_trip" | "live_trip" | "live_prepared_trip" | null;
   tripId: string | null;
   draftId: string | null;
@@ -117,7 +119,7 @@ export class FlightLookupService {
       if (!draft) return emptyResult("no_trip", airlineCode);
       if (draft.status !== "awaiting_confirmation" || !draft.confirmationSnapshot) {
         return {
-          ...emptyResult("needs_confirmation", airlineCode),
+          ...emptyResult("draft_incomplete", airlineCode),
           draftId: draft.id
         };
       }
@@ -185,7 +187,7 @@ export class FlightLookupService {
 }
 
 function emptyResult(
-  status: Extract<FlightLookupResult["status"], "needs_confirmation" | "no_trip">,
+  status: Extract<FlightLookupResult["status"], "draft_incomplete" | "no_trip">,
   airlineCode: string | null
 ): FlightLookupResult {
   return {

@@ -112,8 +112,7 @@ function applyDate(
   timeZone: string
 ): string | null {
   const index = legIndexForTarget(state, target);
-  const current = state.legs[index]?.departure ?? null;
-  const resolved = resolveDateSelection(expression, current, now, timeZone);
+  const resolved = resolveDateSelection(expression, state.legs[index] ?? null, now, timeZone);
   if ("issue" in resolved) return resolved.issue;
   ensureLeg(state, index);
   state.legs[index]!.departure = resolved.selection;
@@ -123,10 +122,11 @@ function applyDate(
 
 function resolveDateSelection(
   expression: string,
-  current: TripDraftDateSelection | null,
+  leg: TripDraftState["legs"][number] | null,
   now: Date,
   timeZone: string
 ): { selection: TripDraftDateSelection } | { issue: string } {
+  const current = leg?.departure ?? null;
   const firstWeek = firstWeekSelection(expression, now, timeZone);
   if (firstWeek) return { selection: firstWeek };
 
@@ -145,22 +145,41 @@ function resolveDateSelection(
   }
 
   const weekday = weekdayIn(expression);
-  if (weekday && current?.kind === "window") {
-    const matches: string[] = [];
-    for (let date = current.start; daysBetween(date, current.end) >= 0; date = addIsoDays(date, 1)) {
-      if (weekdayName(date).toLowerCase() === weekday) matches.push(date);
-    }
-    if (matches.length === 1) {
-      return { selection: { kind: "exact", date: matches[0]! } };
-    }
-    if (matches.length > 1) {
+  if (weekday) {
+    const window = current?.kind === "window"
+      ? { start: current.start, end: current.end, label: `“${current.source}”` }
+      : !current && leg?.feasibleDepartureWindow
+        ? {
+            ...leg.feasibleDepartureWindow,
+            label: `${leg.feasibleDepartureWindow.start} to ${leg.feasibleDepartureWindow.end}`
+          }
+        : null;
+    if (window) {
+      const matches: string[] = [];
+      for (let date = window.start; daysBetween(date, window.end) >= 0; date = addIsoDays(date, 1)) {
+        if (weekdayName(date).toLowerCase() === weekday) matches.push(date);
+      }
+      if (matches.length === 1) {
+        return { selection: { kind: "exact", date: matches[0]! } };
+      }
+      if (matches.length > 1) {
+        return {
+          issue: `${titleCase(weekday)} matches ${matches.join(" or ")} in ${window.label}. Which one should I use?`
+        };
+      }
       return {
-        issue: `${titleCase(weekday)} matches ${matches.join(" or ")} in “${current.source}”. Which one should I use?`
+        issue: `There is no ${titleCase(weekday)} in ${window.label}. I kept that date window. Which date should I use?`
       };
     }
-    return {
-      issue: `There is no ${titleCase(weekday)} in “${current.source}”. I kept that date window. Which date should I use?`
-    };
+    // No window to read it against, but the leg still has to land by a fixed
+    // date. A traveller naming a weekday means the last one that arrives in
+    // time — never the next one on this week's calendar.
+    if (!current && leg?.arriveBy) {
+      const date = latestWeekdayOnOrBefore(weekday, leg.arriveBy);
+      if (date && daysBetween(isoDate(localDate(now, timeZone)), date) >= 0) {
+        return { selection: { kind: "exact", date } };
+      }
+    }
   }
 
   const resolved = resolveTripDateIntent(expression, now, timeZone);
@@ -360,6 +379,14 @@ function ensureLeg(state: TripDraftState, index: number): void {
 function weekdayIn(expression: string): string | null {
   return /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/iu
     .exec(expression)?.[1]?.toLowerCase() ?? null;
+}
+
+function latestWeekdayOnOrBefore(weekday: string, deadline: string): string | null {
+  for (let offset = 0; offset < 7; offset += 1) {
+    const date = addIsoDays(deadline, -offset);
+    if (weekdayName(date).toLowerCase() === weekday) return date;
+  }
+  return null;
 }
 
 function localDate(now: Date, timeZone: string): Date {
