@@ -4,6 +4,7 @@ import type { OfferSnapshot } from "@agents/flight-domain";
 import type { RecommendationSnapshot } from "@agents/flight-store";
 
 import {
+  acknowledgeVoiceClarification,
   CAPTAIN_CLEAR_COMMAND,
   CAPTAIN_CLEAR_CONFIRMATION,
   CAPTAIN_DEFAULTS_INTRO,
@@ -13,8 +14,10 @@ import {
   CAPTAIN_RETURNING_TRAVELLER_WELCOME,
   CAPTAIN_TRIP_COMMAND,
   CAPTAIN_TRIPS_COMMAND,
+  CAPTAIN_VOICE_TURN_CONTEXT,
   explainNotification,
   explainRecommendation,
+  promoteVoiceTranscriptToTelegramTurn,
   repliedToTelegramMessageId,
   returningTravellerWelcome,
   telegramCommandName
@@ -83,6 +86,33 @@ describe("Telegram profile onboarding", () => {
     expect(CAPTAIN_CLEAR_COMMAND).toBe("/clear");
     expect(CAPTAIN_CLEAR_CONFIRMATION).toBe(
       "Your trips and preferences have been cleared. Looking forward to your next trip."
+    );
+  });
+});
+
+describe("Telegram voice notes", () => {
+  it("promotes a transcript into the user turn for the agent to answer", () => {
+    const message = {
+      attachments: [],
+      caption: "",
+      chat: { id: "1", type: "private" as const },
+      from: { id: "1", isBot: false },
+      messageId: "42",
+      raw: {},
+      text: ""
+    };
+
+    promoteVoiceTranscriptToTelegramTurn(message, "Why did the fare go up?");
+
+    expect(message.text).toBe("Why did the fare go up?");
+    expect(CAPTAIN_VOICE_TURN_CONTEXT).toContain("actual current request");
+    expect(CAPTAIN_VOICE_TURN_CONTEXT).toContain("acknowledge what you understood");
+    expect(CAPTAIN_VOICE_TURN_CONTEXT).not.toContain("Where would you like to fly to");
+  });
+
+  it("acknowledges a spoken trip request before asking for a missing detail", () => {
+    expect(acknowledgeVoiceClarification("Where would you like to fly to?")).toBe(
+      "I understood your voice note as a trip request. Where would you like to fly to?"
     );
   });
 });
