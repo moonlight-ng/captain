@@ -138,6 +138,140 @@ describe("Telegram progress copy", () => {
     expect(onShow).not.toHaveBeenCalled();
   });
 
+  it("opens with an acknowledgement before any step is named", async () => {
+    vi.useFakeTimers();
+    const tracker = new TelegramProgressTracker();
+    const { onShow, onEdit, onDiscard } = trackerCallbacks();
+    tracker.start({
+      sessionId: "session-1",
+      chatId: "42",
+      turnId: "turn-1",
+      opening: "Got it — let me check…",
+      onShow,
+      onEdit,
+      onDiscard
+    });
+
+    await vi.advanceTimersByTimeAsync(400);
+    expect(onShow).toHaveBeenCalledWith("Got it — let me check…");
+
+    // The first named step replaces the acknowledgement in place rather than
+    // posting a second message.
+    await tracker.setStatus("session-1", "turn-1", "Checking verified fares…");
+    expect(onShow).toHaveBeenCalledTimes(1);
+    expect(onEdit).toHaveBeenCalledWith("99", "Checking verified fares…");
+
+    await tracker.clear("session-1");
+    expect(onDiscard).toHaveBeenCalledWith("99");
+  });
+
+  it("says nothing at all when the turn beats the opening delay", async () => {
+    vi.useFakeTimers();
+    const tracker = new TelegramProgressTracker();
+    const { onShow, onEdit, onDiscard } = trackerCallbacks();
+    tracker.start({
+      sessionId: "session-1",
+      chatId: "42",
+      turnId: "turn-1",
+      opening: "Got it — let me check…",
+      onShow,
+      onEdit,
+      onDiscard
+    });
+
+    await tracker.clear("session-1");
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(onShow).not.toHaveBeenCalled();
+    expect(onDiscard).not.toHaveBeenCalled();
+  });
+
+  it("moves through holding lines while one step keeps running", async () => {
+    vi.useFakeTimers();
+    const tracker = new TelegramProgressTracker();
+    const { onShow, onEdit, onDiscard } = trackerCallbacks();
+    tracker.start({
+      sessionId: "session-1",
+      chatId: "42",
+      turnId: "turn-1",
+      opening: "Got it — let me check…",
+      holdingLines: ["Still on it…", "Almost there…"],
+      holdingIntervalMs: 5_000,
+      onShow,
+      onEdit,
+      onDiscard
+    });
+
+    await vi.advanceTimersByTimeAsync(400);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onEdit).toHaveBeenLastCalledWith("99", "Still on it…");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onEdit).toHaveBeenLastCalledWith("99", "Almost there…");
+
+    // The list is exhausted, so the last line stays rather than cycling.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onEdit).toHaveBeenCalledTimes(2);
+
+    await tracker.clear("session-1");
+    expect(onDiscard).toHaveBeenCalledWith("99");
+  });
+
+  it("returns to naming the work when a new step interrupts a holding line", async () => {
+    vi.useFakeTimers();
+    const tracker = new TelegramProgressTracker();
+    const { onShow, onEdit, onDiscard } = trackerCallbacks();
+    tracker.start({
+      sessionId: "session-1",
+      chatId: "42",
+      turnId: "turn-1",
+      opening: "Got it — let me check…",
+      holdingLines: ["Still on it…"],
+      holdingIntervalMs: 5_000,
+      onShow,
+      onEdit,
+      onDiscard
+    });
+
+    await vi.advanceTimersByTimeAsync(5_400);
+    expect(onEdit).toHaveBeenLastCalledWith("99", "Still on it…");
+
+    await tracker.setStatus("session-1", "turn-1", "Checking verified fares…");
+    expect(onEdit).toHaveBeenLastCalledWith("99", "Checking verified fares…");
+
+    // The holding line is available again for the step that replaced it.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onEdit).toHaveBeenLastCalledWith("99", "Still on it…");
+
+    await tracker.clear("session-1");
+    expect(onDiscard).toHaveBeenCalledWith("99");
+  });
+
+  it("leaves the current line alone when the same step reports again", async () => {
+    vi.useFakeTimers();
+    const tracker = new TelegramProgressTracker();
+    const { onShow, onEdit, onDiscard } = trackerCallbacks();
+    tracker.start({
+      sessionId: "session-1",
+      chatId: "42",
+      turnId: "turn-1",
+      opening: "Checking verified fares…",
+      holdingLines: ["Still on it…"],
+      holdingIntervalMs: 5_000,
+      onShow,
+      onEdit,
+      onDiscard
+    });
+
+    await vi.advanceTimersByTimeAsync(5_400);
+    expect(onEdit).toHaveBeenLastCalledWith("99", "Still on it…");
+
+    await tracker.setStatus("session-1", "turn-1", "Checking verified fares…");
+
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    await tracker.clear("session-1");
+  });
+
   it("discards a status posted after the turn ended", async () => {
     vi.useFakeTimers();
     const tracker = new TelegramProgressTracker();

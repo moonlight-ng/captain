@@ -10,7 +10,10 @@ import {
   CAPTAIN_DEFAULTS_INTRO,
   CAPTAIN_FEEDBACK_COMMAND,
   CAPTAIN_FEEDBACK_PROMPT,
+  CAPTAIN_HOLDING_STATUS,
   CAPTAIN_NEW_USER_GREETING,
+  CAPTAIN_OPENING_STATUS,
+  CAPTAIN_PLANNING_STATUS,
   CAPTAIN_PROFILE_COMMAND,
   CAPTAIN_READY_PROMPT,
   CAPTAIN_RETURNING_TRAVELLER_WELCOME,
@@ -97,8 +100,38 @@ describe("Telegram profile onboarding", () => {
   it("says that clear removes trips as well as resetting preferences", () => {
     expect(CAPTAIN_CLEAR_COMMAND).toBe("/clear");
     expect(CAPTAIN_CLEAR_CONFIRMATION).toBe(
-      "Your trips and preferences have been cleared. Looking forward to your next trip."
+      "Cleared — trips and preferences both. I’ll be here when the next trip comes up."
     );
+    expect(CAPTAIN_CLEAR_CONFIRMATION).toMatch(/trips/iu);
+    expect(CAPTAIN_CLEAR_CONFIRMATION).toMatch(/preferences/iu);
+  });
+});
+
+describe("Captain progress copy", () => {
+  it("acknowledges the traveller without promising a result", () => {
+    expect(CAPTAIN_OPENING_STATUS).toBe("Got it — let me check…");
+    // The opening is said before Captain has looked at anything, so it must not
+    // name a route, a fare, or an outcome it cannot yet stand behind.
+    expect(CAPTAIN_OPENING_STATUS).not.toMatch(/found|fare|price|trip|cheap/iu);
+  });
+
+  it("keeps holding lines honest about waiting", () => {
+    expect(CAPTAIN_HOLDING_STATUS.length).toBeGreaterThan(0);
+    for (const line of CAPTAIN_HOLDING_STATUS) {
+      expect(line).toMatch(/…$/u);
+      expect(line).not.toMatch(/!/u);
+      // A holding line says Captain is still working, never what it found.
+      expect(line).not.toMatch(/found|no results|error/iu);
+    }
+    expect(new Set(CAPTAIN_HOLDING_STATUS).size).toBe(CAPTAIN_HOLDING_STATUS.length);
+  });
+
+  it("names the planner's own step before falling back to waiting", () => {
+    // The deterministic planner reports no tool events, so its first stage has
+    // to name the work itself rather than open on a holding line.
+    expect(CAPTAIN_PLANNING_STATUS[0]).toBe("Reading the route and dates…");
+    expect(CAPTAIN_PLANNING_STATUS.slice(1)).toEqual([...CAPTAIN_HOLDING_STATUS]);
+    expect(new Set(CAPTAIN_PLANNING_STATUS).size).toBe(CAPTAIN_PLANNING_STATUS.length);
   });
 });
 

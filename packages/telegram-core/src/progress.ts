@@ -1,4 +1,10 @@
 export const TELEGRAM_PROGRESS_DELAY_MS = 1_000;
+// An opening acknowledgement is the traveller's receipt that Captain heard
+// them, so it goes up far sooner than a named step—but not instantly, or every
+// one-line answer would flash a status message it never needed.
+export const TELEGRAM_PROGRESS_OPENING_DELAY_MS = 400;
+// How long one line may sit before it reads as a stall rather than as work.
+export const TELEGRAM_PROGRESS_HOLDING_INTERVAL_MS = 7_000;
 export const TELEGRAM_TYPING_KEEPALIVE_MS = 4_000;
 
 export type TelegramTurnProgress = {
@@ -6,6 +12,11 @@ export type TelegramTurnProgress = {
   messageId: string | null;
   turnId: string;
   statusText: string | null;
+  renderedText: string | null;
+  holdingLines: readonly string[];
+  holdingIndex: number;
+  holdingIntervalMs: number;
+  holdingTimer: ReturnType<typeof setTimeout> | null;
   delayMs: number;
   posting: boolean;
   showTimer: ReturnType<typeof setTimeout> | null;
@@ -64,9 +75,13 @@ export class TelegramProgressTracker {
   }
 
   /**
-   * Starts a turn with the typing indicator alone. A status message is posted
-   * only once `setStatus` reports a step worth naming, and only if that step is
-   * still running after the delay.
+   * Starts a turn on one status message that is posted, edited in place through
+   * however many stages the work takes, and deleted before the real answer
+   * lands. `opening` is what Captain says before it knows anything—an
+   * acknowledgement, not a claim about the work. `holdingLines` take over when a
+   * single step outlasts its welcome, so a slow turn still visibly moves.
+   * Without either, the turn runs on the typing indicator alone until a named
+   * step arrives.
    */
   start(input: {
     sessionId: string;
@@ -76,6 +91,10 @@ export class TelegramProgressTracker {
     onEdit: (messageId: string, statusText: string) => void | Promise<void>;
     onDiscard: (messageId: string) => void | Promise<void>;
     onTyping?: () => void | Promise<void>;
+    opening?: string;
+    openingDelayMs?: number;
+    holdingLines?: readonly string[];
+    holdingIntervalMs?: number;
     delayMs?: number;
   }): TelegramTurnProgress {
     void this.clear(input.sessionId);
@@ -84,6 +103,11 @@ export class TelegramProgressTracker {
       messageId: null,
       turnId: input.turnId,
       statusText: null,
+      renderedText: null,
+      holdingLines: input.holdingLines ?? [],
+      holdingIndex: -1,
+      holdingIntervalMs: input.holdingIntervalMs ?? TELEGRAM_PROGRESS_HOLDING_INTERVAL_MS,
+      holdingTimer: null,
       delayMs: input.delayMs ?? TELEGRAM_PROGRESS_DELAY_MS,
       posting: false,
       showTimer: null,
@@ -101,6 +125,14 @@ export class TelegramProgressTracker {
     }
 
     this.#bySession.set(input.sessionId, progress);
+    if (input.opening) {
+      progress.statusText = input.opening;
+      this.#scheduleShow(
+        input.sessionId,
+        progress,
+        input.openingDelayMs ?? TELEGRAM_PROGRESS_OPENING_DELAY_MS
+      );
+    }
     return progress;
   }
 
@@ -111,17 +143,19 @@ export class TelegramProgressTracker {
   ): Promise<TelegramTurnProgress | undefined> {
     const progress = this.#bySession.get(sessionId);
     if (!progress || progress.turnId !== turnId) return undefined;
+    // A repeated step is the same step still running: leave whatever line is on
+    // screen alone rather than rewinding a holding line back to its status.
     if (progress.statusText === statusText) return progress;
     progress.statusText = statusText;
+    progress.holdingIndex = -1;
     // A scheduled or in-flight post picks up the latest text by itself.
     if (progress.showTimer || progress.posting) return progress;
     if (!progress.messageId) {
-      this.#scheduleShow(sessionId, progress);
+      this.#scheduleShow(sessionId, progress, progress.delayMs);
       return progress;
     }
-    await Promise.resolve(progress.onEdit(progress.messageId, statusText)).catch(
-      () => undefined
-    );
+    await this.#edit(progress, statusText);
+    this.#scheduleHold(sessionId, progress);
     return progress;
   }
 
@@ -132,6 +166,10 @@ export class TelegramProgressTracker {
     if (progress.showTimer) {
       clearTimeout(progress.showTimer);
       progress.showTimer = null;
+    }
+    if (progress.holdingTimer) {
+      clearTimeout(progress.holdingTimer);
+      progress.holdingTimer = null;
     }
     if (progress.keepalive) {
       clearInterval(progress.keepalive);
@@ -145,7 +183,11 @@ export class TelegramProgressTracker {
     return progress;
   }
 
-  #scheduleShow(sessionId: string, progress: TelegramTurnProgress): void {
+  #scheduleShow(
+    sessionId: string,
+    progress: TelegramTurnProgress,
+    delayMs: number
+  ): void {
     progress.showTimer = setTimeout(() => {
       progress.showTimer = null;
       const shown = progress.statusText;
@@ -159,15 +201,51 @@ export class TelegramProgressTracker {
             return;
           }
           progress.messageId = messageId;
+          progress.renderedText = shown;
           if (progress.statusText && progress.statusText !== shown) {
-            await progress.onEdit(messageId, progress.statusText);
+            await this.#edit(progress, progress.statusText);
           }
+          this.#scheduleHold(sessionId, progress);
         })
         .catch(() => undefined)
         .finally(() => {
           progress.posting = false;
         });
-    }, progress.delayMs);
+    }, delayMs);
     progress.showTimer.unref?.();
+  }
+
+  /**
+   * Advances to the next holding line once the current one has been on screen
+   * long enough to look stuck. The last line stays: Captain runs out of things
+   * to say about waiting before it runs out of waiting.
+   */
+  #scheduleHold(sessionId: string, progress: TelegramTurnProgress): void {
+    if (progress.holdingTimer) {
+      clearTimeout(progress.holdingTimer);
+      progress.holdingTimer = null;
+    }
+    if (progress.holdingIndex + 1 >= progress.holdingLines.length) return;
+    progress.holdingTimer = setTimeout(() => {
+      progress.holdingTimer = null;
+      if (this.#bySession.get(sessionId) !== progress || !progress.messageId) return;
+      progress.holdingIndex += 1;
+      const line = progress.holdingLines[progress.holdingIndex];
+      if (!line) return;
+      void Promise.resolve(this.#edit(progress, line))
+        .catch(() => undefined)
+        .finally(() => {
+          this.#scheduleHold(sessionId, progress);
+        });
+    }, progress.holdingIntervalMs);
+    progress.holdingTimer.unref?.();
+  }
+
+  async #edit(progress: TelegramTurnProgress, text: string): Promise<void> {
+    if (!progress.messageId || progress.renderedText === text) return;
+    progress.renderedText = text;
+    await Promise.resolve(progress.onEdit(progress.messageId, text)).catch(
+      () => undefined
+    );
   }
 }
