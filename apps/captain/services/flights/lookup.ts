@@ -12,6 +12,7 @@ import type { CaptainPlatformStore } from "@agents/flight-store";
 import type { TripService } from "../trips/service.js";
 
 const MAX_RETURNED_OFFERS = 8;
+const STORED_OFFER_FRESHNESS_MS = 5 * 60_000;
 
 export type FlightLookupInput = {
   tripId?: string | undefined;
@@ -92,7 +93,7 @@ export class FlightLookupService {
       const stored = await this.#trips.offers(userId, trip.id);
       const matching = filterByAirline(stored, airlineCode);
       storedOfferCount = stored.length;
-      if (matching.length > 0) {
+      if (matching.length > 0 && hasFreshOffers(matching, this.#now())) {
         return {
           status: "found",
           source: "stored_trip",
@@ -182,6 +183,11 @@ export class FlightLookupService {
       };
     }
   }
+}
+
+function hasFreshOffers(offers: OfferSnapshot[], now: Date): boolean {
+  const threshold = now.getTime() - STORED_OFFER_FRESHNESS_MS;
+  return offers.every((offer) => Date.parse(offer.observedAt) >= threshold);
 }
 
 function emptyResult(

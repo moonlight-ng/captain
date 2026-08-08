@@ -44,6 +44,7 @@ export default defineChannel({
     PATCH("/api/me/profile", authenticatedMutation(updateProfile)),
     GET("/api/me/trip", authenticated(getTrip)),
     PATCH("/api/me/trip", authenticatedMutation(updateTrip)),
+    POST("/api/me/trip/search", authenticatedMutation(requestTripSearch)),
     POST("/api/me/trip/actions", authenticatedMutation(tripAction)),
     POST("/api/me/trip/selections", authenticatedMutation(setTripSelection)),
     DELETE("/api/me/account", authenticatedMutation(requireSession(deleteAccount)))
@@ -246,6 +247,7 @@ async function getTrip(
         trips,
         trip: null,
         watch: null,
+        search: { status: "idle", requestedAt: null, startedAt: null },
         offers: [],
         recommendation: null,
         selections: [],
@@ -257,8 +259,9 @@ async function getTrip(
     );
   }
   await services.platformStore.markTripActivity(userId, trip.id, new Date());
-  const [watch, offers, recommendation, selections, activity, tracked] = await Promise.all([
+  const [watch, search, offers, recommendation, selections, activity, tracked] = await Promise.all([
     services.platformStore.getWatch(userId, trip.id),
+    services.trips.searchState(userId, trip.id),
     services.trips.offers(userId, trip.id),
     services.platformStore.getRecommendation(userId, trip.id),
     services.platformStore.listTripFlightSelections(userId, trip.id),
@@ -272,6 +275,7 @@ async function getTrip(
       trips,
       trip,
       watch,
+      search,
       offers,
       recommendation,
       selections,
@@ -281,6 +285,23 @@ async function getTrip(
     },
     { headers: noStore() }
   );
+}
+
+async function requestTripSearch(
+  request: Request,
+  _context: RouteContext,
+  userId: string
+): Promise<Response> {
+  const services = await getCaptainServices();
+  const requestedTripId = new URL(request.url).searchParams.get("trip");
+  const trip = requestedTripId
+    ? await services.platformStore.getTrip(userId, requestedTripId)
+    : await services.platformStore.getActiveTrip(userId);
+  if (!trip || ["cancelled", "completed", "archived"].includes(trip.status)) {
+    throw new TripNotFoundError();
+  }
+  const search = await services.trips.requestSearch(userId, trip.id);
+  return Response.json({ search }, { status: 202, headers: noStore() });
 }
 
 async function updateTrip(

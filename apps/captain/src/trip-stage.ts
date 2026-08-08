@@ -15,16 +15,18 @@ export type TripStage =
 export function tripStage({
   trip,
   watch,
+  search,
   searchBusy = false
 }: {
   trip: TripPayload["trip"] | null;
   watch: TripPayload["watch"] | null | undefined;
+  search?: TripPayload["search"] | null;
   searchBusy?: boolean;
 }): TripStage {
   if (!trip) return "stopped";
   if (trip.status === "paused" || watch?.status === "paused") return "paused";
   if (watch?.status === "completed") return "stale";
-  if (searchBusy || isWatchSearching(watch, trip)) return "searching";
+  if (searchBusy || isTripSearchPending(search)) return "searching";
   return "tracking";
 }
 
@@ -47,34 +49,21 @@ export function stageLabel(
 
 /**
  * Opening a trip should show current prices, so Captain starts a check on
- * arrival instead of waiting for the schedule. A trip the traveller stopped or
- * finished stays where it is, and a run already under way is the check we would
- * have started. A run past its window needs Track, not a refresh, so opening
- * the trip leaves that to the traveller.
+ * arrival instead of waiting for the daily schedule. A run already under way
+ * is the check we would have started, so repeated page opens join it.
  */
 export function shouldAutoSearchOnOpen({
   trip,
-  watch
+  search
 }: {
   trip: TripPayload["trip"] | null;
-  watch: TripPayload["watch"] | null | undefined;
+  search: TripPayload["search"] | null | undefined;
 }): boolean {
-  if (!trip || !watch) return false;
-  if (trip.status === "paused") return false;
-  if (watch.status !== "active" && watch.status !== "scheduled") return false;
-  if (Date.parse(watch.runEndsAt) <= Date.now()) return false;
-  return !isWatchSearching(watch, trip);
+  return Boolean(trip) && !isTripSearchPending(search);
 }
 
-export function isWatchSearching(
-  watch: TripPayload["watch"] | null | undefined,
-  trip: TripPayload["trip"] | null
+export function isTripSearchPending(
+  search: TripPayload["search"] | null | undefined
 ): boolean {
-  if (!trip || trip.status === "paused" || !watch || watch.status !== "active") return false;
-  if (!watch.lastCheckAt) return true;
-  if (watch.lastManualRefreshAt && Date.parse(watch.lastManualRefreshAt) > Date.parse(watch.lastCheckAt)) {
-    return true;
-  }
-  if (watch.nextCheckAt && Date.parse(watch.nextCheckAt) <= Date.now() + 60_000) return true;
-  return false;
+  return search?.status === "queued" || search?.status === "running";
 }

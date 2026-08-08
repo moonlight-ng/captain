@@ -18,51 +18,38 @@ describe("trip stage", () => {
     expect(tripStage({ trip: trip(), watch: watch({ status: "completed" }) })).toBe("stale");
   });
 
-  it("searches while a check is due, a refresh is pending, or none has run", () => {
-    expect(tripStage({ trip: trip(), watch: watch({ lastCheckAt: null }) })).toBe("searching");
+  it("searches only while provider work is queued or running", () => {
+    expect(tripStage({ trip: trip(), watch: watch(), search: search("queued") })).toBe("searching");
+    expect(tripStage({ trip: trip(), watch: watch(), search: search("running") })).toBe("searching");
+    expect(tripStage({ trip: trip(), watch: watch(), searchBusy: true })).toBe("searching");
+  });
+
+  it("does not infer a pending search from stale watch timestamps", () => {
     expect(tripStage({
       trip: trip(),
       watch: watch({
         lastCheckAt: "2026-08-04T08:00:00.000Z",
         lastManualRefreshAt: "2026-08-04T09:00:00.000Z"
-      })
-    })).toBe("searching");
-    expect(tripStage({ trip: trip(), watch: watch(), searchBusy: true })).toBe("searching");
+      }),
+      search: search("idle")
+    })).toBe("tracking");
   });
 
-  it("tracks once a check has landed and the next one is far off", () => {
-    expect(tripStage({ trip: trip(), watch: watch() })).toBe("tracking");
-  });
-
-  it("checks prices when a tracked trip is opened, whatever the schedule says", () => {
-    expect(shouldAutoSearchOnOpen({ trip: trip(), watch: watch() })).toBe(true);
+  it("checks prices whenever a trip is opened, independently of automation state", () => {
+    expect(shouldAutoSearchOnOpen({ trip: trip(), search: search("idle") })).toBe(true);
     expect(shouldAutoSearchOnOpen({
-      trip: trip(),
-      watch: watch({ status: "scheduled", nextCheckAt: dayAway(), trackingStartsAt: dayAway() })
+      trip: trip({ status: "paused" }),
+      search: search("idle")
     })).toBe(true);
   });
 
-  it("leaves a stopped or finished trip alone on open", () => {
-    expect(shouldAutoSearchOnOpen({ trip: null, watch: watch() })).toBe(false);
-    expect(shouldAutoSearchOnOpen({ trip: trip(), watch: null })).toBe(false);
-    expect(shouldAutoSearchOnOpen({ trip: trip({ status: "paused" }), watch: watch() })).toBe(false);
-    expect(shouldAutoSearchOnOpen({ trip: trip(), watch: watch({ status: "paused" }) })).toBe(false);
-    expect(shouldAutoSearchOnOpen({ trip: trip(), watch: watch({ status: "completed" }) })).toBe(false);
+  it("does not search without a trip", () => {
+    expect(shouldAutoSearchOnOpen({ trip: null, search: search("idle") })).toBe(false);
   });
 
-  it("skips the open check while a run is already searching", () => {
-    expect(shouldAutoSearchOnOpen({ trip: trip(), watch: watch({ lastCheckAt: null }) })).toBe(false);
-    expect(shouldAutoSearchOnOpen({
-      trip: trip(),
-      watch: watch({ nextCheckAt: new Date(Date.now() + 30_000).toISOString() })
-    })).toBe(false);
-  });
-
-  it("leaves a run past its window to Track, which a refresh cannot restart", () => {
-    expect(shouldAutoSearchOnOpen({
-      trip: trip(),
-      watch: watch({ runEndsAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() })
-    })).toBe(false);
+  it("reuses provider work already queued for the trip", () => {
+    expect(shouldAutoSearchOnOpen({ trip: trip(), search: search("queued") })).toBe(false);
+    expect(shouldAutoSearchOnOpen({ trip: trip(), search: search("running") })).toBe(false);
   });
 
   it("labels a tracking stage with check freshness", () => {
@@ -75,6 +62,14 @@ describe("trip stage", () => {
 
 function dayAway(): string {
   return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+}
+
+function search(status: "idle" | "queued" | "running") {
+  return {
+    status,
+    requestedAt: status === "idle" ? null : "2026-08-04T09:00:00.000Z",
+    startedAt: status === "running" ? "2026-08-04T09:00:01.000Z" : null
+  };
 }
 
 function trip(overrides: Partial<Trip> = {}): Trip {

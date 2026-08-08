@@ -8,7 +8,7 @@ export default defineTool({
   description: [
     "Check verified flight inventory for questions about an airline, fare, price, schedule, or available flight.",
     "Always use this for requests such as ‘What’s British Airways looking like?’",
-    "It checks stored offers for the active trip first; when none match, it runs a read-only live search for the active trip or latest confirmed draft.",
+    "It uses only recently checked stored offers; otherwise it runs a read-only live search for the active trip or latest confirmed draft.",
     "It never creates, confirms, or changes a trip. Describe only the offers returned."
   ].join(" "),
   inputSchema: z.object({

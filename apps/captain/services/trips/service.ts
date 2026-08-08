@@ -35,7 +35,21 @@ export class TripService {
 
   async action(userId: string, tripId: string, value: TripAction) {
     const action = tripActionSchema.parse(value);
+    if (action.type === "refresh") {
+      await this.#store.requestTripSearch(userId, tripId, this.#now(), action.expectedVersion);
+      const trip = await this.#store.getTrip(userId, tripId);
+      if (!trip) throw new Error("Trip not found after search request");
+      return trip;
+    }
     return this.#store.applyTripAction(userId, tripId, action, this.#now());
+  }
+
+  requestSearch(userId: string, tripId: string) {
+    return this.#store.requestTripSearch(userId, tripId, this.#now());
+  }
+
+  searchState(userId: string, tripId: string) {
+    return this.#store.getTripSearchState(userId, tripId);
   }
 
   async update(userId: string, tripId: string, value: UpdateTripBrief) {

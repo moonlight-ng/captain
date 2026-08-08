@@ -16,6 +16,7 @@ export function legacyBearerAllowed(method: string, pathname: string): boolean {
   if (pathname === "/api/me/profile" && (normalized === "GET" || normalized === "PATCH")) return true;
   if (pathname === "/api/me/trip" && (normalized === "GET" || normalized === "PATCH")) return true;
   if (pathname === "/api/me/trip/actions" && normalized === "POST") return true;
+  if (pathname === "/api/me/trip/search" && normalized === "POST") return true;
   if (pathname === "/api/me/trip/selections" && normalized === "POST") return true;
   return false;
 }

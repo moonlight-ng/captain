@@ -40,7 +40,8 @@ import type {
   TripFlightSelection,
   TrackedFlightPrices,
   TripActivity,
-  TripRecommendation
+  TripRecommendation,
+  TripSearchState
 } from "./contracts.js";
 import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
 import { notificationGoalPayload, offerRangeSummary } from "./notification-payload.js";
@@ -854,6 +855,65 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       }
       return toTrip(updated[0]!);
     });
+  }
+
+  async requestTripSearch(
+    userId: string,
+    tripId: string,
+    now: Date,
+    expectedVersion?: number
+  ): Promise<TripSearchState> {
+    return this.#sql.begin(async (tx) => {
+      const trips = await tx<Array<{ version: number }>>`
+        select trip.version
+        from captain.trips trip
+        where trip.id = ${tripId} and trip.user_id = ${userId}
+          and trip.status not in ('cancelled', 'completed', 'archived')
+        for update
+      `;
+      const trip = trips[0];
+      if (!trip) throw new TripNotFoundError();
+      if (expectedVersion !== undefined && trip.version !== expectedVersion) {
+        throw new TripVersionConflictError(trip.version);
+      }
+      const existing = await readTripSearchState(tx, userId, tripId);
+      if (existing.status === "running") return existing;
+      if (existing.status === "queued") {
+        await tx`
+          update captain.search_runs run set scheduled_at = least(run.scheduled_at, ${now})
+          from captain.watch_search_specs link
+          join captain.watches watch on watch.id = link.watch_id
+          where run.search_spec_id = link.search_spec_id
+            and watch.trip_id = ${tripId} and run.status = 'queued'
+        `;
+        await signalFlightWorker(tx);
+        return readTripSearchState(tx, userId, tripId);
+      }
+      const specs = await tx<Array<{ search_spec_id: string }>>`
+        select link.search_spec_id
+        from captain.watch_search_specs link
+        join captain.watches watch on watch.id = link.watch_id
+        where watch.trip_id = ${tripId}
+        order by link.created_at, link.search_spec_id
+        limit 1
+      `;
+      const searchSpecId = specs[0]?.search_spec_id;
+      if (!searchSpecId) throw new Error("Trip search specification not found");
+      await tx`
+        insert into captain.search_runs (
+          id, search_spec_id, status, attempt, scheduled_at, created_at
+        ) values (${randomUUID()}, ${searchSpecId}, 'queued', 0, ${now}, ${now})
+        on conflict do nothing
+      `;
+      // Signal even when a concurrent request won the unique insert. The
+      // queued run still needs an immediate worker wake.
+      await signalFlightWorker(tx);
+      return readTripSearchState(tx, userId, tripId);
+    });
+  }
+
+  getTripSearchState(userId: string, tripId: string): Promise<TripSearchState> {
+    return readTripSearchState(this.#sql, userId, tripId);
   }
 
   async listTripActivity(userId: string, tripId: string): Promise<TripActivity[]> {
@@ -1899,6 +1959,37 @@ async function syncSpecs(sql: Sql, watchId: string, specs: SearchSpec[], now: Da
       values (${watchId}, ${spec.id}, ${now}) on conflict do nothing
     `;
   }
+}
+
+async function readTripSearchState(
+  sql: Sql,
+  userId: string,
+  tripId: string
+): Promise<TripSearchState> {
+  const rows = await sql<Array<{
+    status: "queued" | "running";
+    scheduled_at: Date;
+    started_at: Date | null;
+  }>>`
+    select run.status, run.scheduled_at, run.started_at
+    from captain.search_runs run
+    join captain.watch_search_specs link on link.search_spec_id = run.search_spec_id
+    join captain.watches watch on watch.id = link.watch_id
+    join captain.trips trip on trip.id = watch.trip_id
+    where trip.id = ${tripId} and trip.user_id = ${userId}
+      and run.status in ('queued', 'running')
+    order by case when run.status = 'running' then 0 else 1 end,
+      run.scheduled_at, run.id
+    limit 1
+  `;
+  const run = rows[0];
+  return run
+    ? {
+        status: run.status,
+        requestedAt: iso(run.scheduled_at),
+        startedAt: run.started_at ? iso(run.started_at) : null
+      }
+    : { status: "idle", requestedAt: null, startedAt: null };
 }
 
 async function createTripInTransaction(

@@ -10,6 +10,7 @@ describe("legacyBearerAllowed", () => {
     expect(legacyBearerAllowed("GET", "/api/me/trip")).toBe(true);
     expect(legacyBearerAllowed("PATCH", "/api/me/trip")).toBe(true);
     expect(legacyBearerAllowed("POST", "/api/me/trip/actions")).toBe(true);
+    expect(legacyBearerAllowed("POST", "/api/me/trip/search")).toBe(true);
     expect(legacyBearerAllowed("POST", "/api/me/trip/selections")).toBe(true);
   });
 

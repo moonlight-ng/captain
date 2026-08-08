@@ -63,6 +63,11 @@ results per search. New trips and manual searches wake the worker through a
 transactional PostgreSQL notification; adaptive polling remains the recovery
 path if the worker was disconnected when the notification was sent.
 
+Interactive searches are separate from the daily tracking clock. Asking for a
+trip starts a prefetch, opening its dashboard joins or starts one provider run,
+and the API reports that run's real queued/running state. Opening and manual
+searches never postpone the next daily check.
+
 Captain and Pilot are independent. Captain has no Pilot client, route,
 principal, secret, tool, or redirect. Future provider adapters use the
 reserved `official_*` namespace and require documented access.

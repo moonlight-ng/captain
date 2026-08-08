@@ -24,8 +24,8 @@ describe("Trip service", () => {
     expect(paused).toMatchObject({ status: "paused", version: 2 });
   });
 
-  it("allows consecutive manual refreshes", async () => {
-    const now = new Date("2026-08-01T12:00:00Z");
+  it("allows consecutive manual refreshes without moving the daily check", async () => {
+    let now = new Date("2026-08-01T12:00:00Z");
     const store = new MemoryCaptainPlatformStore();
     const owner = await store.ensureTelegramUser({
       telegramUserId: 1,
@@ -39,14 +39,21 @@ describe("Trip service", () => {
       title: "New York",
       brief: defaultTestBrief()
     });
+    const dailyNextCheck = (await store.getWatch(owner.id, created.trip.id))!.nextCheckAt;
+    now = new Date("2026-08-01T12:05:00Z");
     const refreshed = await service.action(owner.id, created.trip.id, {
       type: "refresh",
       expectedVersion: 1
     });
+    expect(refreshed.version).toBe(created.trip.version);
     await expect(service.action(owner.id, created.trip.id, {
       type: "refresh",
       expectedVersion: refreshed.version
-    })).resolves.toMatchObject({ status: "tracking" });
+    })).resolves.toMatchObject({ status: "tracking", version: created.trip.version });
+    await expect(service.searchState(owner.id, created.trip.id)).resolves.toMatchObject({
+      status: "queued"
+    });
+    expect((await store.getWatch(owner.id, created.trip.id))!.nextCheckAt).toBe(dailyNextCheck);
   });
 
   it("updates one Trip brief, restarts its search, and records the change", async () => {

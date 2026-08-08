@@ -120,6 +120,44 @@ describe("Flight lookup", () => {
     expect(result.offers[0]?.primaryAirlineCode).toBe("BA");
     expect(provider.calls).toBe(1);
   });
+
+  it("runs a live search when matching stored fares are no longer fresh", async () => {
+    const { store, trips, user } = await setup();
+    const created = await trips.create(user.id, {
+      title: "London to New York",
+      brief: defaultTestBrief()
+    });
+    await store.scheduleDueSearchRuns(now, 900_000, 1);
+    const run = (await store.claimSearchRuns("worker-test", now, 180_000, 1))[0]!;
+    await store.completeSearchRun(
+      "worker-test",
+      run.id,
+      "request-1",
+      [storedOffer("BA", "British Airways", 650)],
+      new Date("2026-08-07T12:00:01.000Z")
+    );
+    const provider = fakeProvider([liveOffer("BA", "British Airways", "640.00")]);
+    const lookup = new FlightLookupService({
+      store,
+      trips,
+      provider,
+      now: () => new Date("2026-08-07T12:06:00.000Z")
+    });
+
+    const result = await lookup.search(user.id, {
+      tripId: created.trip.id,
+      airlineCode: "BA"
+    });
+
+    expect(result).toMatchObject({
+      status: "found",
+      source: "live_trip",
+      storedOfferCount: 1,
+      matchingOfferCount: 1
+    });
+    expect(result.offers[0]?.priceAmount).toBe("640.00");
+    expect(provider.calls).toBe(1);
+  });
 });
 
 async function setup() {

@@ -31,7 +31,7 @@ export function TripSettings({
   const [stopped, setStopped] = useState(false);
   const trip = stopped ? null : tripData?.trip ?? null;
   const watch = stopped ? null : tripData?.watch ?? null;
-  const stage = tripStage({ trip, watch });
+  const stage = tripStage({ trip, watch, search: tripData?.search ?? null });
 
   if (!trip || !tripData) {
     return (

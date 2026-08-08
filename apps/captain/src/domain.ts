@@ -150,6 +150,12 @@ export type TripPayload = {
   trips: Trip[];
   trip: Trip | null;
   watch: Watch | null;
+  /** Real queued/running provider work for this trip. */
+  search: {
+    status: "idle" | "queued" | "running";
+    requestedAt: string | null;
+    startedAt: string | null;
+  };
   offers: VerifiedOffer[];
   recommendation: Recommendation | null;
   selections: Array<{ itineraryKey: string; selectedBy: "agent" | "person" }>;

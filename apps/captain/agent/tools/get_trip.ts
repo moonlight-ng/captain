@@ -19,6 +19,7 @@ export default defineTool({
       ? trips.find((candidate) => candidate.id === tripId) ?? null
       : await services.platformStore.getActiveTrip(userId);
     if (!trip) return { trips, trip: null, goal: null, offers: [], watchedFlight: null };
+    const search = await services.trips.requestSearch(userId, trip.id);
     const [offers, tracked, profile] = await Promise.all([
       services.trips.offers(userId, trip.id),
       services.platformStore.getTrackedFlightPrices(userId, trip.id),
@@ -27,6 +28,7 @@ export default defineTool({
     return {
       trips,
       trip,
+      search,
       // What this trip is for. Every answer is measured against it.
       goal: formatTripGoal({ brief: trip.brief, rankingMode: profile.rankingMode }),
       offers,

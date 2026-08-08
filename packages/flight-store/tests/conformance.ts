@@ -238,6 +238,106 @@ export function describeCaptainPlatformStore(
       expect(await store.scheduleDueSearchRuns(new Date("2026-08-02T11:00:00Z"), 0, 100)).toBe(0);
     });
 
+    it("queues interactive searches without moving the daily automation clock", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const specs = buildSearchSpecs(tripInput.brief, false);
+      const created = await store.createTrip(
+        ada.id,
+        tripInput,
+        specs,
+        new Date("2026-08-01T12:00:00Z")
+      );
+      await store.scheduleDueSearchRuns(new Date("2026-08-01T12:00:00Z"), 900_000, 100);
+      const initial = (await store.claimSearchRuns(
+        "worker-1",
+        new Date("2026-08-01T12:00:00Z"),
+        180_000,
+        1
+      ))[0]!;
+      await store.completeSearchRun(
+        "worker-1",
+        initial.id,
+        "request-initial",
+        [],
+        new Date("2026-08-01T12:00:01Z")
+      );
+      const dailyNextCheck = (await store.getWatch(ada.id, created.trip.id))!.nextCheckAt;
+
+      const requested = await store.requestTripSearch(
+        ada.id,
+        created.trip.id,
+        new Date("2026-08-01T12:05:00Z")
+      );
+      expect(requested).toEqual({
+        status: "queued",
+        requestedAt: "2026-08-01T12:05:00.000Z",
+        startedAt: null
+      });
+      expect((await store.getWatch(ada.id, created.trip.id))!.nextCheckAt)
+        .toBe(dailyNextCheck);
+
+      // Repeated page opens share the same active provider run.
+      await expect(store.requestTripSearch(
+        ada.id,
+        created.trip.id,
+        new Date("2026-08-01T12:05:01Z")
+      )).resolves.toEqual(requested);
+      const [interactive] = await store.claimSearchRuns(
+        "worker-1",
+        new Date("2026-08-01T12:05:01Z"),
+        180_000,
+        1
+      );
+      expect(interactive).toBeDefined();
+      await expect(store.getTripSearchState(ada.id, created.trip.id)).resolves.toMatchObject({
+        status: "running",
+        requestedAt: "2026-08-01T12:05:00.000Z"
+      });
+      await store.failSearchRun(
+        "worker-1",
+        interactive!.id,
+        "Provider asked us to retry",
+        300_000,
+        new Date("2026-08-01T12:05:02Z")
+      );
+      await expect(store.getTripSearchState(ada.id, created.trip.id)).resolves.toMatchObject({
+        status: "queued",
+        requestedAt: "2026-08-01T12:10:02.000Z"
+      });
+
+      // Opening the trip again pulls a delayed retry forward immediately.
+      await expect(store.requestTripSearch(
+        ada.id,
+        created.trip.id,
+        new Date("2026-08-01T12:06:00Z")
+      )).resolves.toMatchObject({
+        status: "queued",
+        requestedAt: "2026-08-01T12:06:00.000Z"
+      });
+      const [retry] = await store.claimSearchRuns(
+        "worker-1",
+        new Date("2026-08-01T12:06:00Z"),
+        180_000,
+        1
+      );
+      expect(retry?.id).toBe(interactive!.id);
+      await store.completeSearchRun(
+        "worker-1",
+        retry!.id,
+        "request-interactive-retry",
+        [],
+        new Date("2026-08-01T12:06:01Z")
+      );
+      await expect(store.getTripSearchState(ada.id, created.trip.id)).resolves.toEqual({
+        status: "idle",
+        requestedAt: null,
+        startedAt: null
+      });
+      expect((await store.getWatch(ada.id, created.trip.id))!.nextCheckAt)
+        .toBe(dailyNextCheck);
+    });
+
     it("replaces current results, keeps every compact offer, and preserves price-drop context", async () => {
       const store = await createStore();
       const ada = await user(store, 1);

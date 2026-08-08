@@ -35,7 +35,8 @@ import type {
   TripFlightSelection,
   TrackedFlightPrices,
   TripActivity,
-  TripRecommendation
+  TripRecommendation,
+  TripSearchState
 } from "./contracts.js";
 import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
 import {
@@ -68,6 +69,7 @@ type MemoryRun = ClaimedSearchRun & {
   status: "queued" | "running" | "completed" | "failed" | "deferred";
   claimedBy: string | null;
   scheduledAt: string;
+  startedAt: string | null;
   completedAt: string | null;
   error: string | null;
 };
@@ -751,6 +753,66 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     return clone(updated);
   }
 
+  async requestTripSearch(
+    userId: string,
+    tripId: string,
+    now: Date,
+    expectedVersion?: number
+  ): Promise<TripSearchState> {
+    const trip = this.#requiredTrip(userId, tripId);
+    if (expectedVersion !== undefined && trip.version !== expectedVersion) {
+      throw new TripVersionConflictError(trip.version);
+    }
+    const watch = [...this.#watches.values()].find((candidate) => candidate.tripId === tripId);
+    const searchSpecId = watch ? [...(this.#watchSpecs.get(watch.id) ?? [])][0] : undefined;
+    const spec = searchSpecId ? this.#specs.get(searchSpecId) : undefined;
+    if (!spec) throw new Error("Trip search specification not found");
+    const existingRun = [...this.#runs.values()].find((candidate) =>
+      candidate.searchSpecId === spec.id && ["queued", "running"].includes(candidate.status)
+    );
+    if (existingRun) {
+      if (existingRun.status === "queued" && existingRun.scheduledAt > now.toISOString()) {
+        this.#runs.set(existingRun.id, { ...existingRun, scheduledAt: now.toISOString() });
+      }
+      return this.getTripSearchState(userId, tripId);
+    }
+    const id = randomUUID();
+    this.#runs.set(id, {
+      id,
+      searchSpecId: spec.id,
+      request: clone(spec.request),
+      attempt: 0,
+      leaseExpiresAt: "",
+      status: "queued",
+      claimedBy: null,
+      scheduledAt: now.toISOString(),
+      startedAt: null,
+      completedAt: null,
+      error: null
+    });
+    return { status: "queued", requestedAt: now.toISOString(), startedAt: null };
+  }
+
+  async getTripSearchState(userId: string, tripId: string): Promise<TripSearchState> {
+    this.#requiredTrip(userId, tripId);
+    const watch = [...this.#watches.values()].find((candidate) => candidate.tripId === tripId);
+    const specIds = watch ? this.#watchSpecs.get(watch.id) ?? new Set<string>() : new Set<string>();
+    const run = [...this.#runs.values()]
+      .filter((candidate) => specIds.has(candidate.searchSpecId) && ["queued", "running"].includes(candidate.status))
+      .sort((left, right) => {
+        if (left.status === "running" && right.status !== "running") return -1;
+        if (right.status === "running" && left.status !== "running") return 1;
+        return left.scheduledAt.localeCompare(right.scheduledAt);
+      })[0];
+    return run
+      ? {
+          status: run.status as "queued" | "running",
+          requestedAt: run.scheduledAt,
+          startedAt: run.startedAt
+        }
+      : { status: "idle", requestedAt: null, startedAt: null };
+  }
+
   async listTripActivity(userId: string, tripId: string): Promise<TripActivity[]> {
     this.#requiredTrip(userId, tripId);
     return clone(this.#tripActivity.get(tripId) ?? []);
@@ -1002,7 +1064,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
           this.#runs.set(id, {
             id, searchSpecId: specId, request: clone(spec.request), attempt: 0,
             leaseExpiresAt: "", status: "queued", claimedBy: null,
-            scheduledAt: now.toISOString(), completedAt: null, error: null
+            scheduledAt: now.toISOString(), startedAt: null, completedAt: null, error: null
           });
           scheduled.add(specId);
         }
@@ -1034,6 +1096,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     return candidates.map((run) => {
       const claimed = {
         ...run, status: "running" as const, claimedBy: workerId, attempt: run.attempt + 1,
+        startedAt: run.startedAt ?? now.toISOString(),
         leaseExpiresAt: new Date(now.getTime() + leaseMs).toISOString()
       };
       this.#runs.set(run.id, claimed);

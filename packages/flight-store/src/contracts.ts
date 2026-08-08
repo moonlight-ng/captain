@@ -142,6 +142,13 @@ export type TrackingMaintenance = {
   completed: number;
 };
 
+/** Actual provider work attached to a trip, never inferred from watch clocks. */
+export type TripSearchState = {
+  status: "idle" | "queued" | "running";
+  requestedAt: string | null;
+  startedAt: string | null;
+};
+
 export type LoginTokenRecord = {
   userId: string;
   redirectPath: CaptainSessionPath;
@@ -195,6 +202,13 @@ export interface CaptainPlatformStore {
   createTrip(userId: string, input: CreateTripInput, specs: SearchSpec[], now: Date): Promise<TripCreationResult>;
   updateTripBrief(userId: string, tripId: string, input: UpdateTripBrief, specs: SearchSpec[], now: Date): Promise<Trip>;
   applyTripAction(userId: string, tripId: string, action: TripAction, now: Date): Promise<Trip>;
+  requestTripSearch(
+    userId: string,
+    tripId: string,
+    now: Date,
+    expectedVersion?: number
+  ): Promise<TripSearchState>;
+  getTripSearchState(userId: string, tripId: string): Promise<TripSearchState>;
   listTripActivity(userId: string, tripId: string): Promise<TripActivity[]>;
   listTripOffers(userId: string, tripId: string, now: Date): Promise<OfferSnapshot[]>;
   listTripFlightSelections(userId: string, tripId: string): Promise<TripFlightSelection[]>;

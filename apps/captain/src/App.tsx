@@ -9,6 +9,7 @@ import {
   bookHref,
   homeHref,
   initializeAccessToken,
+  requestTripSearch,
   setTripFlightSelection,
   tripAction,
   tripHref
@@ -57,7 +58,7 @@ import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./com
 import { FilterSheet } from "./components/FilterSheet";
 import { PriceChart, TrackedFlightCard } from "./components/TrackedFlight";
 import { inPageLink } from "./navigation";
-import { isWatchSearching, shouldAutoSearchOnOpen } from "./trip-stage";
+import { isTripSearchPending, shouldAutoSearchOnOpen } from "./trip-stage";
 import { Home } from "./screens/Home";
 import { Profile } from "./screens/Profile";
 import { TripSettings } from "./screens/TripSettings";
@@ -145,10 +146,20 @@ export function App() {
       setDisplayName(session.displayName);
       setAuthenticated(true);
       const requestedTripId = currentTripId();
-      const [nextProfile, nextTrip] = await Promise.all([
+      const [nextProfile, initialTrip] = await Promise.all([
         getProfile(),
         getTrip(requestedTripId)
       ]);
+      let nextTrip = initialTrip;
+      if (currentPage() === "trip" && initialTrip.trip) {
+        autoSearchedTripIds.current.add(initialTrip.trip.id);
+        try {
+          await requestTripSearch(initialTrip.trip.id);
+          nextTrip = await getTrip(initialTrip.trip.id);
+        } catch {
+          setError("Captain couldn’t refresh this trip yet.");
+        }
+      }
       setProfile(nextProfile);
       setTripData(nextTrip);
       if (
@@ -201,7 +212,8 @@ export function App() {
 
   const trip = tripData?.trip ?? null;
   const watch = tripData?.watch ?? null;
-  const searching = searchBusy || isWatchSearching(watch, trip);
+  const search = tripData?.search ?? null;
+  const searching = searchBusy || isTripSearchPending(search);
 
   useEffect(() => {
     if ((!searching && watch?.status !== "active") || !trip) return;
@@ -227,7 +239,7 @@ export function App() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [searching, trip?.id, watch?.status]);
+  }, [searching, trip?.id, watch?.status, search?.status]);
 
   const personSelectionKeys = useMemo(
     () => [...new Set(
@@ -288,7 +300,7 @@ export function App() {
       setError("");
     }
     try {
-      await tripAction("refresh", trip.id, trip.version);
+      await requestTripSearch(trip.id);
       const next = await getTrip(trip.id);
       setTripData((current) => {
         if (next.offers.length === 0 && (current?.offers.length ?? 0) > 0) {
@@ -318,16 +330,23 @@ export function App() {
     }
   }
 
+  // Leaving the dashboard makes the next visit a new open. Polling and other
+  // state refreshes while the dashboard remains visible must not start another
+  // provider run.
+  useEffect(() => {
+    if (page !== "trip" && trip?.id) autoSearchedTripIds.current.delete(trip.id);
+  }, [page, trip?.id]);
+
   // Opening a trip checks prices right away, so the page shows what fares cost
   // now rather than whatever the last scheduled check left behind. With nothing
   // to show yet the search takes over the page; with results already up it runs
   // behind them and the poller swaps in whatever comes back.
   useEffect(() => {
     if (page !== "trip" || !trip || autoSearchedTripIds.current.has(trip.id)) return;
-    if (!shouldAutoSearchOnOpen({ trip, watch })) return;
     autoSearchedTripIds.current.add(trip.id);
+    if (!shouldAutoSearchOnOpen({ trip, search })) return;
     void searchFlights({ background: offers.length > 0 });
-  }, [page, trip?.id, trip?.status, watch?.status]);
+  }, [page, trip?.id, search?.status]);
 
   if (loading) return <CenteredState title="Opening Captain…" detail="Loading your trip." />;
   if (!authenticated) {
@@ -539,6 +558,9 @@ export function App() {
             </div>
           )}
           {error && <div className="notice">{error}</div>}
+          {searching && offers.length > 0 && (
+            <div className="notice" role="status">Refreshing flight options and prices…</div>
+          )}
 
           {trackedHistory && (
             <TrackedFlightCard

@@ -97,6 +97,13 @@ export function getTrip(tripId?: string): Promise<TripPayload> {
   return api(`/api/me/trip${search}`);
 }
 
+export async function requestTripSearch(tripId: string): Promise<TripPayload["search"]> {
+  return (await api<{ search: TripPayload["search"] }>(
+    `/api/me/trip/search?${new URLSearchParams({ trip: tripId }).toString()}`,
+    { method: "POST", body: "{}" }
+  )).search;
+}
+
 export async function tripAction(
   type: "pause" | "resume" | "refresh" | "track" | "cancel",
   tripId: string,
