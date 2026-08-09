@@ -13,8 +13,13 @@ import type {
   TripCity,
   TripCityLeg
 } from "../src/domain.js";
-import { bestOffer, groupFlightsByDate, tripDateSpan } from "../src/multi-city-view.js";
-import { priceDateStatus } from "../src/multi-city-view.js";
+import {
+  bestOffer,
+  groupFlightsByDate,
+  planTimelineItems,
+  priceDateStatus,
+  tripDateSpan
+} from "../src/multi-city-view.js";
 
 describe("multi-city web view models", () => {
   it("derives the trip span from city timing and leg windows", () => {
@@ -26,6 +31,34 @@ describe("multi-city web view models", () => {
     const legs: TripCityLeg[] = [leg("leg-1", 0, "nairobi", "entebbe", "2026-11-15", "2026-11-18")];
 
     expect(tripDateSpan(cities, legs)).toBe("Nov 15, 2026 – Dec 10, 2026");
+  });
+
+  it("keeps single flight dates separate from in-between event windows", () => {
+    const cities: TripCity[] = [
+      city("london", 0, null, { start: "2026-11-01", end: "2026-11-01" }),
+      city(
+        "nairobi",
+        1,
+        { start: "2026-11-04", end: "2026-11-04" },
+        { start: "2026-11-15", end: "2026-11-18" }
+      ),
+      city(
+        "entebbe",
+        2,
+        { start: "2026-11-19", end: "2026-11-19" },
+        { start: "2026-12-03", end: "2026-12-09" }
+      ),
+      city("lagos", 3, { start: "2026-12-10", end: "2026-12-10" }, null)
+    ];
+
+    expect(planTimelineItems(cities)).toEqual([
+      { kind: "flight", cityId: "london", cityLabel: "london", date: "2026-11-01", action: "Leave" },
+      { kind: "flight", cityId: "nairobi", cityLabel: "nairobi", date: "2026-11-04", action: "Arrive" },
+      { kind: "event", cityId: "nairobi", cityLabel: "nairobi", window: { start: "2026-11-15", end: "2026-11-18" } },
+      { kind: "flight", cityId: "entebbe", cityLabel: "entebbe", date: "2026-11-19", action: "Arrive" },
+      { kind: "event", cityId: "entebbe", cityLabel: "entebbe", window: { start: "2026-12-03", end: "2026-12-09" } },
+      { kind: "flight", cityId: "lagos", cityLabel: "lagos", date: "2026-12-10", action: "Arrive" }
+    ]);
   });
 
   it("groups canonical flights by departure date in chronological order", () => {

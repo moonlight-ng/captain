@@ -131,12 +131,6 @@ a { color: inherit; }
   color: inherit;
   text-decoration: none;
 }
-.trip-title-link span {
-  color: var(--quiet);
-  font-size: 15px;
-  opacity: .75;
-}
-
 .eyebrow {
   margin: 0 0 9px;
   color: rgba(255, 255, 255, .42);
@@ -372,7 +366,6 @@ h2 { margin-bottom: 7px; font-size: var(--type-title); font-weight: var(--weight
   border-radius: var(--radius-card);
   background: linear-gradient(180deg, rgba(255, 255, 255, .055), rgba(255, 255, 255, .025));
 }
-.plan-review-card.pending { border-color: rgba(190, 212, 179, .28); }
 .plan-review-heading {
   display: flex;
   align-items: center;
@@ -381,8 +374,6 @@ h2 { margin-bottom: 7px; font-size: var(--type-title); font-weight: var(--weight
 }
 .plan-review-heading h2 {
   margin: 0;
-  font-size: 17px;
-  letter-spacing: -.015em;
 }
 .plan-review-heading span {
   padding: 5px 8px;
@@ -409,6 +400,7 @@ h2 { margin-bottom: 7px; font-size: var(--type-title); font-weight: var(--weight
   gap: 12px;
   min-height: 72px;
 }
+.plan-timeline-event.is-between { min-height: 62px; }
 .plan-timeline-event time,
 .plan-timeline-city {
   display: flex;
@@ -457,12 +449,23 @@ h2 { margin-bottom: 7px; font-size: var(--type-title); font-weight: var(--weight
   background: #000;
   box-shadow: 0 0 0 4px rgba(167, 196, 154, .07);
 }
-.plan-timeline-city strong {
-  color: var(--ink);
-  font-size: 17px;
-  font-weight: var(--weight-bold);
-  letter-spacing: -.02em;
+.plan-timeline-event.is-between .plan-timeline-track i {
+  width: 6px;
+  height: 6px;
+  margin-top: 6px;
+  border: 0;
+  background: rgba(255, 255, 255, .28);
+  box-shadow: none;
 }
+.plan-timeline-event.is-between time { color: var(--muted); }
+.plan-timeline-city strong {
+  color: rgba(255, 255, 255, .72);
+  font-size: var(--type-body);
+  font-weight: var(--weight-medium);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.plan-timeline-event.is-between .plan-timeline-city strong { color: var(--muted); }
 .plan-timeline-city small { color: var(--muted); }
 .plan-actions {
   display: grid;
@@ -1366,8 +1369,6 @@ textarea {
   line-height: 1.55;
 }
 .settings-card > p:not(.eyebrow) { color: var(--muted); font-size: var(--type-body); line-height: 1.55; }
-.trip-name-settings h2 { margin-bottom: 7px; font-size: 20px; }
-.trip-name-settings > p:last-of-type { margin-bottom: 0; }
 .settings-card form { display: flex; flex-direction: column; gap: 20px; margin-top: 20px; }
 .settings-card form label, .read-only-field {
   display: flex;
