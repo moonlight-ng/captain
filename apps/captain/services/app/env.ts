@@ -8,6 +8,7 @@ export type CaptainEnv = {
   feedbackBridgeSecret: string | null;
   aiModel: string;
   tripInterpreterModel: string;
+  transcriptionModel: string;
   aiGatewayApiKey: string | null;
   supabaseUrl: string | null;
   supabasePublishableKey: string | null;
@@ -45,6 +46,7 @@ export function loadEnv(): CaptainEnv {
     feedbackBridgeSecret,
     aiModel: process.env.AI_MODEL?.trim() || "openai/gpt-5.6-terra",
     tripInterpreterModel: process.env.TRIP_INTERPRETER_MODEL?.trim() || "openai/gpt-5.6-luna",
+    transcriptionModel: process.env.TRANSCRIPTION_MODEL?.trim() || "openai/gpt-4o-mini-transcribe",
     aiGatewayApiKey: optional("AI_GATEWAY_API_KEY"),
     supabaseUrl: optional("SUPABASE_URL"),
     supabasePublishableKey: optional("SUPABASE_PUBLISHABLE_KEY"),

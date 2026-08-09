@@ -9,6 +9,7 @@ describe("Captain administrator routing", () => {
     ["/admin/conversations", { page: "conversations" }],
     ["/admin/conversations/", { page: "conversations" }],
     ["/admin/costs", { page: "costs" }],
+    ["/admin/settings", { page: "settings" }],
     ["/admin/conversations/user%20conversation", { page: "conversation", id: "user conversation" }]
   ])("maps %s into the isolated administrator application", (pathname, expected) => {
     expect(parseAdminRoute(pathname as string)).toEqual(expected);

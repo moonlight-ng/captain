@@ -141,8 +141,9 @@ Optional worker controls include `DUFFEL_BASE_URL`, `FLYSOAR_MCP_URL`,
 
 Captain uses `AI_MODEL=openai/gpt-5.6-terra` for its general agent and
 `TRIP_INTERPRETER_MODEL=openai/gpt-5.6-luna` for strict, low-latency trip
-interpretation. Relative Telegram dates use the traveller timezone selected in
-Profile.
+interpretation. Voice notes use
+`TRANSCRIPTION_MODEL=openai/gpt-4o-mini-transcribe`. Relative Telegram dates use
+the traveller timezone selected in Profile.
 
 Production now runs with `CAPTAIN_PUBLIC_BETA_ENABLED=true`, admitting new
 travellers up to the capped beta limit. Set it back to `false` to close
