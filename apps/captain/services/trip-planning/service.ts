@@ -63,7 +63,7 @@ const EXPLORATORY_DATE_PLANNING_PATTERNS = [
   /\bhelp\s+(?:me|us)\s+plan\b[\s\S]{0,80}\b(?:itinerar(?:y|ies)|dates?|when)\b/iu
 ] as const;
 const CREATION_SUCCESS_PATTERNS = [
-  /^Ok, here's (?:what I have|the trip I already have)\. Review or confirm to start exploring flights\./iu,
+  /^Itinerary ready to confirm\./iu,
   /\b(?:your|the|that)\b[\s\S]{0,100}\btrip\b[\s\S]{0,200}\b(?:has\s+been|was|is\s+now)\s+(?:successfully\s+)?(?:created|saved|set\s+up|started)\b/iu,
   /\b(?:your|the|that)\b[\s\S]{0,100}\btrip\b\s+is\s+(?:successfully\s+)?(?:created|saved|set\s+up)\b/iu,
   /\b(?:i(?:'ve|\s+have)|we(?:'ve|\s+have))\s+(?:successfully\s+)?(?:created|saved|set\s+up|started)\b[\s\S]{0,180}\btrip\b/iu,
@@ -72,6 +72,10 @@ const CREATION_SUCCESS_PATTERNS = [
 const UUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/iu;
 const UNGROUNDED_CREATION_MESSAGE = "I couldn’t verify a trip-creation receipt. Send /trip to check your trip.";
 const MAX_AMBIGUITY_QUESTIONS = 2;
+
+export function isTripConfirmationText(text: string): boolean {
+  return CONFIRM_PATTERN.test(text.trim());
+}
 
 export class TripPlanningService {
   readonly #store: CaptainPlatformStore;
@@ -564,7 +568,7 @@ export class TripPlanningService {
         return this.#prepareTurn(userId, request, sourceMessageId, draft.id, false);
       }
     }
-    if (draft.status === "awaiting_confirmation" && CONFIRM_PATTERN.test(request.trim())) {
+    if (draft.status === "awaiting_confirmation" && isTripConfirmationText(request)) {
       return this.confirm(userId, draft.id, draft.revision);
     }
     // Captain's own date guesses are declinable wherever they appear, now that
@@ -583,7 +587,7 @@ export class TripPlanningService {
     // no proposal for a “yes” to land on. Saying so and re-asking beats revising
     // the draft into the identical question the traveller is already looking at.
     if (
-      CONFIRM_PATTERN.test(request.trim())
+      isTripConfirmationText(request)
       && !canAcceptProposedWindows(draft.state)
     ) {
       const missingFields = missingTripFields(draft.state, null);

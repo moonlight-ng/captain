@@ -9,7 +9,10 @@ import {
   tripPlanConfirmationReplyMarkup,
   tripPlanReviewReplyMarkup
 } from "../agent/channels/telegram.js";
-import { TripPlanningService } from "../services/trip-planning/service.js";
+import {
+  isTripConfirmationText,
+  TripPlanningService
+} from "../services/trip-planning/service.js";
 import {
   formatActiveTripList,
   telegramDashboardMessage,
@@ -85,9 +88,11 @@ describe("Captain trip planning", () => {
     const saved = await planning.handleOpenDraftText(user.id, "The Sunday before", null);
     expect(saved?.status).toBe("started");
     if (!saved || saved.status !== "started") throw new Error("Expected a saved draft trip");
-    expect(saved.message).toContain("Ok, here's what I have. Review or confirm to start exploring flights.");
-    expect(saved.message).toContain("Leg 1: LOS → NBO · Sunday, 1 Nov 2026");
+    expect(saved.message).toContain("Itinerary ready to confirm.");
+    expect(saved.message).toContain("Leg 1 · LOS → NBO · Sunday, 1 Nov 2026");
     expect(saved.message).toContain("Open trip: https://captain.example/t#test-");
+    expect(saved.message).not.toContain("traveller");
+    expect(saved.message).not.toContain("Send /trip");
     expect(saved.receipt.status).toBe("draft");
     expect(await store.getTrip(user.id, saved.receipt.tripId)).toMatchObject({ status: "draft" });
   });
@@ -143,11 +148,11 @@ describe("Captain trip planning", () => {
       dashboardUrl: "https://captain.example/trip"
     })).toEqual({
       inline_keyboard: [[{
-        text: "Review",
-        url: "https://captain.example/trip"
-      }, {
         text: "Confirm",
         callback_data: `captain-trip:confirm:${id}:4`
+      }, {
+        text: "Review",
+        url: "https://captain.example/trip"
       }]]
     });
     expect(parseTripPlanCallback(`captain-trip:confirm:${id}:4`)).toEqual({
@@ -155,6 +160,12 @@ describe("Captain trip planning", () => {
       tripId: id,
       version: 4
     });
+  });
+
+  it("recognizes concise text confirmation without treating review as consent", () => {
+    expect(isTripConfirmationText("confirm")).toBe(true);
+    expect(isTripConfirmationText("Yes.")).toBe(true);
+    expect(isTripConfirmationText("review it first")).toBe(false);
   });
 
   it("distinguishes a delivered confirmation from an older button message", () => {
@@ -455,7 +466,7 @@ describe("Captain trip planning", () => {
       returnDate: "2025-08-24",
       stayNights: 7
     });
-    expect(started.message).toContain("Send /trip");
+    expect(started.message).not.toContain("Send /trip");
     // The structured goal stays available for decision-making without being
     // printed as internal planning language in the traveller-facing receipt.
     expect(started.receipt.goal)
@@ -463,7 +474,7 @@ describe("Captain trip planning", () => {
         + "journey time, using verified fares as prices change.");
     expect(started.message).not.toContain("Goal:");
     expect(started.message).not.toContain(started.receipt.goal);
-    expect(started.message).toContain("Review or confirm to start exploring flights");
+    expect(started.message).toContain("Itinerary ready to confirm.");
     expect(started.message).toContain(`Open trip: https://captain.example/t#test-${started.receipt.tripId}`);
     expect(started.message).not.toContain("Trip reference");
     const renderedReceipt = telegramDashboardMessage(started.message);
@@ -1185,7 +1196,7 @@ describe("Captain trip planning", () => {
     });
     // The plan comes back with the date in it, so the traveller can see which
     // Sunday Captain took.
-    expect(answered.message).toContain("Leg 1: LON → NBO · Sunday, 1 Nov 2026");
+    expect(answered.message).toContain("Leg 1 · LON → NBO · Sunday, 1 Nov 2026");
   });
 
   // A date past the deadline is refused rather than stored, and the traveller
@@ -1237,13 +1248,13 @@ describe("Captain trip planning", () => {
       throw new Error("Expected the itinerary to be saved");
     }
     expect(saved.message).toContain(
-      "Leg 1: LON → NBO · Thursday, 29 Oct 2026 – Wednesday, 4 Nov 2026"
+      "Leg 1 · LON → NBO · Thursday, 29 Oct 2026 – Wednesday, 4 Nov 2026"
     );
     expect(saved.message).toContain(
-      "Leg 2: NBO → EBB · Sunday, 15 Nov 2026 – Thursday, 19 Nov 2026"
+      "Leg 2 · NBO → EBB · Sunday, 15 Nov 2026 – Thursday, 19 Nov 2026"
     );
     expect(saved.message).toContain(
-      "Leg 4: LON → LOS · Saturday, 19 Dec 2026 – Friday, 25 Dec 2026"
+      "Leg 4 · LON → LOS · Saturday, 19 Dec 2026 – Friday, 25 Dec 2026"
     );
     expect(saved.message).toContain("Open trip:");
   });

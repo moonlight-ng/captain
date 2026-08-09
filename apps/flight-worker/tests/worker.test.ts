@@ -162,6 +162,23 @@ describe("flight worker orchestration", () => {
     })).toContain("£10.00 less");
   });
 
+  it("announces the tracking-started event as the next trip phase", () => {
+    expect(notificationText({
+      id: "tracking-started",
+      userId: "user",
+      tripId: "trip",
+      telegramChatId: 1,
+      kind: "tracking_started",
+      attempts: 0,
+      telegramMessageId: null,
+      payload: {
+        eventType: "trip_tracking_started",
+        tripTitle: "Lagos to London",
+        tripVersion: 2
+      }
+    })).toBe("Plan confirmed. Now checking flights…");
+  });
+
   it("opens a trip with a concise, goal-oriented overview", () => {
     expect(notificationText({
       id: "first",

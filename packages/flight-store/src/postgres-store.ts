@@ -875,8 +875,24 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       `;
       await tx`
         insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
-        values (${randomUUID()}, ${tripId}, ${userId}, 'trip_tracking_started', ${tx.json(json({}))}, ${now})
+        values (
+          ${randomUUID()}, ${tripId}, ${userId}, 'trip_tracking_started',
+          ${tx.json(json({ tripVersion: updated[0]!.version }))}, ${now}
+        )
       `;
+      await enqueueNotification(tx, {
+        userId,
+        tripId,
+        kind: "tracking_started",
+        dedupKey: `${tripId}:tracking_started:${updated[0]!.version}`,
+        payload: {
+          eventType: "trip_tracking_started",
+          tripTitle: updated[0]!.title,
+          tripVersion: updated[0]!.version
+        },
+        immediate: true,
+        now
+      });
       await signalFlightWorker(tx);
       return { trip: toTrip(updated[0]!), watch: toWatch(watchRows[0]!) };
     });
@@ -2475,6 +2491,7 @@ async function enqueueNotification(
     kind: CaptainNotification["kind"];
     dedupKey: string;
     payload: Record<string, unknown>;
+    immediate?: boolean;
     now: Date;
   }
 ): Promise<boolean> {
@@ -2490,8 +2507,11 @@ async function enqueueNotification(
       where user_id = ${input.userId}
     ) as notification_mode
   `;
-  if (!recipients[0]?.exists || recipients[0].notification_mode === "off") return false;
-  const availableAt = await userDeliveryTime(sql, input.userId, input.now);
+  if (!recipients[0]?.exists) return false;
+  if (!input.immediate && recipients[0].notification_mode === "off") return false;
+  const availableAt = input.immediate
+    ? input.now
+    : await userDeliveryTime(sql, input.userId, input.now);
   const rows = await sql<Array<{ id: string }>>`
     insert into captain.notifications (
       id, user_id, trip_id, kind, dedup_key, payload, status,

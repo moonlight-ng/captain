@@ -366,6 +366,32 @@ h2 { margin-bottom: 7px; font-size: var(--type-title); font-weight: var(--weight
   flex-direction: column;
   gap: 12px;
 }
+.plan-review-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .055), rgba(255, 255, 255, .025));
+}
+.plan-review-card.pending { border-color: rgba(190, 212, 179, .28); }
+.plan-review-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.plan-review-heading h2 {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: -.015em;
+}
+.plan-review-heading span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(190, 212, 179, .1);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+}
 .workspace .plan-editor {
   margin: 0;
 }
@@ -386,6 +412,7 @@ h2 { margin-bottom: 7px; font-size: var(--type-title); font-weight: var(--weight
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+  padding-top: 2px;
 }
 .plan-actions a,
 .plan-actions button {
@@ -399,17 +426,31 @@ h2 { margin-bottom: 7px; font-size: var(--type-title); font-weight: var(--weight
   font-weight: var(--weight-medium);
   text-decoration: none;
 }
-.plan-actions .primary { background: rgba(255,255,255,.11); color: var(--ink); }
+.plan-actions .primary {
+  border-color: rgba(190, 212, 179, .4);
+  background: var(--accent);
+  color: #0a0a0a;
+}
 .simple-plan {
   display: flex;
+  flex-direction: column;
   justify-content: space-between;
-  gap: 16px;
-  padding: 16px;
+  gap: 7px;
+  padding: 17px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--panel);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, .32);
 }
-.simple-plan span { color: var(--muted); }
+.simple-plan strong {
+  font-size: 20px;
+  line-height: 1.25;
+  letter-spacing: -.02em;
+}
+.simple-plan time {
+  color: rgba(255, 255, 255, .72);
+  font-size: 14px;
+  line-height: 1.45;
+}
 .multi-city-editor {
   display: flex;
   flex-direction: column;

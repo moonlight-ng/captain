@@ -451,15 +451,17 @@ export function App() {
 
   async function trackPrices() {
     if (!trip) return;
+    const previousTab = tab;
     setSearchBusy(true);
     setError("");
+    setTab("flights");
     try {
       await tripAction("track", trip.id, trip.version);
       const next = await getTrip(trip.id);
       setTripData(next);
-      setTab("flights");
     } catch {
       setError("That tracking run didn’t start. Try again.");
+      if (trip.status === "draft") setTab(previousTab);
     } finally {
       setSearchBusy(false);
     }
@@ -783,7 +785,11 @@ export function App() {
 
           <section className="workspace">
             {tab === "plan" && (
-              <div className="plan-tab">
+              <div className={`plan-tab plan-review-card${trip.status === "draft" ? " pending" : ""}`}>
+                <header className="plan-review-heading">
+                  <h2>Itinerary</h2>
+                  {trip.status === "draft" ? <span>Not confirmed</span> : null}
+                </header>
                 {multiCityShared ? (
                   <MultiCityPlanOverview
                     cities={multiCityShared.cities}
@@ -792,7 +798,9 @@ export function App() {
                 ) : (
                   <section className="simple-plan" aria-label="Trip itinerary">
                     <strong>{routeLabel(trip)}</strong>
-                    <span>{dateLabel(trip.brief.departureWindow.start)}</span>
+                    <time dateTime={trip.brief.departureWindow.start}>
+                      {dateLabel(trip.brief.departureWindow.start)}
+                    </time>
                   </section>
                 )}
                 <div className="plan-actions">
@@ -800,11 +808,11 @@ export function App() {
                     href={tripHref(trip.id, "settings")}
                     onClick={inPageLink(tripHref(trip.id, "settings"), navigate)}
                   >
-                    Edit plan
+                    {trip.status === "draft" ? "Review" : "Edit plan"}
                   </a>
                   {trip.status === "draft" ? (
                     <button className="primary" disabled={searchBusy} onClick={() => void trackPrices()}>
-                      {searchBusy ? "Confirming…" : "Confirm plan"}
+                      {searchBusy ? "Now checking flights…" : "Confirm"}
                     </button>
                   ) : null}
                 </div>
@@ -1482,7 +1490,7 @@ function ResultsEmpty({ needsManualSearch, searching, completed, busy, onSearch 
     return (
       <div className="results-empty searching">
         <span aria-hidden="true"><SearchRadarIcon /></span>
-        <h2>Searching for flights</h2>
+        <h2>Now checking flights</h2>
         <SearchStatusLine />
       </div>
     );

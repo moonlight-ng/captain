@@ -43,7 +43,10 @@ import {
 
 import { getCaptainServices } from "../../services/app/services.js";
 import { clearTelegramOwnerContext } from "../../services/agent/owner-context.js";
-import { TripPlanningService } from "../../services/trip-planning/service.js";
+import {
+  isTripConfirmationText,
+  TripPlanningService
+} from "../../services/trip-planning/service.js";
 import {
   formatTripPlanConfirmation,
   telegramDashboardMessage
@@ -343,6 +346,14 @@ export default telegramChannel({
         if (openDraftResult) {
           return { kind: "trip_plan" as const, result: openDraftResult };
         }
+        const activeTrip = await services.platformStore.getActiveTrip(user.id);
+        if (activeTrip?.status === "draft" && isTripConfirmationText(content)) {
+          await services.trips.action(user.id, activeTrip.id, {
+            type: "track",
+            expectedVersion: activeTrip.version
+          });
+          return { kind: "trip_confirmation_accepted" as const };
+        }
         if (TripPlanningService.isWhereQuestion(content)) {
           const location = await services.tripPlanning.activeTripLocation(user.id);
           if (location) return { kind: "dashboard" as const, message: location };
@@ -357,6 +368,7 @@ export default telegramChannel({
         return null;
       });
       if (reply) {
+        if (reply.kind === "trip_confirmation_accepted") return null;
         if (reply.kind === "dashboard") {
           await services.platformStore.appendMessage(user.id, "assistant", reply.message, new Date());
           await postTelegramDashboardMessage(ctx, reply.message);
@@ -466,7 +478,7 @@ export default telegramChannel({
       if (action.type === "confirm") {
         await ctx.telegram.answerCallbackQuery({
           callbackQueryId: query.id,
-          text: "Starting flight analysis…"
+          text: "Confirming plan…"
         });
         const trip = await services.trips.get(user.id, action.tripId);
         if (!trip) throw new Error("Trip not found");
@@ -477,9 +489,6 @@ export default telegramChannel({
           expectedVersion: trip.status === "draft" ? trip.version : action.version
         });
         await clearCallbackButtons(ctx, query);
-        const message = "Plan confirmed. I’m analysing flight patterns now. I’ll send an update when I have a useful sense of the cost.";
-        await services.platformStore.appendMessage(user.id, "assistant", message, new Date());
-        await ctx.telegram.post(message);
         return;
       }
       if (action.type === "edit") {
@@ -647,10 +656,7 @@ export default telegramChannel({
         const grounded = await services.tripPlanning.groundAssistantMessage(userId, message);
         message = reviewCaptainMessage(grounded.message);
         const activeTrip = await services.platformStore.getActiveTrip(userId);
-        if (
-          activeTrip?.status === "draft"
-          && message.includes("Review or confirm to start exploring flights")
-        ) {
+        if (activeTrip?.status === "draft" && grounded.createdTrip) {
           reviewTrip = activeTrip;
         }
         await services.platformStore.appendMessage(userId, "assistant", message, new Date());
@@ -1034,11 +1040,11 @@ export function tripPlanReviewReplyMarkup(
 ) {
   return {
     inline_keyboard: [[{
-      text: "Review",
-      url: receipt.dashboardUrl
-    }, {
       text: "Confirm",
       callback_data: `captain-trip:confirm:${receipt.tripId}:${receipt.version}`
+    }, {
+      text: "Review",
+      url: receipt.dashboardUrl
     }]]
   };
 }
