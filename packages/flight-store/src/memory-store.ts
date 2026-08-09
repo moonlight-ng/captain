@@ -205,16 +205,27 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       ...DEFAULT_PROFILE,
       preferredAirlineCodes: [],
       excludedAirlineCodes: [],
+      onboardingStep: "welcome",
+      onboardingCompletedAt: null,
       updatedAt: now.toISOString()
     });
     this.#clearTrips(userId);
+    const conversation = this.#conversations.get(userId);
+    if (conversation) {
+      this.#conversations.set(userId, {
+        ...conversation,
+        summary: "",
+        activeTripId: null,
+        recentMessages: []
+      });
+    }
   }
 
   /**
    * Every trip a traveller owns, and everything hanging off it. Shared search
    * data—specs, runs, offers, price history—is not one traveller's to delete,
-   * so it stays. The account, profile and conversation survive too: only the
-   * traveller's own trips go.
+   * so it stays. The account and profile survive too: only the traveller's
+   * own trips go.
    */
   #clearTrips(userId: string): void {
     const tripIds = new Set(

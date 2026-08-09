@@ -357,7 +357,9 @@ export function describeCaptainPlatformStore(
         preferredAirlineCodes: ["BA"],
         excludedAirlineCodes: ["KL"],
         notificationMode: "off",
-        quietHoursEnabled: false
+        quietHoursEnabled: false,
+        onboardingStep: "complete",
+        onboardingCompletedAt: now.toISOString()
       }, now);
       const sourceMessageId = await store.appendMessage(ada.id, "user", "Clear this", now);
       const draft = await store.createTripPlanDraft(ada.id, "Plan a trip", sourceMessageId, now);
@@ -371,7 +373,9 @@ export function describeCaptainPlatformStore(
         preferredAirlineCodes: [],
         excludedAirlineCodes: [],
         notificationMode: "changes_only",
-        quietHoursEnabled: true
+        quietHoursEnabled: true,
+        onboardingStep: "welcome",
+        onboardingCompletedAt: null
       });
       await expect(store.getUser(ada.id)).resolves.toMatchObject({ id: ada.id });
       // Clearing takes every trip, not just the tracked one, and the half-typed
@@ -379,7 +383,11 @@ export function describeCaptainPlatformStore(
       await expect(store.listTrips(ada.id)).resolves.toEqual([]);
       await expect(store.getActiveTrip(ada.id)).resolves.toBeNull();
       await expect(store.getTripPlanDraft(ada.id, draft.id, now)).resolves.toBeNull();
-      await expect(store.getConversation(ada.id)).resolves.toMatchObject({ activeTripId: null });
+      await expect(store.getConversation(ada.id)).resolves.toMatchObject({
+        summary: "",
+        activeTripId: null,
+        recentMessages: []
+      });
       // One traveller clearing their own data leaves everyone else's alone.
       await expect(store.listTrips(grace.id)).resolves.toHaveLength(1);
     });

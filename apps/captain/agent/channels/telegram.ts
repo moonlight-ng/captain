@@ -40,6 +40,7 @@ import {
 } from "@agents/flight-store";
 
 import { getCaptainServices } from "../../services/app/services.js";
+import { clearTelegramOwnerContext } from "../../services/agent/owner-context.js";
 import { TripPlanningService } from "../../services/trip-planning/service.js";
 import {
   formatTripPlanConfirmation,
@@ -123,11 +124,11 @@ export const CAPTAIN_CLEAR_COMMAND = "/clear";
 export const CAPTAIN_FEEDBACK_COMMAND = "/feedback";
 export const CAPTAIN_FEEDBACK_PROMPT =
   "Tell us what worked, what didn’t, or what you’d like Captain to do better.";
-// Clearing drops the traveller's trips as well as their preferences, so the
-// confirmation has to name both—otherwise the next /trip comes back empty
-// and reads as Captain having lost something.
+// Clearing drops the traveller's trips, preferences, and stored conversation,
+// then returns onboarding to its welcome step. The next /start should feel
+// exactly like meeting Captain for the first time.
 export const CAPTAIN_CLEAR_CONFIRMATION =
-  "Cleared — trips and preferences both. I’ll be here when the next trip comes up.";
+  "Cleared — trips, preferences, and conversation history. Tap Start to begin again.";
 export const CAPTAIN_VOICE_TURN_CONTEXT =
   "The current user message was transcribed from a Telegram voice note. "
   + "Treat it as the traveller’s actual current request. Briefly acknowledge what you understood, "
@@ -257,6 +258,7 @@ export default telegramChannel({
       return null;
     }
     if (command === CAPTAIN_CLEAR_COMMAND.slice(1)) {
+      await clearTelegramOwnerContext(telegramChatId, services.env.databaseUrl);
       await services.platformStore.clearTravellerData(user.id, new Date());
       await ctx.telegram.post(CAPTAIN_CLEAR_CONFIRMATION);
       return null;

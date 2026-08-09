@@ -97,13 +97,15 @@ describe("Telegram profile onboarding", () => {
     expect(CAPTAIN_PROFILE_COMMAND).toBe("/profile");
   });
 
-  it("says that clear removes trips as well as resetting preferences", () => {
+  it("says that clear resets the full first-person experience", () => {
     expect(CAPTAIN_CLEAR_COMMAND).toBe("/clear");
     expect(CAPTAIN_CLEAR_CONFIRMATION).toBe(
-      "Cleared — trips and preferences both. I’ll be here when the next trip comes up."
+      "Cleared — trips, preferences, and conversation history. Tap Start to begin again."
     );
     expect(CAPTAIN_CLEAR_CONFIRMATION).toMatch(/trips/iu);
     expect(CAPTAIN_CLEAR_CONFIRMATION).toMatch(/preferences/iu);
+    expect(CAPTAIN_CLEAR_CONFIRMATION).toMatch(/conversation history/iu);
+    expect(CAPTAIN_CLEAR_CONFIRMATION).toMatch(/start/iu);
   });
 });
 
