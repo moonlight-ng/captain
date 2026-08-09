@@ -55,7 +55,7 @@ import type {
   TripRecommendation
 } from "./contracts.js";
 import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
-import { notificationGoalPayload, offerRangeSummary } from "./notification-payload.js";
+import { notificationGoalPayload, offerDateSummary, offerRangeSummary } from "./notification-payload.js";
 import {
   meetsAlertThreshold,
   rankOffers,
@@ -1988,7 +1988,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
                     ...notificationGoalPayload(trip, profile),
                     ...recommendation,
                     ...(kind === "initial_results"
-                      ? { range: offerRangeSummary(offers) }
+                      ? { range: offerRangeSummary(offers), dateSummary: offerDateSummary(offers, trip) }
                       : {}),
                     ...(kind === "initial_results" && watch?.trackingStartsAt
                       ? { trackingStartsAt: watch.trackingStartsAt }

@@ -61,6 +61,7 @@ jobs:
             relative-date-correction
             trip-creation-reliability
             trip-understanding-v2
+            website-flight-intelligence
           )
           admin_url="postgresql://captain:captain_test@127.0.0.1:5432/postgres"
           overall_status=0

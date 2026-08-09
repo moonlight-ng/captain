@@ -52,7 +52,9 @@ import type {
 import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
 import {
   notificationGoalPayload,
+  offerDateSummary,
   offerRangeSummary,
+  type OfferDateSummary,
   type OfferRangeSummary
 } from "./notification-payload.js";
 import {
@@ -1542,7 +1544,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       if (kind) {
         const context = {
           tripGoal: formatTripGoal({ brief: trip.brief, rankingMode: profile.rankingMode }),
-          range: offerRangeSummary(offers)
+          range: offerRangeSummary(offers),
+          dateSummary: offerDateSummary(offers, trip)
         };
         if (this.#enqueueNotification(trip, kind, recommendation, previous, context, now)) {
           changed += 1;
@@ -1719,7 +1722,11 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     recommendation: TripRecommendation,
     previous: TripRecommendation | undefined,
     /** What Captain is chasing, and the market it found. */
-    context: { tripGoal: string; range: OfferRangeSummary | null },
+    context: {
+      tripGoal: string;
+      range: OfferRangeSummary | null;
+      dateSummary: OfferDateSummary | null;
+    },
     now: Date
   ): boolean {
     const user = [...this.#usersByTelegram.values()].find((item) => item.id === trip.userId);
@@ -1744,7 +1751,9 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         tripTitle: trip.title,
         tripGoal: context.tripGoal,
         ...recommendation,
-        ...(kind === "initial_results" ? { range: context.range } : {}),
+        ...(kind === "initial_results"
+          ? { range: context.range, dateSummary: context.dateSummary }
+          : {}),
         ...(kind === "initial_results"
           && [...this.#watches.values()].find((watch) => watch.tripId === trip.id)?.trackingStartsAt
           ? {

@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
 
 import {
+  airportCodeMatches,
   deriveOfferMetrics,
+  expandSearchDateCombinations,
   FlightSearchProviderError,
+  SearchWindowCombinationError,
   verifiedOfferCandidateSchema,
   type FlightSearchProvider,
   type FlightSearchResult,
@@ -49,6 +52,8 @@ const errorSchema = z.object({
     title: z.string().optional()
   })).default([])
 });
+
+const DATE_SEARCH_CONCURRENCY = 3;
 
 export type DuffelErrorCode =
   | "unauthorized"
@@ -109,6 +114,39 @@ export class DuffelFlightSearchProvider implements FlightSearchProvider {
         `Duffel inventory currently supports USD and GBP trips only (got ${request.currency})`
       );
     }
+    let exactRequests: SearchSpecRequest[];
+    try {
+      exactRequests = expandSearchDateCombinations(request);
+    } catch (error) {
+      if (error instanceof SearchWindowCombinationError) {
+        throw new DuffelError("invalid_request", error.message);
+      }
+      throw error;
+    }
+    const results = await mapBounded(
+      exactRequests,
+      DATE_SEARCH_CONCURRENCY,
+      (exactRequest) => this.#searchExact(exactRequest)
+    );
+    const requestIds = results.map((result) => result.requestId);
+    const batchId = requestIds.length === 1
+      ? requestIds[0]!
+      : createHash("sha256").update(requestIds.join("|")).digest("hex");
+    const offers = results.flatMap((result) => result.offers)
+      .sort((left, right) => Number(left.priceAmount) - Number(right.priceAmount));
+    return {
+      provider: this.provider,
+      requestId: batchId,
+      discoveryResponseId: batchId,
+      verificationResponseId: batchId,
+      model: "duffel",
+      promptVersion: "duffel-exhaustive-window-v3",
+      offers,
+      rejectionCounts: {}
+    };
+  }
+
+  async #searchExact(request: SearchSpecRequest): Promise<FlightSearchResult> {
     const response = await this.#request(
       `/air/offer_requests?return_offers=false&supplier_timeout=${this.#supplierTimeoutMs}&view=offers`,
       {
@@ -198,9 +236,30 @@ export class DuffelFlightSearchProvider implements FlightSearchProvider {
   }
 }
 
+async function mapBounded<T, R>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from(
+    { length: Math.min(concurrency, values.length) },
+    async () => {
+      for (;;) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= values.length) return;
+        results[index] = await mapper(values[index]!);
+      }
+    }
+  ));
+  return results;
+}
+
 function toOfferRequest(request: SearchSpecRequest): Record<string, unknown> {
   return {
-    slices: request.slices.map((slice) => ({
+    slices: expectedSlices(request).map((slice) => ({
       origin: pickPlace(slice.originAirports),
       destination: pickPlace(slice.destinationAirports),
       departure_date: slice.departureStart
@@ -228,26 +287,23 @@ async function mapOffer(
 ): Promise<VerifiedOfferCandidate | null> {
   const parsed = offerSchema.safeParse(raw);
   if (!parsed.success) return null;
-  if (parsed.data.slices.length !== request.slices.length) return null;
+  const expectedRequestSlices = expectedSlices(request);
+  if (parsed.data.slices.length !== expectedRequestSlices.length) return null;
 
   const slices = [];
   for (let index = 0; index < parsed.data.slices.length; index += 1) {
     const slice = parsed.data.slices[index]!;
-    const expected = request.slices[index]!;
+    const expected = expectedRequestSlices[index]!;
     if (slice.segments.length === 0) return null;
     if (slice.segments.length - 1 > request.maxConnections) return null;
     const origin = slice.segments[0]!.origin.iata_code.toUpperCase();
     const destination = slice.segments.at(-1)!.destination.iata_code.toUpperCase();
-    if (
-      !expected.originAirports.includes(origin)
-      && !cityAllows(expected.originAirports, origin)
-    ) return null;
-    if (
-      !expected.destinationAirports.includes(destination)
-      && !cityAllows(expected.destinationAirports, destination)
-    ) return null;
+    if (!airportCodeMatches(expected.originAirports, origin)) return null;
+    if (!airportCodeMatches(expected.destinationAirports, destination)) return null;
     const departureDate = slice.segments[0]!.departing_at.slice(0, 10);
     if (departureDate < expected.departureStart || departureDate > expected.departureEnd) return null;
+    const arrivalDate = slice.segments.at(-1)!.arriving_at.slice(0, 10);
+    if (expected.arriveBy && arrivalDate > expected.arriveBy) return null;
     slices.push({
       origin,
       destination,
@@ -327,23 +383,26 @@ async function mapOffer(
   return candidate;
 }
 
-/** City codes like NYC/LON accept any airport the user listed under that city. */
-function cityAllows(requested: string[], airport: string): boolean {
-  const cities: Record<string, string[]> = {
-    NYC: ["JFK", "EWR", "LGA", "NYC"],
-    LON: ["LHR", "LGW", "STN", "LCY", "LTN", "LON"],
-    PAR: ["CDG", "ORY", "PAR"],
-    TYO: ["HND", "NRT", "TYO"]
-  };
-  for (const code of requested) {
-    const group = cities[code];
-    if (group?.includes(airport) || code === airport) return true;
-    for (const [city, airports] of Object.entries(cities)) {
-      if (airports.includes(code) && airports.includes(airport)) return true;
-      if (code === city && airports.includes(airport)) return true;
+function expectedSlices(request: SearchSpecRequest): SearchSpecRequest["slices"] {
+  if (request.tripType !== "round_trip") return request.slices;
+  const outbound = request.slices[0];
+  if (!outbound || !request.stayNights) return request.slices;
+  const returnDate = addIsoDays(outbound.departureStart, request.stayNights.preferred);
+  return [
+    outbound,
+    {
+      originAirports: outbound.destinationAirports,
+      destinationAirports: outbound.originAirports,
+      departureStart: returnDate,
+      departureEnd: returnDate
     }
-  }
-  return false;
+  ];
+}
+
+function addIsoDays(value: string, days: number): string {
+  return new Date(Date.parse(`${value}T00:00:00.000Z`) + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
 }
 
 function ensureOffset(value: string): string {

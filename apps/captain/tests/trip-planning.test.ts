@@ -281,30 +281,30 @@ describe("Captain trip planning", () => {
           originAirports: [],
           destinationAirports: ["NBO"],
           departure: null,
-          feasibleDepartureWindow: { start: "2026-08-08", end: "2026-11-03" },
-          proposedDeparture: { start: "2026-10-28", end: "2026-11-03" },
+          feasibleDepartureWindow: { start: "2026-08-08", end: "2026-11-04" },
+          proposedDeparture: { start: "2026-10-29", end: "2026-11-04" },
           arriveBy: "2026-11-04"
         },
         {
           originAirports: ["NBO"],
           destinationAirports: ["EBB"],
-          departure: { start: "2026-11-15", end: "2026-11-18" },
+          departure: { start: "2026-11-15", end: "2026-11-19" },
           arriveBy: "2026-11-19"
         },
         {
           originAirports: ["EBB"],
           destinationAirports: ["LON"],
           departure: null,
-          feasibleDepartureWindow: { start: "2026-11-23", end: "2026-12-09" },
-          proposedDeparture: { start: "2026-12-03", end: "2026-12-09" },
+          feasibleDepartureWindow: { start: "2026-11-23", end: "2026-12-10" },
+          proposedDeparture: { start: "2026-12-04", end: "2026-12-10" },
           arriveBy: "2026-12-10"
         },
         {
           originAirports: ["LON"],
           destinationAirports: ["LOS"],
           departure: null,
-          feasibleDepartureWindow: { start: "2026-12-11", end: "2026-12-24" },
-          proposedDeparture: { start: "2026-12-18", end: "2026-12-24" },
+          feasibleDepartureWindow: { start: "2026-12-11", end: "2026-12-25" },
+          proposedDeparture: { start: "2026-12-19", end: "2026-12-25" },
           arriveBy: "2026-12-25"
         }
       ]
@@ -388,8 +388,8 @@ describe("Captain trip planning", () => {
     }
     expect(declined.draft.state.questionsAsked).toBe(2);
     expect(declined.draft.state.legs[0]?.proposedDeparture).toMatchObject({
-      start: "2026-10-28",
-      end: "2026-11-03",
+      start: "2026-10-29",
+      end: "2026-11-04",
       source: "Captain’s best-fit draft window"
     });
     expect(declined.message).toContain("Open trip:");
@@ -1212,8 +1212,8 @@ describe("Captain trip planning", () => {
     // The refused date is not stored: the leg keeps the window Captain chose.
     expect(answered.draft.state.legs[0]!.departure).toBeNull();
     expect(answered.draft.state.legs[0]!.proposedDeparture).toMatchObject({
-      start: "2026-10-28",
-      end: "2026-11-03"
+      start: "2026-10-29",
+      end: "2026-11-04"
     });
   });
 
@@ -1237,13 +1237,13 @@ describe("Captain trip planning", () => {
       throw new Error("Expected the itinerary to be saved");
     }
     expect(saved.message).toContain(
-      "Leg 1: LON → NBO · Wednesday, 28 Oct 2026 – Tuesday, 3 Nov 2026"
+      "Leg 1: LON → NBO · Thursday, 29 Oct 2026 – Wednesday, 4 Nov 2026"
     );
     expect(saved.message).toContain(
-      "Leg 2: NBO → EBB · Sunday, 15 Nov 2026 – Wednesday, 18 Nov 2026"
+      "Leg 2: NBO → EBB · Sunday, 15 Nov 2026 – Thursday, 19 Nov 2026"
     );
     expect(saved.message).toContain(
-      "Leg 4: LON → LOS · Friday, 18 Dec 2026 – Thursday, 24 Dec 2026"
+      "Leg 4: LON → LOS · Saturday, 19 Dec 2026 – Friday, 25 Dec 2026"
     );
     expect(saved.message).toContain("Open trip:");
   });

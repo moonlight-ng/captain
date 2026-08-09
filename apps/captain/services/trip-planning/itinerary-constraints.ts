@@ -66,6 +66,7 @@ type Clause = {
 };
 
 const MONTH_PATTERN = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+const WEEKDAY_PATTERN = "mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?";
 const NARRATIVE_CONTEXT_PATTERN = /\b(?:wedding|birthday|christmas|conference|meeting|event|ceremony|must\s+be|need\s+to\s+be|will\s+be|i(?:'|’)ll\s+be|stay(?:ing)?|spend)\b/iu;
 const PRESENCE_CUE_PATTERN = /\b(?:be|stay|staying|spend|arrive|going)\s+(?:in|to|at)\b/iu;
 
@@ -181,8 +182,18 @@ export function compileItineraryConstraints(
     // Nothing said about leaving means the traveller can leave now. A deadline
     // on its own is enough to compose a departure window from, which is what
     // lets Captain propose a flight instead of asking for one.
-    const start = leaveAfter ? addIsoDays(leaveAfter, 1) : arriveBy ? today : null;
-    const end = arriveBy ? addIsoDays(arriveBy, -1) : null;
+    const requestedOriginStart = constraints.origin?.airportCode === origin
+      ? originDepartureFloor(constraints.origin.evidence, now, timeZone)
+      : null;
+    const start = latest([
+      ...(leaveAfter ? [addIsoDays(leaveAfter, 1)] : []),
+      ...(requestedOriginStart ? [requestedOriginStart] : []),
+      ...(!leaveAfter && arriveBy ? [today] : [])
+    ]);
+    // The offer itself is checked against arriveBy, so same-day short-haul
+    // flights remain possible while an overnight arrival after the deadline
+    // is still rejected.
+    const end = arriveBy;
     const feasible = start && end && daysBetween(start, end) >= 0
       ? { start, end }
       : null;
@@ -284,7 +295,7 @@ export function deterministicItineraryConstraints(input: {
       ? { airportCode: originMention.code, evidence: originMention.evidence }
       : null,
     stops: airportMentions
-      .filter((mention) => mention !== originMention)
+      .filter((mention) => mention.index !== originMention?.index)
       .map((mention) => ({
         airportCode: mention.code,
         evidence: mention.evidence
@@ -332,6 +343,11 @@ function extractPresenceMentions(
     "giu"
   ), 1);
   addMatches(/\bchristmas(?:\s+day)?\b/giu, null);
+  addMatches(new RegExp(
+    String.raw`\b(?:(?:before|by|on)\s+)?(?:next\s+)?(?:${WEEKDAY_PATTERN})\b`,
+    "giu"
+  ), null);
+  addMatches(/\b(?:on\s+(?:the\s+)?)?\d{1,2}(?:st|nd|rd|th)\b/giu, null);
 
   let inheritedMonth: string | null = null;
   return candidates.sort((left, right) => left.index - right.index).flatMap((candidate) => {
@@ -340,7 +356,8 @@ function extractPresenceMentions(
       ? candidate.evidence
       : inheritedMonth
         ? `${inheritedMonth} ${candidate.evidence}`
-        : candidate.evidence;
+        : inferUnqualifiedDateExpression(candidate.evidence, now, timeZone)
+          ?? candidate.evidence;
     const normalized = /christmas/iu.test(expression) ? "December 25" : expression;
     const sequence = resolveTripDateSequence(normalized, now, timeZone);
     if (sequence.issue || sequence.dates.length === 0) return [];
@@ -444,12 +461,63 @@ function explicitOriginMention(
   request: string,
   mentions: ReturnType<typeof orderedAirportMentionsFromText>
 ): ReturnType<typeof orderedAirportMentionsFromText>[number] | null {
-  return mentions.find((mention) => {
-    const before = request.slice(Math.max(0, mention.index - 60), mention.index);
-    const after = request.slice(mention.index + mention.evidence.length, mention.index + mention.evidence.length + 20);
+  const mention = mentions.find((candidate) => {
+    const before = request.slice(Math.max(0, candidate.index - 60), candidate.index);
+    const after = request.slice(candidate.index + candidate.evidence.length, candidate.index + candidate.evidence.length + 20);
     return /\b(?:from|depart(?:ing)?\s+from|leav(?:e|ing)\s+from|fly(?:ing)?\s+from|start(?:ing)?\s+in|i(?:'|’)m\s+in|i\s+am\s+in|currently\s+in)\s*$/iu.test(before)
       && (!/\bi(?:'|’)m\s+in|\bi\s+am\s+in/iu.test(before) || /^\s*(?:now\b)?/iu.test(after));
-  }) ?? null;
+  });
+  if (!mention) return null;
+  const after = request.slice(
+    mention.index + mention.evidence.length,
+    mention.index + mention.evidence.length + 40
+  );
+  const timing = /^\s+(?:starting\s+)?next\s+week\b/iu.exec(after);
+  return timing
+    ? {
+        ...mention,
+        evidence: request.slice(
+          mention.index,
+          mention.index + mention.evidence.length + timing[0].length
+        )
+      }
+    : mention;
+}
+
+function inferUnqualifiedDateExpression(
+  evidence: string,
+  now: Date,
+  timeZone: string
+): string | null {
+  if (new RegExp(`\\b(?:${WEEKDAY_PATTERN})\\b`, "iu").test(evidence)) return null;
+  const dayExpression = /\b(\d{1,2}(?:st|nd|rd|th)?(?:\s*(?:-|–|—|to)\s*\d{1,2}(?:st|nd|rd|th)?)?)\b/iu
+    .exec(evidence)?.[1];
+  const firstDay = Number(/\d{1,2}/u.exec(dayExpression ?? "")?.[0]);
+  if (!dayExpression || !Number.isInteger(firstDay) || firstDay < 1 || firstDay > 31) return null;
+  const [yearText, monthText, dayText] = localIsoDate(now, timeZone).split("-");
+  let year = Number(yearText);
+  let month = Number(monthText);
+  const currentDay = Number(dayText);
+  if (firstDay < currentDay) {
+    month += 1;
+    if (month === 13) {
+      month = 1;
+      year += 1;
+    }
+  }
+  const monthName = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ][month - 1]!;
+  return `${monthName} ${dayExpression} ${year}`;
+}
+
+function originDepartureFloor(evidence: string, now: Date, timeZone: string): string | null {
+  if (!/\bnext\s+week\b/iu.test(evidence)) return null;
+  const today = localIsoDate(now, timeZone);
+  const weekday = new Date(`${today}T12:00:00.000Z`).getUTCDay();
+  const daysUntilNextMonday = weekday === 1 ? 7 : (8 - weekday) % 7;
+  return addIsoDays(today, daysUntilNextMonday);
 }
 
 function proposedSearchWindow(

@@ -64,11 +64,11 @@ describe("narrative itinerary constraints", () => {
         arriveBy: "2026-11-04",
         // Nothing holds the traveller anywhere before this flight, so it can
         // leave any day from today up to the day before the wedding.
-        feasibleDepartureWindow: { start: "2026-08-08", end: "2026-11-03" },
+        feasibleDepartureWindow: { start: "2026-08-08", end: "2026-11-04" },
         proposedDeparture: {
           kind: "window",
-          start: "2026-10-28",
-          end: "2026-11-03",
+          start: "2026-10-29",
+          end: "2026-11-04",
           source: "Captain’s proposed seven-day search window"
         }
       },
@@ -78,11 +78,11 @@ describe("narrative itinerary constraints", () => {
         departure: {
           kind: "window",
           start: "2026-11-15",
-          end: "2026-11-18",
+          end: "2026-11-19",
           source: "Derived from the traveller’s city availability"
         },
         arriveBy: "2026-11-19",
-        feasibleDepartureWindow: { start: "2026-11-15", end: "2026-11-18" },
+        feasibleDepartureWindow: { start: "2026-11-15", end: "2026-11-19" },
         proposedDeparture: null
       },
       {
@@ -90,11 +90,11 @@ describe("narrative itinerary constraints", () => {
         destinationAirports: ["LON"],
         departure: null,
         arriveBy: "2026-12-10",
-        feasibleDepartureWindow: { start: "2026-11-23", end: "2026-12-09" },
+        feasibleDepartureWindow: { start: "2026-11-23", end: "2026-12-10" },
         proposedDeparture: {
           kind: "window",
-          start: "2026-12-03",
-          end: "2026-12-09",
+          start: "2026-12-04",
+          end: "2026-12-10",
           source: "Captain’s proposed seven-day search window"
         }
       },
@@ -103,11 +103,11 @@ describe("narrative itinerary constraints", () => {
         destinationAirports: ["LOS"],
         departure: null,
         arriveBy: "2026-12-25",
-        feasibleDepartureWindow: { start: "2026-12-11", end: "2026-12-24" },
+        feasibleDepartureWindow: { start: "2026-12-11", end: "2026-12-25" },
         proposedDeparture: {
           kind: "window",
-          start: "2026-12-18",
-          end: "2026-12-24",
+          start: "2026-12-19",
+          end: "2026-12-25",
           source: "Captain’s proposed seven-day search window"
         }
       }

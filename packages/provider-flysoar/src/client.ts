@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import {
+  airportCodeMatches,
+  expandSearchDateCombinations,
   FlightSearchProviderError,
+  SearchWindowCombinationError,
   verifiedOfferCandidateSchema,
   type FlightSearchProvider,
   type FlightSearchResult,
@@ -19,6 +22,7 @@ import { z } from "zod";
 const DEFAULT_MCP_URL = "https://mcp.flysoar.ai/mcp";
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 const DEFAULT_OFFER_LIMIT = 60;
+const DATE_SEARCH_CONCURRENCY = 3;
 
 const mcpContentSchema = z.object({
   type: z.string(),
@@ -128,6 +132,44 @@ export class FlysoarMcpFlightSearchProvider implements FlightSearchProvider {
         `Flysoar backup currently supports USD and GBP trips only (got ${request.currency})`
       );
     }
+    let exactRequests: SearchSpecRequest[];
+    try {
+      exactRequests = expandSearchDateCombinations(request);
+    } catch (error) {
+      if (error instanceof SearchWindowCombinationError) {
+        throw new FlysoarProviderError("invalid_request", error.message);
+      }
+      throw error;
+    }
+    const results = await mapBounded(
+      exactRequests,
+      DATE_SEARCH_CONCURRENCY,
+      (exactRequest) => this.#searchExact(exactRequest)
+    );
+    const requestIds = results.map((result) => result.requestId);
+    const batchId = requestIds.length === 1
+      ? requestIds[0]!
+      : createHash("sha256").update(requestIds.join("|")).digest("hex");
+    const offers = results.flatMap((result) => result.offers)
+      .sort((left, right) => Number(left.priceAmount) - Number(right.priceAmount));
+    return {
+      provider: this.provider,
+      requestId: batchId,
+      discoveryResponseId: batchId,
+      verificationResponseId: batchId,
+      model: "flysoar-mcp",
+      promptVersion: "soar-search-flights-exhaustive-window-v2",
+      offers,
+      rejectionCounts: results.reduce<Partial<Record<string, number>>>((counts, result) => {
+        for (const [key, value] of Object.entries(result.rejectionCounts)) {
+          counts[key] = (counts[key] ?? 0) + (value ?? 0);
+        }
+        return counts;
+      }, {})
+    };
+  }
+
+  async #searchExact(request: SearchSpecRequest): Promise<FlightSearchResult> {
     const mcpId = randomUUID();
     const response = await this.#request({
       jsonrpc: "2.0",
@@ -226,6 +268,27 @@ export class FlysoarMcpFlightSearchProvider implements FlightSearchProvider {
       retryAfterMs
     );
   }
+}
+
+async function mapBounded<T, R>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from(
+    { length: Math.min(concurrency, values.length) },
+    async () => {
+      for (;;) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= values.length) return;
+        results[index] = await mapper(values[index]!);
+      }
+    }
+  ));
+  return results;
 }
 
 function toSearchArguments(
@@ -336,6 +399,9 @@ function mapOffer(
         flightNumber: normalizedFlightNumber(carrier, segment.flight_number)
       };
     });
+    if (expectedSlice.arriveBy && segments.at(-1)!.arrival.slice(0, 10) > expectedSlice.arriveBy) {
+      return null;
+    }
     if (
       segments[0]?.origin !== origin
       || segments.at(-1)?.destination !== destination
@@ -395,21 +461,7 @@ function expectedSlices(request: SearchSpecRequest): SearchSlice[] {
 }
 
 function placeMatches(requested: string[], actual: string): boolean {
-  const cityAirports: Record<string, string[]> = {
-    NYC: ["JFK", "EWR", "LGA", "NYC"],
-    LON: ["LHR", "LGW", "STN", "LCY", "LTN", "LON"],
-    PAR: ["CDG", "ORY", "PAR"],
-    TYO: ["HND", "NRT", "TYO"]
-  };
-  return requested.some((code) => {
-    const normalized = code.trim().toUpperCase();
-    if (normalized === actual) return true;
-    const group = cityAirports[normalized];
-    if (group?.includes(actual)) return true;
-    return Object.values(cityAirports).some(
-      (airports) => airports.includes(normalized) && airports.includes(actual)
-    );
-  });
+  return airportCodeMatches(requested, actual);
 }
 
 function normalizedCarrier(value: string | null | undefined): string {

@@ -8,6 +8,8 @@ export type SearchSlice = {
   destinationAirports: string[];
   departureStart: string;
   departureEnd: string;
+  /** Latest acceptable local arrival date for this slice. */
+  arriveBy?: string | null;
 };
 
 export type SearchSpecRequest = {
@@ -48,9 +50,10 @@ export function buildSearchSpecs(brief: TripBrief, _liveMode = true): SearchSpec
   const slices: SearchSlice[] = brief.tripType === "multi_city"
     ? (brief.legs ?? []).map((leg) => ({
         originAirports: leg.originAirports,
-        destinationAirports: leg.destinationAirports,
-        departureStart: leg.departureWindow.start,
-        departureEnd: leg.departureWindow.end
+      destinationAirports: leg.destinationAirports,
+      departureStart: leg.departureWindow.start,
+      departureEnd: leg.departureWindow.end,
+      ...(leg.arriveBy ? { arriveBy: leg.arriveBy } : {})
       }))
     : [{
         originAirports: brief.originAirports,

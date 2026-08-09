@@ -539,6 +539,23 @@ function appendDateOperations(
       expression: weekday,
       evidence: evidenceForNormalized(input.request, weekday)
     });
+    return;
+  }
+
+  // “What is the price range looking like?” asks for a present market view,
+  // not a form question. Make the comparison window explicit and reviewable;
+  // the traveller still confirms it before Captain spends provider calls.
+  if (
+    input.routeLegCount > 0
+    && /\b(?:price\s+range|prices?\s+(?:right\s+now|looking\s+like)|what(?:'|’)s\s+the\s+price|market\s+range)\b/iu.test(input.request)
+  ) {
+    const start = localIsoDate(input.now, input.timeZone);
+    operations.push({
+      type: "set_date",
+      target: selectedTarget,
+      expression: `${start} to ${addIsoDays(start, 6)}`,
+      evidence: input.request
+    });
   }
 }
 
