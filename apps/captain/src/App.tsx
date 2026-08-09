@@ -31,7 +31,6 @@ import {
   type VerifiedOffer,
   type Watch
 } from "./domain";
-import { airlineGroups } from "./airline-groups";
 import {
   activityLabel,
   airlineName,
@@ -40,43 +39,44 @@ import {
   countFilters,
   dateLabel,
   duration,
-  durationRange,
-  durationSeconds,
   filterChips,
   formatDurationSeconds,
   formatMoney,
   isMixed,
   label,
   money,
-  moneyRange,
   outboundSegments,
   peerPriceComparison,
   relativeTime,
   routeLabel,
   scheduleTime,
   sortLabel,
-  stopCount,
   stops,
   timestampLabel
 } from "./format";
 import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./components/icons";
 import { FilterSheet } from "./components/FilterSheet";
 import { PriceChart, TrackedFlightCard } from "./components/TrackedFlight";
+import { TripPlanEditor } from "./components/TripPlanEditor";
 import { inPageLink } from "./navigation";
 import { isWatchSearching, shouldAutoSearchOnOpen } from "./trip-stage";
+import {
+  TRIP_TAB_LABELS,
+  defaultTripTab,
+  orderedTripTabs,
+  type TripTab
+} from "./trip-tabs";
 import { Home } from "./screens/Home";
 import { Profile } from "./screens/Profile";
 import { Feedback } from "./screens/Feedback";
 import { TripSettings } from "./screens/TripSettings";
 import { CanonicalFlightPage } from "./screens/CanonicalFlight";
-import { MultiCityTripOverview, TripLegResults } from "./screens/MultiCityTrip";
-
-type Tab = "flights" | "airlines" | "browse";
-const tabLabels: Record<Tab, string> = {
-  flights: "Top picks",
-  airlines: "Airlines",
-  browse: "All flights"
-};
+import {
+  MultiCityFlightsOverview,
+  MultiCityPlanOverview,
+  MultiCityWatchlist,
+  TripLegResults
+} from "./screens/MultiCityTrip";
 
 type Page = "home" | "trip" | "trip-leg" | "trip-settings" | "flight" | "profile" | "feedback";
 
@@ -147,12 +147,11 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<Tab>("flights");
+  const [tab, setTab] = useState<TripTab>("plan");
   const [browsePreferences, setBrowsePreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
   const [filterOpen, setFilterOpen] = useState(false);
   const [draftPreferences, setDraftPreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
   const [watchlistFocus, setWatchlistFocus] = useState<WatchlistFocus | null>(currentFocus);
-  const [dismissedItineraryKeys, setDismissedItineraryKeys] = useState<string[]>([]);
   const [watchedOfferCache, setWatchedOfferCache] = useState<Record<string, VerifiedOffer>>({});
   const [searchBusy, setSearchBusy] = useState(false);
   const [legSearchProgress, setLegSearchProgress] = useState<Record<string, LegSearchSnapshot>>({});
@@ -188,6 +187,7 @@ export function App() {
       ]);
       setProfile(nextProfile);
       setTripData(nextTrip);
+      setTab(defaultTripTab(nextTrip.trip));
       if (
         nextTrip.trip
         && window.location.pathname === "/trip"
@@ -231,19 +231,6 @@ export function App() {
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
   }, [tripData]);
-
-  // Simplified trips have no tracking settings. Old shared settings links land
-  // on the composed itinerary instead of exposing the legacy watch controls.
-  useEffect(() => {
-    const graphBacked = Boolean(
-      tripData?.trip
-      && (tripData.cities?.length ?? 0) >= 2
-      && (tripData.legs?.length ?? 0) >= 1
-    );
-    if (page !== "trip-settings" || !graphBacked || !tripData?.trip) return;
-    window.history.replaceState(null, "", tripHref(tripData.trip.id));
-    setPage("trip");
-  }, [page, tripData?.trip?.id, tripData?.cities?.length, tripData?.legs?.length]);
 
   /** Moves between screens without leaving the page. */
   function navigate(href: string) {
@@ -551,17 +538,17 @@ export function App() {
   const hasTripGraph = Boolean(
     trip && (tripData?.cities?.length ?? 0) >= 2 && (tripData?.legs?.length ?? 0) >= 1
   );
-  if (trip && hasTripGraph && (page === "trip" || page === "trip-leg")) {
-    const shared = {
-      trip,
-      cities: tripData?.cities ?? [],
-      legs: tripData?.legs ?? [],
-      latestSearches: tripData?.latestSearches ?? {},
-      searchProgress: legSearchProgress,
-      searchErrors: legSearchErrors,
-      onSearch: (leg: TripCityLeg) => { void searchTripLeg(leg); },
-      onNavigate: navigate
-    };
+  const multiCityShared = trip && hasTripGraph ? {
+    trip,
+    cities: tripData?.cities ?? [],
+    legs: tripData?.legs ?? [],
+    latestSearches: tripData?.latestSearches ?? {},
+    searchProgress: legSearchProgress,
+    searchErrors: legSearchErrors,
+    onSearch: (leg: TripCityLeg) => { void searchTripLeg(leg); },
+    onNavigate: navigate
+  } : null;
+  if (trip && multiCityShared && page === "trip-leg") {
     return (
       <main className="shell multi-city-shell">
         <header className="topbar">
@@ -575,15 +562,11 @@ export function App() {
             <span>Captain</span>
           </a>
         </header>
-        {page === "trip-leg" ? (
-          <TripLegResults
-            {...shared}
-            legId={currentLegId() ?? ""}
-            onSelect={(leg, flightKey) => { void chooseTripLegFlight(leg, flightKey); }}
-          />
-        ) : (
-          <MultiCityTripOverview {...shared} />
-        )}
+        <TripLegResults
+          {...multiCityShared}
+          legId={currentLegId() ?? ""}
+          onSelect={(leg, flightKey) => { void chooseTripLegFlight(leg, flightKey); }}
+        />
       </main>
     );
   }
@@ -630,7 +613,7 @@ export function App() {
   );
 
   return (
-    <main className="shell">
+    <main className={`shell${multiCityShared ? " multi-city-shell" : ""}`}>
       {!watchlistFocus && (
         <header className="topbar">
           <a
@@ -713,8 +696,7 @@ export function App() {
                     return next;
                   });
                 }
-                setDismissedItineraryKeys((current) => current.filter((key) => key !== itineraryKey));
-                setTab("flights");
+                setTab("watchlist");
               } else if (trip) {
                 setWatchedOfferCache((current) => {
                   const next = { ...current };
@@ -725,9 +707,7 @@ export function App() {
               }
             }}
             onRemoved={(itineraryKey) => {
-              setDismissedItineraryKeys((current) =>
-                current.includes(itineraryKey) ? current : [...current, itineraryKey]
-              );
+              void itineraryKey;
               closeFlight();
             }}
             onError={setError}
@@ -757,59 +737,37 @@ export function App() {
           )}
           {error && <div className="notice">{error}</div>}
 
-          {trackedHistory && (
-            <TrackedFlightCard
-              history={trackedHistory}
-              offer={
-                offers.find((item) => item.itineraryKey === trackedHistory.itineraryKey)
-                ?? watchedOfferCache[trackedHistory.itineraryKey]
-                ?? null
-              }
-              onOpen={() => {
-                const offer = offers.find((item) => item.itineraryKey === trackedHistory.itineraryKey)
-                  ?? watchedOfferCache[trackedHistory.itineraryKey];
-                if (offer) openFlight(offer);
-              }}
-            />
-          )}
-
           <nav className="tabs" aria-label="Trip results">
-            {(["flights", "airlines", "browse"] as Tab[]).map((item) => (
+            {orderedTripTabs(trip).map((item) => (
               <button
                 key={item}
                 className={tab === item ? "active" : ""}
                 onClick={() => setTab(item)}
               >
-                {tabLabels[item]}
-                {item === "browse" && offers.length > 0 ? <span>{offers.length}</span> : null}
+                {TRIP_TAB_LABELS[item]}
+                {item === "flights" && offers.length > 0 ? <span>{offers.length}</span> : null}
+                {item === "watchlist" && personSelectionKeys.length > 0
+                  ? <span>{personSelectionKeys.length}</span>
+                  : null}
               </button>
             ))}
           </nav>
 
           <section className="workspace">
-            {tab === "flights" && (
-              <FlightsTab
-                offers={offers}
-                watchedKey={trackedHistory?.itineraryKey ?? null}
-                profile={profile!}
-                dismissedItineraryKeys={dismissedItineraryKeys}
-                emptySearch={emptySearch}
-                onOpen={openFlight}
-              />
+            {tab === "plan" && (
+              <div className="plan-tab">
+                {multiCityShared ? (
+                  <MultiCityPlanOverview
+                    cities={multiCityShared.cities}
+                    legs={multiCityShared.legs}
+                  />
+                ) : null}
+                <TripPlanEditor trip={trip} onSaved={load} />
+              </div>
             )}
-            {tab === "airlines" && (
-              <AirlinesTab
-                offers={offers}
-                emptySearch={emptySearch}
-                onChoose={(airline) => {
-                  const next = { ...EMPTY_BROWSE_PREFERENCES, airlines: [airline] };
-                  setBrowsePreferences(next);
-                  setDraftPreferences(next);
-                  setTab("browse");
-                }}
-              />
-            )}
-            {tab === "browse" && (
+            {tab === "flights" && (multiCityShared ? (
+              <MultiCityFlightsOverview {...multiCityShared} />
+            ) : (
               <BrowseTab
                 offers={offers}
                 preferences={browsePreferences}
@@ -832,7 +790,19 @@ export function App() {
                 }}
                 onOpen={(offer) => openFlight(offer)}
               />
-            )}
+            ))}
+            {tab === "watchlist" && (multiCityShared ? (
+              <MultiCityWatchlist {...multiCityShared} />
+            ) : (
+              <WatchlistTab
+                offers={watchedOffers}
+                trackedHistory={trackedHistory}
+                liveOffers={offers}
+                watchedOfferCache={watchedOfferCache}
+                onOpen={openFlight}
+                onFindFlights={() => setTab("flights")}
+              />
+            ))}
           </section>
         </>
       )}
@@ -847,104 +817,6 @@ type EmptySearchProps = {
   busy: boolean;
   onSearch: () => void;
 };
-
-/**
- * Captain's picks. The flight being watched is not repeated here — it has the
- * card above the tabs, which says far more about it than a row could.
- */
-function FlightsTab({
-  offers,
-  watchedKey,
-  profile,
-  dismissedItineraryKeys,
-  emptySearch,
-  onOpen
-}: {
-  offers: VerifiedOffer[];
-  watchedKey: string | null;
-  profile: TravellerProfile;
-  dismissedItineraryKeys: string[];
-  emptySearch: EmptySearchProps;
-  onOpen: (offer: VerifiedOffer, mode?: RankingMode) => void;
-}) {
-  const dismissed = useMemo(() => new Set(dismissedItineraryKeys), [dismissedItineraryKeys]);
-  const recommendations = useMemo(() => ({
-    cheapest: rankOffers(offers, "cheapest", profile.preferredAirlineCodes)[0],
-    balanced: rankOffers(offers, "balanced", profile.preferredAirlineCodes)[0],
-    fastest: rankOffers(offers, "fastest", profile.preferredAirlineCodes)[0]
-  }), [offers, profile.preferredAirlineCodes]);
-  const modes = (["cheapest", "balanced", "fastest"] as RankingMode[])
-    .sort((left, right) => Number(right === profile.rankingMode) - Number(left === profile.rankingMode));
-  const suggested = modes
-    .map((mode) => {
-      const offer = recommendations[mode];
-      if (!offer || dismissed.has(offer.itineraryKey) || offer.itineraryKey === watchedKey) {
-        return null;
-      }
-      return { mode, offer };
-    })
-    .filter((item): item is { mode: RankingMode; offer: VerifiedOffer } => item !== null);
-  if (offers.length === 0) return <ResultsEmpty {...emptySearch} />;
-  if (suggested.length === 0) {
-    return (
-      <div className="results-empty compact">
-        <span>⌁</span>
-        <h2>Nothing to add</h2>
-        <p>
-          {watchedKey
-            ? "Captain has no pick better than the flight you're watching."
-            : "No standout options in the latest results. Try All flights."}
-        </p>
-      </div>
-    );
-  }
-  return (
-    <div className="recommendation-grid">
-      {suggested.map(({ mode, offer }) => (
-        <RecommendationCard
-          key={`${mode}-${offer.id}`}
-          offer={offer}
-          mode={mode}
-          selected={profile.rankingMode === mode}
-          onOpen={() => onOpen(offer, mode)}
-        />
-      ))}
-    </div>
-  );
-}
-
-function RecommendationCard({
-  offer,
-  mode,
-  selected,
-  onOpen
-}: {
-  offer: VerifiedOffer;
-  mode: RankingMode;
-  selected: boolean;
-  onOpen: () => void;
-}) {
-  const schedule = offerScheduleSpine(offer);
-  return (
-    <button
-      type="button"
-      className={`recommendation-card ${selected ? "selected" : ""}`}
-      onClick={onOpen}
-    >
-      <div className="card-top">
-        <span className="mode-label">{label(mode)}</span>
-        {selected && <span className="pill">Your preference</span>}
-      </div>
-      <strong className="price">{money(offer)}</strong>
-      <div className="metrics">
-        <span className="airline">{offer.primaryAirlineCode}{isMixed(offer) ? " · Mixed" : ""}</span>
-        <span>{duration(offer)}</span>
-        <span>{stops(offer)}</span>
-      </div>
-      {schedule ? <ScheduleSpine spine={schedule} /> : null}
-    </button>
-  );
-}
 
 function WatchlistDetail({
   offer,
@@ -1343,54 +1215,59 @@ function PeerPricePlot({
   );
 }
 
-function AirlinesTab({
+function WatchlistTab({
   offers,
-  emptySearch,
-  onChoose
+  trackedHistory,
+  liveOffers,
+  watchedOfferCache,
+  onOpen,
+  onFindFlights
 }: {
   offers: VerifiedOffer[];
-  emptySearch: EmptySearchProps;
-  onChoose: (airline: string) => void;
+  trackedHistory: TrackedPriceHistory | null;
+  liveOffers: VerifiedOffer[];
+  watchedOfferCache: Record<string, VerifiedOffer>;
+  onOpen: (offer: VerifiedOffer) => void;
+  onFindFlights: () => void;
 }) {
-  const groups = useMemo(() => airlineGroups(offers), [offers]);
-  if (groups.length === 0) return <ResultsEmpty {...emptySearch} />;
-  return (
-    <>
-      <div className="airline-grid">
-        {groups.map((group) => (
-          <button className="airline-card" key={group.airline} onClick={() => onChoose(group.airline)}>
-            <div className="airline-monogram">{group.airline.slice(0, 2)}</div>
-            <div className="airline-card-title">
-              <strong>{airlineName(group.airline, group.offers)}</strong>
-              {group.mixed && <span className="pill">Mixed</span>}
-            </div>
-            {group.mixed && (
-              <p className="carrier-list">
-                Carriers: {[...new Set(group.offers.flatMap((offer) => offer.participatingAirlineCodes))].join(", ")}
-              </p>
-            )}
-            <ul className="airline-stats">
-              <li>
-                <span>Price</span>
-                <strong>{moneyRange(group.cheapest.price, group.priceMax, group.cheapest.currency)}</strong>
-              </li>
-              <li>
-                <span>Duration</span>
-                <strong>{durationRange(group.durationMinSeconds, group.durationMaxSeconds)}</strong>
-              </li>
-              <li>
-                <span>Stops</span>
-                <strong>{group.stopMix}</strong>
-              </li>
-              <li>
-                <span>Flights</span>
-                <strong>{group.offers.length}</strong>
-              </li>
-            </ul>
-          </button>
-        ))}
+  const trackedOffer = trackedHistory
+    ? liveOffers.find((item) => item.itineraryKey === trackedHistory.itineraryKey)
+      ?? watchedOfferCache[trackedHistory.itineraryKey]
+      ?? null
+    : null;
+  const remaining = offers.filter((offer) => offer.itineraryKey !== trackedHistory?.itineraryKey);
+  if (!trackedHistory && remaining.length === 0) {
+    return (
+      <div className="results-empty compact">
+        <span>⌁</span>
+        <h2>No watched flights yet</h2>
+        <p>Open Flights and save the options you want to compare.</p>
+        <button type="button" onClick={onFindFlights}>Find flights</button>
       </div>
-    </>
+    );
+  }
+  return (
+    <div className="watchlist-tab">
+      {trackedHistory ? (
+        <TrackedFlightCard
+          history={trackedHistory}
+          offer={trackedOffer}
+          onOpen={() => { if (trackedOffer) onOpen(trackedOffer); }}
+        />
+      ) : null}
+      {remaining.length > 0 ? (
+        <div className="offer-list">
+          {remaining.map((offer) => (
+            <OfferRow
+              offer={offer}
+              watching
+              key={offer.id}
+              onOpen={() => onOpen(offer)}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1583,45 +1460,6 @@ function ResultsEmpty({ needsManualSearch, searching, completed, busy, onSearch 
       )}
     </div>
   );
-}
-
-function rankOffers(offers: VerifiedOffer[], mode: RankingMode, preferred: string[]): VerifiedOffer[] {
-  if (offers.length === 0) return [];
-  const minimumPrice = Math.min(...offers.map((offer) => offer.price));
-  const positiveDurations = offers.map(durationSeconds).filter((value) => value > 0);
-  const minimumDuration = positiveDurations.length ? Math.min(...positiveDurations) : 1;
-  const maximumStops = Math.max(1, ...offers.map(stopCount));
-  const score = (offer: VerifiedOffer) => {
-    if (mode === "cheapest") return offer.price;
-    if (mode === "fastest") return durationSeconds(offer);
-    const priceRegret = Math.min(1, Math.max(0, offer.price / Math.max(minimumPrice, 0.001) - 1));
-    const timeRegret = Math.min(1, Math.max(0, durationSeconds(offer) / minimumDuration - 1));
-    return Math.max(0, priceRegret * .5 + timeRegret * .35 + stopCount(offer) / maximumStops * .15
-      - (preferred.includes(offer.primaryAirlineCode) ? .05 : 0));
-  };
-  const preferredTie = (offer: VerifiedOffer) =>
-    preferred.includes(offer.primaryAirlineCode) ? 0 : 1;
-  return [...offers].sort((left, right) => {
-    if (mode === "cheapest") {
-      return left.price - right.price
-        || durationSeconds(left) - durationSeconds(right)
-        || stopCount(left) - stopCount(right)
-        || preferredTie(left) - preferredTie(right)
-        || left.itineraryKey.localeCompare(right.itineraryKey);
-    }
-    if (mode === "fastest") {
-      return durationSeconds(left) - durationSeconds(right)
-        || left.price - right.price
-        || stopCount(left) - stopCount(right)
-        || preferredTie(left) - preferredTie(right)
-        || left.itineraryKey.localeCompare(right.itineraryKey);
-    }
-    return score(left) - score(right)
-      || preferredTie(left) - preferredTie(right)
-      || left.price - right.price
-      || durationSeconds(left) - durationSeconds(right)
-      || left.itineraryKey.localeCompare(right.itineraryKey);
-  });
 }
 
 type ScheduleSpineData = {

@@ -1,19 +1,16 @@
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 
-import { ApiError, tripAction, updateTripBrief } from "../api";
+import { tripAction } from "../api";
 import type { TripPayload } from "../domain";
 import {
   activityLabel,
-  dateLabel,
   dateRangeLabel,
-  label,
   relativeTime,
   routeLabel,
   scheduleTime,
   timestampLabel
 } from "../format";
 import { stageLabel, tripStage, type TripStage } from "../trip-stage";
-import { AirlineSearchSelect } from "../components/AirlineSearchSelect";
 
 export function TripSettings({
   tripData,
@@ -61,8 +58,6 @@ export function TripSettings({
         onStopped={() => setStopped(true)}
         onError={onTripError}
       />
-      <BriefCard trip={trip} onSaved={onTripChanged} />
-
       <details className="settings-card settings-disclosure">
         <summary>
           <span><strong>Activity</strong></span>
@@ -208,214 +203,5 @@ function TripControls({
       </button>
       {stop}
     </div>
-  );
-}
-
-function BriefCard({
-  trip,
-  onSaved
-}: {
-  trip: NonNullable<TripPayload["trip"]>;
-  onSaved: () => Promise<void>;
-}) {
-  const [brief, setBrief] = useState(() => ({
-    ...trip.brief,
-    context: /^Prepared from confirmed Captain trip draft\b/iu.test(trip.brief.context)
-      ? ""
-      : trip.brief.context
-  }));
-  const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState("");
-
-  const airportCodes = (value: string) => [...new Set(
-    value.toUpperCase().match(/[A-Z]{3}/gu) ?? []
-  )].slice(0, 6);
-
-  async function save(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setSaved(false);
-    setError("");
-    try {
-      await updateTripBrief(trip.id, trip.version, brief);
-      setSaved(true);
-      await onSaved();
-    } catch (cause) {
-      setError(cause instanceof ApiError && cause.status === 409
-        ? "This trip changed elsewhere. Reload it from Telegram before editing."
-        : "Captain couldn’t update this trip. Check the fields and try again.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <details className="settings-card settings-disclosure">
-      <summary>
-        <span><strong>Trip brief</strong></span>
-        <em>{dateLabel(brief.departureWindow.start)}</em>
-      </summary>
-      <div className="settings-body">
-        <form onSubmit={(event) => void save(event)}>
-          {brief.tripType === "multi_city" ? (
-            <div className="read-only-field">
-              <span>Route</span>
-              <strong>{routeLabel(trip)}</strong>
-              <small>Change multi-city routes in Telegram.</small>
-            </div>
-          ) : (
-            <>
-              <div className="form-grid two">
-                <label>
-                  From
-                  <input
-                    value={brief.originAirports.join(", ")}
-                    onChange={(event) => setBrief({
-                      ...brief,
-                      originAirports: airportCodes(event.target.value)
-                    })}
-                  />
-                </label>
-                <label>
-                  To
-                  <input
-                    value={brief.destinationAirports.join(", ")}
-                    onChange={(event) => setBrief({
-                      ...brief,
-                      destinationAirports: airportCodes(event.target.value)
-                    })}
-                  />
-                </label>
-              </div>
-              <div className="form-grid two">
-                <label>
-                  Earliest departure
-                  <input
-                    type="date"
-                    value={brief.departureWindow.start}
-                    onChange={(event) => setBrief({
-                      ...brief,
-                      departureWindow: { ...brief.departureWindow, start: event.target.value }
-                    })}
-                  />
-                </label>
-                <label>
-                  Latest departure
-                  <input
-                    type="date"
-                    value={brief.departureWindow.end}
-                    onChange={(event) => setBrief({
-                      ...brief,
-                      departureWindow: { ...brief.departureWindow, end: event.target.value }
-                    })}
-                  />
-                </label>
-              </div>
-            </>
-          )}
-          {brief.tripType === "round_trip" && brief.stayNights && (
-            <div className="form-grid three">
-              {(["minimum", "preferred", "maximum"] as const).map((key) => (
-                <label key={key}>
-                  {label(key)} nights
-                  <input
-                    type="number"
-                    min={1}
-                    max={30}
-                    value={brief.stayNights![key]}
-                    onChange={(event) => setBrief({
-                      ...brief,
-                      stayNights: { ...brief.stayNights!, [key]: Number(event.target.value) }
-                    })}
-                  />
-                </label>
-              ))}
-            </div>
-          )}
-          <div className="form-grid two">
-            <label>
-              Cabin
-              <select
-                value={brief.cabin}
-                onChange={(event) => setBrief({ ...brief, cabin: event.target.value })}
-              >
-                <option value="economy">Economy</option>
-                <option value="premium_economy">Premium economy</option>
-                <option value="business">Business</option>
-                <option value="first">First</option>
-              </select>
-            </label>
-            <label>
-              Stops
-              <select
-                value={brief.maxStops}
-                onChange={(event) => setBrief({ ...brief, maxStops: Number(event.target.value) })}
-              >
-                <option value={0}>Direct only</option>
-                <option value={1}>Up to 1</option>
-                <option value={2}>Up to 2</option>
-              </select>
-            </label>
-          </div>
-          <div className="form-grid two">
-            <label>
-              Currency
-              <input
-                value={brief.currency}
-                maxLength={3}
-                pattern="[A-Za-z]{3}"
-                onChange={(event) => setBrief({
-                  ...brief,
-                  currency: event.target.value.toUpperCase()
-                })}
-              />
-            </label>
-            <label>
-              Maximum fare
-              <input
-                type="number"
-                min={1}
-                placeholder="None"
-                value={brief.maximumPrice ?? ""}
-                onChange={(event) => setBrief({
-                  ...brief,
-                  maximumPrice: event.target.value ? Number(event.target.value) : null
-                })}
-              />
-            </label>
-          </div>
-          <label>
-            Preferred airlines
-            <AirlineSearchSelect
-              values={brief.preferredAirlines}
-              placeholder="Search airlines"
-              onChange={(preferredAirlines) => setBrief({ ...brief, preferredAirlines })}
-            />
-          </label>
-          <label>
-            Avoid airlines
-            <AirlineSearchSelect
-              values={brief.excludedAirlines}
-              placeholder="Search airlines to avoid"
-              onChange={(excludedAirlines) => setBrief({ ...brief, excludedAirlines })}
-            />
-          </label>
-          <label>
-            Notes
-            <textarea
-              value={brief.context}
-              maxLength={1000}
-              placeholder="Timing or airport constraints"
-              onChange={(event) => setBrief({ ...brief, context: event.target.value })}
-            />
-          </label>
-          {error && <p className="form-error" role="alert">{error}</p>}
-          <button className="save-button" disabled={busy}>
-            {busy ? "Saving…" : saved ? "Updated" : "Update trip"}
-          </button>
-        </form>
-      </div>
-    </details>
   );
 }

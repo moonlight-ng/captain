@@ -22,7 +22,7 @@
   --duration-ui: 180ms;
   --duration-sheet: 240ms;
   --duration-sheet-exit: 160ms;
-  font-family: "Epilogue", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Inter", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: var(--type-body);
   font-weight: var(--weight-regular);
   color: #ffffff;
@@ -349,6 +349,70 @@ h2 { margin-bottom: 7px; font-size: var(--type-title); font-weight: var(--weight
   z-index: 1;
   padding: 5px 20px 44px;
 }
+.plan-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.workspace .plan-editor {
+  margin: 0;
+}
+.plan-itinerary { padding-bottom: 0; }
+.plan-leg-summary { min-height: 104px; }
+.plan-leg-summary .trip-leg-body { width: 100%; }
+.plan-leg-summary p {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: var(--type-caption);
+}
+.multi-city-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.multi-city-leg-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, .025);
+}
+.multi-city-leg-editor legend {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  padding: 0 1px 9px;
+  color: var(--ink);
+  font-weight: var(--weight-medium);
+}
+.multi-city-leg-editor legend button,
+.add-leg-button {
+  min-height: 34px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .04);
+  color: var(--muted);
+  font-size: var(--type-caption);
+}
+.multi-city-leg-editor label > small { margin-left: 4px; }
+.add-leg-button { align-self: flex-start; color: var(--ink); }
+.watchlist-tab,
+.multi-city-watchlist,
+.multi-city-flight-list {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.workspace .multi-city-tab-page { padding: 0; }
+.multi-city-tab-page .compact-heading { padding: 0 0 14px; }
+.multi-city-tab-page .compact-heading h2 { margin: 3px 0 5px; }
+.multi-city-tab-page .trip-leg-card { margin: 0; }
 
 .recommendation-grid, .airline-grid, .offer-list {
   display: flex;

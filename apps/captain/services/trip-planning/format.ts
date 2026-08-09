@@ -85,6 +85,7 @@ export type ActiveTripFormatInput = {
     originAirports: string[];
     destinationAirports: string[];
     departureDate: string;
+    departureWindow?: { start: string; end: string } | undefined;
   }> | undefined;
   departureDate: string;
   returnDate: string | null;
@@ -169,6 +170,7 @@ function formatTripSummaryLines(input: {
     originAirports: string[];
     destinationAirports: string[];
     departureDate: string;
+    departureWindow?: { start: string; end: string } | undefined;
   }> | undefined;
   departureDate: string;
   returnDate: string | null;
@@ -185,7 +187,11 @@ function formatTripSummaryLines(input: {
     `• ${isMultiCity ? formatLegRoute(legs) : `${input.originAirports.join("/")} → ${input.destinationAirports.join("/")}`}`,
     ...(isMultiCity
       ? legs.map((leg, index) =>
-          `• Leg ${index + 1}: ${formatCalendarDate(leg.departureDate)}`
+          `• Leg ${index + 1}: ${leg.originAirports.join("/")} → ${leg.destinationAirports.join("/")} · ${
+            leg.departureWindow
+              ? formatDateWindow(leg.departureWindow)
+              : formatCalendarDate(leg.departureDate)
+          }`
         )
       : [`• Depart: ${formatCalendarDate(input.departureDate)}`]),
     ...(!isMultiCity && input.returnDate

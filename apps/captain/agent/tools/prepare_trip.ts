@@ -6,10 +6,10 @@ import { requireCaptainUser } from "../lib/principal.js";
 
 export default defineTool({
   description: [
-    "Prepare or revise one durable trip draft from an itinerary with exact dates or accepted departure windows.",
-    "Ground the request in the traveller's words and the route and timing they accepted; never invent missing planning decisions.",
-    "Use this immediately when a straightforward request already contains usable dates; use itinerary planning first only when the traveller is unsure.",
-    "Return the service prompt or confirmation verbatim; do not recalculate dates or rewrite defaults."
+    "Prepare or revise one durable, GUI-editable trip draft from the traveller's itinerary.",
+    "Ask at most the service-provided two ambiguity questions; after that Captain uses safe best-fit date windows and saves the draft without starting fare tracking.",
+    "Use this immediately for both straightforward requests and uncertain itineraries; the traveller can directly adjust every route and timing detail on the Plan page.",
+    "Return the service prompt, summary, or creation receipt verbatim; do not add questions, recalculate dates, or rewrite defaults."
   ].join(" "),
   inputSchema: z.object({
     request: z.string().trim().min(1).max(2_000),

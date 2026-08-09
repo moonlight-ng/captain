@@ -97,6 +97,7 @@ describe("Trip planner v3 transcript", () => {
 describe("Trip planner v3 reducer invariants", () => {
   const populated: TripDraftState = {
     version: 3,
+    questionsAsked: 0,
     tripType: "round_trip",
     legs: [{
       originAirports: ["LOS"],
