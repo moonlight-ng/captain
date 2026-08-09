@@ -344,6 +344,29 @@ describe("flight worker orchestration", () => {
     );
   });
 
+  it("does not promise more multi-city results after every leg is ready", () => {
+    expect(notificationText({
+      id: "notification",
+      userId: "user",
+      tripId: "trip",
+      telegramChatId: 1,
+      kind: "initial_results",
+      attempts: 0,
+      telegramMessageId: null,
+      payload: {
+        tripTitle: "LOS to LON to EBB to LOS",
+        multiCityProgress: {
+          legRoute: "all 3 legs",
+          legsTotal: 3,
+          remainingLegs: 0
+        }
+      }
+    })).toBe(
+      "I found flights for all 3 legs.\n"
+      + "Open your trip to compare the best options for each leg."
+    );
+  });
+
   it("searches a 7 × 5 × 7 multi-city plan by leg and posts once when results begin", async () => {
     const now = new Date("2026-08-01T12:00:00Z");
     const store = new MemoryCaptainPlatformStore();

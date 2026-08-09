@@ -87,13 +87,51 @@ export function multiCityLegRevision(
     latestObservation(converted.offers) ?? now.toISOString(),
     trip.brief.preferredAirlines
   );
+  const retained = retainSnapshotResults(converted, analysis);
   return {
     status: "completed",
     analysis,
-    flights: converted.flights.slice(0, 120),
-    offers: converted.offers.slice(0, 240),
+    flights: retained.flights,
+    offers: retained.offers,
     completedAt: now.toISOString()
   };
+}
+
+function retainSnapshotResults(
+  converted: { flights: CanonicalFlight[]; offers: FlightOfferSnapshot[] },
+  analysis: LegSearchAnalysis
+): { flights: CanonicalFlight[]; offers: FlightOfferSnapshot[] } {
+  const flightByKey = new Map(converted.flights.map((flight) => [flight.key, flight]));
+  const priorityKeys = [
+    analysis.cheapest?.flightKey,
+    analysis.fastest?.flightKey,
+    analysis.balanced?.flightKey,
+    ...analysis.cheapestByDate.map((pick) => pick.flightKey)
+  ];
+  const flights: CanonicalFlight[] = [];
+  const retainedFlightKeys = new Set<string>();
+  for (const key of [...priorityKeys, ...converted.flights.map((flight) => flight.key)]) {
+    if (!key || retainedFlightKeys.has(key) || flights.length >= 120) continue;
+    const flight = flightByKey.get(key);
+    if (!flight) continue;
+    retainedFlightKeys.add(key);
+    flights.push(flight);
+  }
+
+  const eligibleOffers = converted.offers.filter((offer) =>
+    retainedFlightKeys.has(offer.flightKey)
+  );
+  const primaryOffers = new Map<string, FlightOfferSnapshot>();
+  for (const offer of eligibleOffers) {
+    if (!primaryOffers.has(offer.flightKey)) primaryOffers.set(offer.flightKey, offer);
+  }
+  const offers = [...primaryOffers.values()];
+  const included = new Set(offers);
+  for (const offer of eligibleOffers) {
+    if (included.has(offer) || offers.length >= 240) continue;
+    offers.push(offer);
+  }
+  return { flights, offers };
 }
 
 function convertOffers(

@@ -192,6 +192,7 @@ export class FlightWorker {
           search_spec_id: run.searchSpecId,
           provider: this.#provider.provider,
           error_code: error instanceof Error ? error.name : "UnknownError",
+          error_message: error instanceof Error ? error.message : "Unknown error",
           duration_ms: Date.now() - startedAt
         });
         return;
@@ -320,7 +321,9 @@ function notificationDraftText(notification: CaptainNotification): string {
         ? ` I’m still checking ${remaining} other ${remaining === 1 ? "leg" : "legs"}.`
         : "";
       return `I found flights for ${legRoute}.${checking}\n`
-        + "Open your trip to compare them as the remaining results arrive.";
+        + (remaining > 0
+          ? "Open your trip to compare them as the remaining results arrive."
+          : "Open your trip to compare the best options for each leg.");
     }
     return firstUpdateText(notification, route);
   }
