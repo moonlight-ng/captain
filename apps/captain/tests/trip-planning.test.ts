@@ -6,7 +6,8 @@ import {
   isCaptainGreeting,
   isDuplicateTripConfirmationReply,
   parseTripPlanCallback,
-  tripPlanConfirmationReplyMarkup
+  tripPlanConfirmationReplyMarkup,
+  tripPlanReviewReplyMarkup
 } from "../agent/channels/telegram.js";
 import { TripPlanningService } from "../services/trip-planning/service.js";
 import {
@@ -84,7 +85,7 @@ describe("Captain trip planning", () => {
     const saved = await planning.handleOpenDraftText(user.id, "The Sunday before", null);
     expect(saved?.status).toBe("started");
     if (!saved || saved.status !== "started") throw new Error("Expected a saved draft trip");
-    expect(saved.message).toContain("Your trip is saved");
+    expect(saved.message).toContain("Ok, here's what I have. Review or confirm to start exploring flights.");
     expect(saved.message).toContain("Leg 1: LOS → NBO · Sunday, 1 Nov 2026");
     expect(saved.message).toContain("Open trip: https://captain.example/t#test-");
     expect(saved.receipt.status).toBe("draft");
@@ -131,6 +132,29 @@ describe("Captain trip planning", () => {
       revision: 3
     });
     expect(parseTripPlanCallback(`captain-trip:start:${id}:0`)).toBeNull();
+  });
+
+  it("binds Review and Confirm to the saved trip version", () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    expect(tripPlanReviewReplyMarkup({
+      tripId: id,
+      version: 4,
+      status: "draft",
+      dashboardUrl: "https://captain.example/trip"
+    })).toEqual({
+      inline_keyboard: [[{
+        text: "Review",
+        url: "https://captain.example/trip"
+      }, {
+        text: "Confirm",
+        callback_data: `captain-trip:confirm:${id}:4`
+      }]]
+    });
+    expect(parseTripPlanCallback(`captain-trip:confirm:${id}:4`)).toEqual({
+      type: "confirm",
+      tripId: id,
+      version: 4
+    });
   });
 
   it("distinguishes a delivered confirmation from an older button message", () => {
@@ -257,30 +281,30 @@ describe("Captain trip planning", () => {
           originAirports: [],
           destinationAirports: ["NBO"],
           departure: null,
-          feasibleDepartureWindow: { start: "2026-08-08", end: "2026-11-03" },
-          proposedDeparture: { start: "2026-10-28", end: "2026-11-03" },
+          feasibleDepartureWindow: { start: "2026-08-08", end: "2026-11-04" },
+          proposedDeparture: { start: "2026-10-29", end: "2026-11-04" },
           arriveBy: "2026-11-04"
         },
         {
           originAirports: ["NBO"],
           destinationAirports: ["EBB"],
-          departure: { start: "2026-11-15", end: "2026-11-18" },
+          departure: { start: "2026-11-15", end: "2026-11-19" },
           arriveBy: "2026-11-19"
         },
         {
           originAirports: ["EBB"],
           destinationAirports: ["LON"],
           departure: null,
-          feasibleDepartureWindow: { start: "2026-11-23", end: "2026-12-09" },
-          proposedDeparture: { start: "2026-12-03", end: "2026-12-09" },
+          feasibleDepartureWindow: { start: "2026-11-23", end: "2026-12-10" },
+          proposedDeparture: { start: "2026-12-04", end: "2026-12-10" },
           arriveBy: "2026-12-10"
         },
         {
           originAirports: ["LON"],
           destinationAirports: ["LOS"],
           departure: null,
-          feasibleDepartureWindow: { start: "2026-12-11", end: "2026-12-24" },
-          proposedDeparture: { start: "2026-12-18", end: "2026-12-24" },
+          feasibleDepartureWindow: { start: "2026-12-11", end: "2026-12-25" },
+          proposedDeparture: { start: "2026-12-19", end: "2026-12-25" },
           arriveBy: "2026-12-25"
         }
       ]
@@ -364,8 +388,8 @@ describe("Captain trip planning", () => {
     }
     expect(declined.draft.state.questionsAsked).toBe(2);
     expect(declined.draft.state.legs[0]?.proposedDeparture).toMatchObject({
-      start: "2026-10-28",
-      end: "2026-11-03",
+      start: "2026-10-29",
+      end: "2026-11-04",
       source: "Captain’s best-fit draft window"
     });
     expect(declined.message).toContain("Open trip:");
@@ -436,10 +460,10 @@ describe("Captain trip planning", () => {
     // printed as internal planning language in the traveller-facing receipt.
     expect(started.receipt.goal)
       .toBe("Get you LOS → NYC and back on 17 Aug for the best balance of fare and "
-        + "journey time, using verified fares when you search.");
+        + "journey time, using verified fares as prices change.");
     expect(started.message).not.toContain("Goal:");
     expect(started.message).not.toContain(started.receipt.goal);
-    expect(started.message).toContain("ready to search each flight leg with live fares");
+    expect(started.message).toContain("Review or confirm to start exploring flights");
     expect(started.message).toContain(`Open trip: https://captain.example/t#test-${started.receipt.tripId}`);
     expect(started.message).not.toContain("Trip reference");
     const renderedReceipt = telegramDashboardMessage(started.message);
@@ -1188,8 +1212,8 @@ describe("Captain trip planning", () => {
     // The refused date is not stored: the leg keeps the window Captain chose.
     expect(answered.draft.state.legs[0]!.departure).toBeNull();
     expect(answered.draft.state.legs[0]!.proposedDeparture).toMatchObject({
-      start: "2026-10-28",
-      end: "2026-11-03"
+      start: "2026-10-29",
+      end: "2026-11-04"
     });
   });
 
@@ -1213,13 +1237,13 @@ describe("Captain trip planning", () => {
       throw new Error("Expected the itinerary to be saved");
     }
     expect(saved.message).toContain(
-      "Leg 1: LON → NBO · Wednesday, 28 Oct 2026 – Tuesday, 3 Nov 2026"
+      "Leg 1: LON → NBO · Thursday, 29 Oct 2026 – Wednesday, 4 Nov 2026"
     );
     expect(saved.message).toContain(
-      "Leg 2: NBO → EBB · Sunday, 15 Nov 2026 – Wednesday, 18 Nov 2026"
+      "Leg 2: NBO → EBB · Sunday, 15 Nov 2026 – Thursday, 19 Nov 2026"
     );
     expect(saved.message).toContain(
-      "Leg 4: LON → LOS · Friday, 18 Dec 2026 – Thursday, 24 Dec 2026"
+      "Leg 4: LON → LOS · Saturday, 19 Dec 2026 – Friday, 25 Dec 2026"
     );
     expect(saved.message).toContain("Open trip:");
   });

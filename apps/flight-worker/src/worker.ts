@@ -141,6 +141,7 @@ export class FlightWorker {
           observedAt: completedAt.toISOString(),
           snapshot: {
             route: metrics.route,
+            departureDates: offer.slices.map((slice) => slice.departureDate),
             airlineCodes: metrics.airlineCodes,
             flightNumbers: metrics.flightNumbers,
             stops: metrics.stops,
@@ -328,13 +329,60 @@ function firstUpdateText(
     return `I didn’t find any fares for ${trip} yet.\n`
       + "I’ll keep checking. Open the trip if you want to change the route or dates.";
   }
-  const finding = count === 1
-    ? `I found 1 fare for ${trip} at ${formatAmount(low, currency)}.`
-    : `I found ${count} fares for ${trip}, starting at ${formatAmount(low, currency)}.`;
+  const finding = comparativeDateFinding(notification.payload, route)
+    ?? (count === 1
+      ? `I found 1 fare for ${trip} at ${formatAmount(low, currency)}.`
+      : `I found ${count} fares for ${trip}, starting at ${formatAmount(low, currency)}.`);
   const followUp = trackingStartsAt
     ? `Daily price checks start ${formatDate(trackingStartsAt)}.`
     : "I’ll check prices daily and only message you when something changes.";
   return `${finding}\nOpen the trip to compare the best options and choose one to watch. ${followUp}`;
+}
+
+function comparativeDateFinding(
+  payload: Record<string, unknown>,
+  route: string
+): string | null {
+  const summary = recordField(payload, "dateSummary");
+  if (!summary) return null;
+  const combinations = arrayField(summary, "combinations")
+    .filter(recordValue);
+  const searchWindows = arrayField(summary, "searchWindows")
+    .filter(recordValue);
+  const cheapestDates = arrayField(summary, "cheapestDepartureDates")
+    .filter((value): value is string => typeof value === "string");
+  const currency = stringField(summary, "currency") || "USD";
+  const tripType = stringField(summary, "tripType");
+  const cheapest = numericField(summary, "cheapest");
+  const high = numericField(summary, "highestCombinationLow");
+  const searched = numericField(summary, "searchedCombinationCount");
+  if (combinations.length === 0 || cheapestDates.length === 0 || cheapest <= 0) return null;
+  if (tripType === "round_trip" && cheapestDates.length >= 2) {
+    return `${route} is about ${formatAmount(cheapest, currency)} round trip. `
+      + `Best dates: depart ${formatDate(cheapestDates[0]!)}, return ${formatDate(cheapestDates[1]!)}.`;
+  }
+  if (searchWindows.length === 1) {
+    const window = searchWindows[0]!;
+    const start = stringField(window, "start");
+    const end = stringField(window, "end");
+    const range = high > cheapest
+      ? `${formatAmount(cheapest, currency)}–${formatAmount(high, currency)}`
+      : `about ${formatAmount(cheapest, currency)}`;
+    const across = start && end && start !== end
+      ? ` across ${formatDateWindow(start, end)}`
+      : "";
+    if (!across) {
+      return `${route} is about ${formatAmount(cheapest, currency)} one-way for ${formatDate(cheapestDates[0]!)}.`;
+    }
+    return `${route} is ${range} one-way${across}. Cheapest is ${formatDate(cheapestDates[0]!)} at about ${formatAmount(cheapest, currency)}.`;
+  }
+  const itinerary = cheapestDates.map((date, index) =>
+    index === 0 ? `leave ${formatDate(date)}` : `then ${formatDate(date)}`
+  ).join(", ");
+  const checked = searched > 0
+    ? ` after checking ${searched} date combination${searched === 1 ? "" : "s"}`
+    : "";
+  return `Best fit for ${route}: ${itinerary}. Combined from ${formatAmount(cheapest, currency)}${checked}.`;
 }
 
 function duffelOfferId(url: string | undefined): string | null {
@@ -415,6 +463,13 @@ function formatDate(value: string): string {
     month: "short",
     timeZone: "UTC"
   }).format(parsed);
+}
+
+function formatDateWindow(start: string, end: string): string {
+  if (start.slice(0, 7) === end.slice(0, 7)) {
+    return `${Number(start.slice(8, 10))}–${formatDate(end)}`;
+  }
+  return `${formatDate(start)}–${formatDate(end)}`;
 }
 
 function recordValue(value: unknown): value is Record<string, unknown> {

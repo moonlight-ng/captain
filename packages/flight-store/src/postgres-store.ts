@@ -35,6 +35,7 @@ import {
   type TravellerProfile,
   type UpdateTravellerProfile,
   type UpdateTripBrief,
+  type UpdateTripTitle,
   type Watch
 } from "@agents/flight-domain";
 import postgres, { type Sql } from "postgres";
@@ -54,7 +55,7 @@ import type {
   TripRecommendation
 } from "./contracts.js";
 import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
-import { notificationGoalPayload, offerRangeSummary } from "./notification-payload.js";
+import { notificationGoalPayload, offerDateSummary, offerRangeSummary } from "./notification-payload.js";
 import {
   meetsAlertThreshold,
   rankOffers,
@@ -67,8 +68,10 @@ import {
   PRICE_HISTORY_RETENTION_MS,
   retainSearchOffers,
   TRACKING_SEARCH_SPEC_LIMIT,
+  trackingRunEndsAt,
   TRACKING_CHECK_INTERVAL_MS
 } from "./watch-policy.js";
+import { signalFlightWorker } from "./worker-wake.js";
 
 function truncateErrorDetail(detail: string | null | undefined): string | null {
   if (!detail) return null;
@@ -804,6 +807,81 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     });
   }
 
+  async startTripTracking(
+    userId: string,
+    tripId: string,
+    expectedVersion: number,
+    specs: SearchSpec[],
+    now: Date
+  ): Promise<{ trip: Trip; watch: Watch }> {
+    if (specs.length === 0) throw new Error("Tracking needs at least one flight search specification");
+    return this.#sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${userId}))`;
+      const trips = await tx<TripRow[]>`
+        select * from captain.trips
+        where id = ${tripId} and user_id = ${userId}
+        for update
+      `;
+      const current = trips[0];
+      if (!current) throw new TripNotFoundError();
+      const existingWatches = await tx<WatchRow[]>`
+        select * from captain.watches where trip_id = ${tripId} for update
+      `;
+      const existingWatch = existingWatches[0];
+      if (
+        ["tracking", "recommended"].includes(current.status)
+        && existingWatch
+        && ["active", "scheduled"].includes(existingWatch.status)
+      ) {
+        return { trip: toTrip(current), watch: toWatch(existingWatch) };
+      }
+      if (current.version !== expectedVersion) {
+        throw new TripVersionConflictError(current.version);
+      }
+      if (current.status !== "draft") throw new Error("Only a reviewed draft can start tracking");
+
+      const runEndsAt = trackingRunEndsAt(now, current.brief.departureWindow.start);
+      const watchId = existingWatch?.id ?? randomUUID();
+      const watchRows = existingWatch
+        ? await tx<WatchRow[]>`
+            update captain.watches set
+              status = 'active', run_started_at = ${now}, run_ends_at = ${runEndsAt},
+              completed_at = null, checks_completed = 0, next_check_at = ${now},
+              last_check_at = null, last_manual_refresh_at = null,
+              tracking_starts_at = null, baseline_completed_at = null,
+              activated_at = ${now}, last_user_activity_at = ${now},
+              price_rise_itinerary_key = null, price_rise_armed = true,
+              delayed_at = null, delay_reason = null, updated_at = ${now}
+            where id = ${watchId}
+            returning *
+          `
+        : await tx<WatchRow[]>`
+            insert into captain.watches (
+              id, trip_id, status, run_started_at, run_ends_at,
+              checks_completed, next_check_at, tracking_starts_at,
+              activated_at, last_user_activity_at, created_at, updated_at
+            ) values (
+              ${watchId}, ${tripId}, 'active', ${now}, ${runEndsAt},
+              0, ${now}, null, ${now}, ${now}, ${now}, ${now}
+            )
+            returning *
+          `;
+      await syncSpecs(tx, watchId, specs, now);
+      const updated = await tx<TripRow[]>`
+        update captain.trips set
+          status = 'tracking', version = version + 1, updated_at = ${now}
+        where id = ${tripId}
+        returning *
+      `;
+      await tx`
+        insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
+        values (${randomUUID()}, ${tripId}, ${userId}, 'trip_tracking_started', ${tx.json(json({}))}, ${now})
+      `;
+      await signalFlightWorker(tx);
+      return { trip: toTrip(updated[0]!), watch: toWatch(watchRows[0]!) };
+    });
+  }
+
   async updateTripBrief(
     userId: string,
     tripId: string,
@@ -852,6 +930,40 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         )
       `;
       void specs;
+      return toTrip(updated[0]!);
+    });
+  }
+
+  async updateTripTitle(
+    userId: string,
+    tripId: string,
+    input: UpdateTripTitle,
+    now: Date
+  ): Promise<Trip> {
+    return this.#sql.begin(async (tx) => {
+      const rows = await tx<TripRow[]>`
+        select * from captain.trips
+        where id = ${tripId} and user_id = ${userId}
+        for update
+      `;
+      const current = rows[0];
+      if (!current) throw new TripNotFoundError();
+      if (current.version !== input.expectedVersion) {
+        throw new TripVersionConflictError(current.version);
+      }
+      const updated = await tx<TripRow[]>`
+        update captain.trips set
+          title = ${input.title}, version = version + 1, updated_at = ${now}
+        where id = ${tripId}
+        returning *
+      `;
+      await tx`
+        insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
+        values (
+          ${randomUUID()}, ${tripId}, ${userId}, 'trip_title_updated',
+          ${tx.json(json({ title: input.title }))}, ${now}
+        )
+      `;
       return toTrip(updated[0]!);
     });
   }
@@ -1057,10 +1169,35 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       await tx<WatchRow[]>`
         select * from captain.watches where trip_id = ${tripId} for update
       `;
+      const watchStatus = status === "paused"
+        ? "paused"
+        : ["cancelled", "completed"].includes(status)
+          ? "completed"
+          : "active";
+      const departureStart = (current.brief as { departureWindow?: { start?: string } })
+        .departureWindow?.start ?? "";
       await tx`
-        update captain.watches set status = 'completed',
-          completed_at = coalesce(completed_at, ${now}),
-          next_check_at = null,
+        update captain.watches set status = ${watchStatus},
+          run_started_at = case when ${action.type} = 'track' then ${now} else run_started_at end,
+          run_ends_at = case
+            when ${action.type} = 'track' then ${trackingRunEndsAt(now, departureStart)}
+            else run_ends_at
+          end,
+          completed_at = case
+            when ${action.type} = 'track' then null
+            when ${action.type} in ('cancel', 'complete') then coalesce(completed_at, ${now})
+            else completed_at
+          end,
+          checks_completed = case when ${action.type} = 'track' then 0 else checks_completed end,
+          next_check_at = case
+            when ${action.type} in ('track', 'refresh', 'resume') then ${now}
+            when ${action.type} in ('cancel', 'complete') then null
+            else next_check_at
+          end,
+          activated_at = case when ${action.type} = 'track' then ${now} else activated_at end,
+          delayed_at = case when ${action.type} = 'track' then null else delayed_at end,
+          delay_reason = case when ${action.type} = 'track' then null else delay_reason end,
+          last_manual_refresh_at = case when ${action.type} = 'refresh' then ${now} else last_manual_refresh_at end,
           last_user_activity_at = ${now},
           updated_at = ${now}
         where trip_id = ${tripId}
@@ -1069,6 +1206,9 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
         values (${randomUUID()}, ${tripId}, ${userId}, ${`trip_${action.type}`}, ${tx.json(json(action))}, ${now})
       `;
+      if (["resume", "refresh", "track"].includes(action.type)) {
+        await signalFlightWorker(tx);
+      }
       return toTrip(updated[0]!);
     });
   }
@@ -1848,7 +1988,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
                     ...notificationGoalPayload(trip, profile),
                     ...recommendation,
                     ...(kind === "initial_results"
-                      ? { range: offerRangeSummary(offers) }
+                      ? { range: offerRangeSummary(offers), dateSummary: offerDateSummary(offers, trip) }
                       : {}),
                     ...(kind === "initial_results" && watch?.trackingStartsAt
                       ? { trackingStartsAt: watch.trackingStartsAt }
@@ -2386,10 +2526,29 @@ function localParts(now: Date, timezone: string): { date: string; hour: number }
 
 function actionStatus(action: TripAction["type"], current: TripStatus): TripStatus {
   if (action === "pause") return "paused";
-  if (["resume", "refresh", "track"].includes(action)) return "draft";
+  if (["resume", "refresh", "track"].includes(action)) {
+    return current === "draft" && action !== "track" ? "draft" : "tracking";
+  }
   if (action === "cancel") return "cancelled";
   if (action === "complete") return "completed";
   return current;
+}
+
+async function syncSpecs(sql: Sql, watchId: string, specs: SearchSpec[], now: Date): Promise<void> {
+  for (const spec of specs) {
+    await sql`
+      insert into captain.search_specs (id, spec_key, provider, request, created_at, updated_at)
+      values (${spec.id}, ${spec.key}, ${spec.request.provider}, ${sql.json(json(spec.request))}, ${now}, ${now})
+      on conflict (id) do update set request = excluded.request, updated_at = excluded.updated_at
+    `;
+  }
+  await sql`delete from captain.watch_search_specs where watch_id = ${watchId}`;
+  for (const spec of specs) {
+    await sql`
+      insert into captain.watch_search_specs (watch_id, search_spec_id, created_at)
+      values (${watchId}, ${spec.id}, ${now}) on conflict do nothing
+    `;
+  }
 }
 
 function daysUntilDeparture(departureStart: string, now: Date): number {

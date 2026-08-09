@@ -1,6 +1,6 @@
 import { profileHref, tripHref } from "../api";
 import type { Trip } from "../domain";
-import { dateRangeLabel, label, routeLabel } from "../format";
+import { dateRangeLabel, label } from "../format";
 import { inPageLink } from "../navigation";
 
 export function Home({
@@ -47,7 +47,7 @@ export function Home({
               onClick={inPageLink(tripHref(trip.id), onNavigate)}
             >
               <span>
-                <strong>{routeLabel(trip)}</strong>
+                <strong>{trip.title}</strong>
                 <small>
                   {dateRangeLabel(trip.brief.departureWindow.start, trip.brief.departureWindow.end)}
                 </small>

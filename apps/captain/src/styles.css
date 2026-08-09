@@ -124,6 +124,18 @@ a { color: inherit; }
   gap: 18px;
   padding: 19px 22px 23px;
 }
+.trip-title-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 9px;
+  color: inherit;
+  text-decoration: none;
+}
+.trip-title-link span {
+  color: var(--quiet);
+  font-size: 15px;
+  opacity: .75;
+}
 
 .eyebrow {
   margin: 0 0 9px;
@@ -352,19 +364,52 @@ h2 { margin-bottom: 7px; font-size: var(--type-title); font-weight: var(--weight
 .plan-tab {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 12px;
 }
 .workspace .plan-editor {
   margin: 0;
 }
 .plan-itinerary { padding-bottom: 0; }
-.plan-leg-summary { min-height: 104px; }
+.plan-itinerary .city-stop { padding-top: 0; padding-bottom: 2px; }
+.plan-itinerary .city-stop p { margin-top: 3px; line-height: 1.3; }
+.plan-itinerary .city-stop small { margin-top: 1px; }
+.plan-itinerary .trip-leg-rail span { padding: 1px 0; }
+.plan-leg-summary { min-height: 76px; }
 .plan-leg-summary .trip-leg-body { width: 100%; }
+.plan-leg-summary .trip-leg-body { margin: 4px 0 7px; padding: 10px 12px; border-radius: 13px; }
 .plan-leg-summary p {
-  margin: 9px 0 0;
+  margin: 5px 0 0;
   color: var(--muted);
   font-size: var(--type-caption);
 }
+.plan-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.plan-actions a,
+.plan-actions button {
+  min-height: 38px;
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255,255,255,.04);
+  color: rgba(255,255,255,.74);
+  font-size: var(--type-body);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+.plan-actions .primary { background: rgba(255,255,255,.11); color: var(--ink); }
+.simple-plan {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--panel);
+}
+.simple-plan span { color: var(--muted); }
 .multi-city-editor {
   display: flex;
   flex-direction: column;
@@ -1219,6 +1264,8 @@ textarea {
   line-height: 1.55;
 }
 .settings-card > p:not(.eyebrow) { color: var(--muted); font-size: var(--type-body); line-height: 1.55; }
+.trip-name-settings h2 { margin-bottom: 7px; font-size: 20px; }
+.trip-name-settings > p:last-of-type { margin-bottom: 0; }
 .settings-card form { display: flex; flex-direction: column; gap: 20px; margin-top: 20px; }
 .settings-card form label, .read-only-field {
   display: flex;

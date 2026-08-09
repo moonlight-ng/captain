@@ -23,6 +23,7 @@ import {
   type TravellerProfile,
   type UpdateTravellerProfile,
   type UpdateTripBrief,
+  type UpdateTripTitle,
   type SearchSpec,
   type Trip,
   type TripAction,
@@ -51,7 +52,9 @@ import type {
 import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
 import {
   notificationGoalPayload,
+  offerDateSummary,
   offerRangeSummary,
+  type OfferDateSummary,
   type OfferRangeSummary
 } from "./notification-payload.js";
 import {
@@ -65,7 +68,8 @@ import {
   DISCOVERY_SEARCH_SPEC_LIMIT,
   retainSearchOffers,
   TRACKING_SEARCH_SPEC_LIMIT,
-  TRACKING_CHECK_INTERVAL_MS
+  TRACKING_CHECK_INTERVAL_MS,
+  trackingRunEndsAt
 } from "./watch-policy.js";
 
 function truncateErrorDetail(detail: string | null | undefined): string | null {
@@ -697,6 +701,81 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     });
   }
 
+  async startTripTracking(
+    userId: string,
+    tripId: string,
+    expectedVersion: number,
+    specs: SearchSpec[],
+    now: Date
+  ): Promise<{ trip: Trip; watch: Watch }> {
+    const trip = this.#requiredTrip(userId, tripId);
+    const existingWatch = [...this.#watches.values()].find((watch) => watch.tripId === tripId);
+    if (
+      ["tracking", "recommended"].includes(trip.status)
+      && existingWatch
+      && ["active", "scheduled"].includes(existingWatch.status)
+    ) {
+      return clone({ trip, watch: existingWatch });
+    }
+    if (trip.version !== expectedVersion) throw new TripVersionConflictError(trip.version);
+    if (trip.status !== "draft") throw new Error("Only a reviewed draft can start tracking");
+    if (specs.length === 0) throw new Error("Tracking needs at least one flight search specification");
+
+    const timestamp = now.toISOString();
+    const updated: Trip = {
+      ...trip,
+      status: "tracking",
+      version: trip.version + 1,
+      updatedAt: timestamp
+    };
+    const watch: Watch = existingWatch
+      ? {
+          ...existingWatch,
+          status: "active",
+          runStartedAt: timestamp,
+          runEndsAt: trackingRunEndsAt(now, trip.brief.departureWindow.start).toISOString(),
+          completedAt: null,
+          checksCompleted: 0,
+          nextCheckAt: timestamp,
+          trackingStartsAt: null,
+          baselineCompletedAt: null,
+          activatedAt: timestamp,
+          lastUserActivityAt: timestamp,
+          priceRiseItineraryKey: null,
+          priceRiseArmed: true,
+          delayedAt: null,
+          delayReason: null,
+          updatedAt: timestamp
+        }
+      : {
+          id: randomUUID(),
+          tripId,
+          status: "active",
+          runStartedAt: timestamp,
+          runEndsAt: trackingRunEndsAt(now, trip.brief.departureWindow.start).toISOString(),
+          completedAt: null,
+          checksCompleted: 0,
+          nextCheckAt: timestamp,
+          lastCheckAt: null,
+          lastManualRefreshAt: null,
+          trackingStartsAt: null,
+          baselineCompletedAt: null,
+          activatedAt: timestamp,
+          lastUserActivityAt: timestamp,
+          priceRiseItineraryKey: null,
+          priceRiseArmed: true,
+          delayedAt: null,
+          delayReason: null,
+          createdAt: timestamp,
+          updatedAt: timestamp
+        };
+    this.#trips.set(tripId, updated);
+    this.#watches.set(watch.id, watch);
+    this.#setSpecs(watch.id, specs);
+    this.#recordTripActivity(tripId, "trip_tracking_started", {}, now);
+    return clone({ trip: updated, watch });
+  }
+
   async updateTripBrief(
     userId: string,
     tripId: string,
@@ -732,6 +811,25 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     }
     void specs;
     this.#recordTripActivity(tripId, "trip_brief_updated", clone(input.brief), now);
+    return clone(updated);
+  }
+
+  async updateTripTitle(
+    userId: string,
+    tripId: string,
+    input: UpdateTripTitle,
+    now: Date
+  ): Promise<Trip> {
+    const trip = this.#requiredTrip(userId, tripId);
+    if (trip.version !== input.expectedVersion) throw new TripVersionConflictError(trip.version);
+    const updated: Trip = {
+      ...trip,
+      title: input.title,
+      version: trip.version + 1,
+      updatedAt: now.toISOString()
+    };
+    this.#trips.set(tripId, updated);
+    this.#recordTripActivity(tripId, "trip_title_updated", { title: input.title }, now);
     return clone(updated);
   }
 
@@ -891,17 +989,39 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const watch = [...this.#watches.values()].find((item) => item.tripId === tripId);
     let status = trip.status;
     if (action.type === "pause") status = "paused";
-    if (["resume", "refresh", "track"].includes(action.type)) status = "draft";
+    if (["resume", "refresh", "track"].includes(action.type)) {
+      status = trip.status === "draft" && action.type !== "track" ? "draft" : "tracking";
+    }
     if (action.type === "cancel") status = "cancelled";
     if (action.type === "complete") status = "completed";
     const updated = { ...trip, status, version: trip.version + 1, updatedAt: now.toISOString() };
     this.#trips.set(tripId, updated);
     if (watch) {
+      const watchStatus = status === "paused"
+        ? "paused"
+        : ["cancelled", "completed"].includes(status)
+          ? "completed"
+          : "active";
       this.#watches.set(watch.id, {
         ...watch,
-        status: "completed",
-        completedAt: watch.completedAt ?? now.toISOString(),
-        nextCheckAt: null,
+        status: watchStatus,
+        ...(action.type === "track"
+          ? {
+              runStartedAt: now.toISOString(),
+              runEndsAt: trackingRunEndsAt(now, updated.brief.departureWindow.start).toISOString(),
+              completedAt: null,
+              checksCompleted: 0,
+              nextCheckAt: now.toISOString(),
+              activatedAt: now.toISOString(),
+              delayedAt: null,
+              delayReason: null
+            }
+          : action.type === "refresh" || action.type === "resume"
+            ? { nextCheckAt: now.toISOString() }
+            : ["cancel", "complete"].includes(action.type)
+              ? { completedAt: watch.completedAt ?? now.toISOString(), nextCheckAt: null }
+              : {}),
+        ...(action.type === "refresh" ? { lastManualRefreshAt: now.toISOString() } : {}),
         lastUserActivityAt: now.toISOString(),
         updatedAt: now.toISOString()
       });
@@ -1424,7 +1544,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       if (kind) {
         const context = {
           tripGoal: formatTripGoal({ brief: trip.brief, rankingMode: profile.rankingMode }),
-          range: offerRangeSummary(offers)
+          range: offerRangeSummary(offers),
+          dateSummary: offerDateSummary(offers, trip)
         };
         if (this.#enqueueNotification(trip, kind, recommendation, previous, context, now)) {
           changed += 1;
@@ -1558,6 +1679,15 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     return trip;
   }
 
+  #setSpecs(watchId: string, specs: SearchSpec[]): void {
+    const ids = new Set<string>();
+    for (const spec of specs) {
+      this.#specs.set(spec.id, clone(spec));
+      ids.add(spec.id);
+    }
+    this.#watchSpecs.set(watchId, ids);
+  }
+
   #recordTripActivity(
     tripId: string,
     eventType: string,
@@ -1592,7 +1722,11 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     recommendation: TripRecommendation,
     previous: TripRecommendation | undefined,
     /** What Captain is chasing, and the market it found. */
-    context: { tripGoal: string; range: OfferRangeSummary | null },
+    context: {
+      tripGoal: string;
+      range: OfferRangeSummary | null;
+      dateSummary: OfferDateSummary | null;
+    },
     now: Date
   ): boolean {
     const user = [...this.#usersByTelegram.values()].find((item) => item.id === trip.userId);
@@ -1617,7 +1751,9 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         tripTitle: trip.title,
         tripGoal: context.tripGoal,
         ...recommendation,
-        ...(kind === "initial_results" ? { range: context.range } : {}),
+        ...(kind === "initial_results"
+          ? { range: context.range, dateSummary: context.dateSummary }
+          : {}),
         ...(kind === "initial_results"
           && [...this.#watches.values()].find((watch) => watch.tripId === trip.id)?.trackingStartsAt
           ? {

@@ -31,6 +31,32 @@ describe("efficient watch policy", () => {
       .toBe(5);
   });
 
+  it("retains the cheapest offer for every searched date combination", () => {
+    const crowded = Array.from({ length: 80 }, (_, index) => ({
+      ...providerOffer(index),
+      snapshot: {
+        ...providerOffer(index).snapshot,
+        departureDates: ["2026-09-01"]
+      }
+    }));
+    const expensiveDay = {
+      ...providerOffer(100),
+      itineraryKey: "expensive-second-day",
+      price: 2_000,
+      snapshot: {
+        ...providerOffer(100).snapshot,
+        departureDates: ["2026-09-02"]
+      }
+    };
+
+    const retained = retainSearchOffers([...crowded, expensiveDay]);
+
+    expect(retained).toHaveLength(MAX_RETAINED_OFFERS_PER_SEARCH);
+    expect(retained.some((offer) => offer.itineraryKey === "expensive-second-day")).toBe(true);
+    expect(retained.find((offer) => offer.itineraryKey === "expensive-second-day")?.snapshot)
+      .toMatchObject({ departureDates: ["2026-09-02"] });
+  });
+
   it("checks once a day", () => {
     expect(TRACKING_CHECK_INTERVAL_MS).toBe(24 * 3_600_000);
   });

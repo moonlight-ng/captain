@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import {
+  airportCodeMatches,
   FlightSearchProviderError,
   MAX_MANUAL_SEARCH_DAYS,
   deriveOfferMetrics,
@@ -425,8 +426,8 @@ function canonicalizeOffers(
     if (
       !slice
       || slice.departureDate !== date
-      || !origin.airportCodes.includes(slice.origin)
-      || !destination.airportCodes.includes(slice.destination)
+      || !airportCodeMatches(origin.airportCodes, slice.origin)
+      || !airportCodeMatches(destination.airportCodes, slice.destination)
       || (arriveBy !== null && slice.segments.at(-1)!.arrival.slice(0, 10) > arriveBy)
       || candidate.currency !== trip.brief.currency
       || candidate.cabin !== trip.brief.cabin
@@ -507,8 +508,8 @@ function initialState(
     if (!previous.analysis.datesCompleted.includes(date)) continue;
     const dateFlights = previous.flights.filter((flight) =>
       flight.departureDate === date
-      && origin.airportCodes.includes(flight.origin)
-      && destination.airportCodes.includes(flight.destination)
+      && airportCodeMatches(origin.airportCodes, flight.origin)
+      && airportCodeMatches(destination.airportCodes, flight.destination)
     );
     const flightKeys = new Set(dateFlights.map((flight) => flight.key));
     const currentOffers = previous.offers.filter((offer) =>

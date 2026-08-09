@@ -10,6 +10,9 @@ describe("Captain public environment", () => {
     vi.stubEnv("DATABASE_URL", "postgresql://captain.invalid/db");
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "telegram-token");
     vi.stubEnv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "telegram-webhook-secret");
+    vi.stubEnv("SUPABASE_URL", "https://captain.supabase.co");
+    vi.stubEnv("SUPABASE_PUBLISHABLE_KEY", "sb_publishable_captain");
+    vi.stubEnv("CAPTAIN_ADMIN_EMAILS", "Admin@Example.com, ops@example.com");
     vi.stubEnv("CAPTAIN_BETA_USER_LIMIT", undefined);
     vi.stubEnv("CAPTAIN_PUBLIC_BETA_ENABLED", undefined);
     vi.stubEnv("CAPTAIN_SIMPLIFIED_MULTI_CITY_ENABLED", undefined);
@@ -17,8 +20,21 @@ describe("Captain public environment", () => {
       mode: "production",
       betaUserLimit: 25,
       publicBetaEnabled: false,
-      simplifiedMultiCityEnabled: false
+      simplifiedMultiCityEnabled: false,
+      adminEmails: ["admin@example.com", "ops@example.com"]
     });
+  });
+
+  it("requires the complete private-admin identity configuration in production", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("DATABASE_URL", "postgresql://captain.invalid/db");
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "telegram-token");
+    vi.stubEnv("TELEGRAM_WEBHOOK_SECRET_TOKEN", "telegram-webhook-secret");
+    vi.stubEnv("SUPABASE_URL", "https://captain.supabase.co");
+    vi.stubEnv("SUPABASE_PUBLISHABLE_KEY", "sb_publishable_captain");
+    vi.stubEnv("CAPTAIN_ADMIN_EMAILS", "");
+
+    expect(() => loadEnv()).toThrow("CAPTAIN_ADMIN_EMAILS");
   });
 
   it("uses the balanced GPT-5.6 tier by default while preserving an override", () => {

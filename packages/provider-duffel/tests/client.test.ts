@@ -29,6 +29,141 @@ describe("FX conversion", () => {
 });
 
 describe("DuffelFlightSearchProvider", () => {
+  it("searches every date in a one-way departure window", async () => {
+    const requestedDates: string[] = [];
+    const requestDates = new Map<string, string[]>();
+    let requestNumber = 0;
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/air/offer_requests")) {
+        const data = JSON.parse(String(init?.body)) as {
+          data: { slices: Array<{ departure_date: string }> };
+        };
+        const dates = data.data.slices.map((slice) => slice.departure_date);
+        requestedDates.push(...dates);
+        const id = `orq_window_${requestNumber++}`;
+        requestDates.set(id, dates);
+        return Response.json({ data: { id } });
+      }
+      const requestId = new URL(url).searchParams.get("offer_request_id")!;
+      const dates = requestDates.get(requestId)!;
+      return Response.json({
+        data: [testOffer(`off_${requestId}`, [{ origin: "SFO", destination: "JFK", date: dates[0]! }])],
+        meta: { after: null }
+      });
+    });
+    const provider = new DuffelFlightSearchProvider({ accessToken: "test", fetch });
+
+    const result = await provider.search(testRequest([{
+      originAirports: ["SFO"], destinationAirports: ["NYC"],
+      departureStart: "2026-09-01", departureEnd: "2026-09-07"
+    }]));
+
+    expect(requestedDates).toEqual([
+      "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04",
+      "2026-09-05", "2026-09-06", "2026-09-07"
+    ]);
+    expect(result.offers).toHaveLength(7);
+    expect(result.promptVersion).toBe("duffel-exhaustive-window-v3");
+  });
+
+  it("searches the Cartesian product of multi-city departure windows", async () => {
+    const requestedCombinations: string[][] = [];
+    const requestDates = new Map<string, string[]>();
+    let requestNumber = 0;
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/air/offer_requests")) {
+        const data = JSON.parse(String(init?.body)) as {
+          data: { slices: Array<{ departure_date: string }> };
+        };
+        const dates = data.data.slices.map((slice) => slice.departure_date);
+        requestedCombinations.push(dates);
+        const id = `orq_combo_${requestNumber++}`;
+        requestDates.set(id, dates);
+        return Response.json({ data: { id } });
+      }
+      const requestId = new URL(url).searchParams.get("offer_request_id")!;
+      const dates = requestDates.get(requestId)!;
+      return Response.json({
+        data: [testOffer(`off_${requestId}`, [
+          { origin: "ORD", destination: "LHR", date: dates[0]! },
+          { origin: "LHR", destination: "BCN", date: dates[1]! }
+        ])],
+        meta: { after: null }
+      });
+    });
+    const provider = new DuffelFlightSearchProvider({ accessToken: "test", fetch });
+
+    const result = await provider.search(testRequest([
+      { originAirports: ["ORD"], destinationAirports: ["LON"], departureStart: "2026-08-10", departureEnd: "2026-08-11" },
+      { originAirports: ["LON"], destinationAirports: ["BCN"], departureStart: "2026-08-13", departureEnd: "2026-08-15" }
+    ], "multi_city"));
+
+    expect(requestedCombinations).toEqual([
+      ["2026-08-10", "2026-08-13"], ["2026-08-10", "2026-08-14"],
+      ["2026-08-10", "2026-08-15"], ["2026-08-11", "2026-08-13"],
+      ["2026-08-11", "2026-08-14"], ["2026-08-11", "2026-08-15"]
+    ]);
+    expect(result.offers).toHaveLength(6);
+  });
+
+  it("adds the preferred return slice for round trips", async () => {
+    let submittedSlices: Array<{ origin: string; destination: string; departure_date: string }> = [];
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/air/offer_requests")) {
+        const body = JSON.parse(String(init?.body)) as { data: { slices: typeof submittedSlices } };
+        submittedSlices = body.data.slices;
+        return Response.json({ data: { id: "orq_round" } });
+      }
+      return Response.json({
+        data: [testOffer("off_round", [
+          { origin: "LOS", destination: "LHR", date: "2026-09-01" },
+          { origin: "LHR", destination: "LOS", date: "2026-09-08" }
+        ])],
+        meta: { after: null }
+      });
+    });
+    const provider = new DuffelFlightSearchProvider({ accessToken: "test", fetch });
+
+    const result = await provider.search({
+      ...testRequest([{
+        originAirports: ["LOS"], destinationAirports: ["LON"],
+        departureStart: "2026-09-01", departureEnd: "2026-09-01"
+      }]),
+      tripType: "round_trip",
+      stayNights: { minimum: 6, preferred: 7, maximum: 8 }
+    });
+
+    expect(submittedSlices).toEqual([
+      { origin: "LOS", destination: "LON", departure_date: "2026-09-01" },
+      { origin: "LON", destination: "LOS", departure_date: "2026-09-08" }
+    ]);
+    expect(result.offers[0]!.slices).toHaveLength(2);
+  });
+
+  it("rejects an itinerary that arrives after its city deadline", async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) =>
+      String(input).includes("/air/offer_requests")
+        ? Response.json({ data: { id: "orq_deadline" } })
+        : Response.json({
+            data: [testOffer("off_late", [{
+              origin: "JFK", destination: "BER", date: "2026-09-01", arrivalDate: "2026-09-02"
+            }])],
+            meta: { after: null }
+          })
+    );
+    const provider = new DuffelFlightSearchProvider({ accessToken: "test", fetch });
+
+    const result = await provider.search(testRequest([{
+      originAirports: ["NYC"], destinationAirports: ["BER"],
+      departureStart: "2026-09-01", departureEnd: "2026-09-01", arriveBy: "2026-09-01"
+    }]));
+
+    expect(result.offers).toEqual([]);
+  });
+
   it("maps Duffel offers and converts into the Trip currency", async () => {
     clearFxCache();
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -212,3 +347,52 @@ describe("DuffelFlightSearchProvider", () => {
     })).rejects.toBeInstanceOf(DuffelError);
   });
 });
+
+function testRequest(
+  slices: Array<{
+    originAirports: string[];
+    destinationAirports: string[];
+    departureStart: string;
+    departureEnd: string;
+    arriveBy?: string;
+  }>,
+  tripType: "one_way" | "multi_city" = "one_way"
+) {
+  return {
+    provider: "official_duffel" as const,
+    apiVersion: "v1" as const,
+    tripType,
+    slices,
+    stayNights: null,
+    passenger: { adults: 1 as const, childrenAges: [] as [], infants: 0 as const },
+    cabin: "economy" as const,
+    maxConnections: 1,
+    currency: "USD",
+    maximumPrice: null,
+    fareContext: "public_beta" as const
+  };
+}
+
+function testOffer(
+  id: string,
+  slices: Array<{ origin: string; destination: string; date: string; arrivalDate?: string }>
+) {
+  return {
+    id,
+    expires_at: "2026-09-30T12:30:00Z",
+    total_amount: "250.00",
+    total_currency: "USD",
+    owner: { name: "Test Air", iata_code: "TA" },
+    slices: slices.map((slice, index) => ({
+      segments: [{
+        origin: { iata_code: slice.origin },
+        destination: { iata_code: slice.destination },
+        departing_at: `${slice.date}T10:00:00Z`,
+        arriving_at: `${slice.arrivalDate ?? slice.date}T12:00:00Z`,
+        marketing_carrier: { name: "Test Air", iata_code: "TA" },
+        marketing_carrier_flight_number: String(100 + index),
+        passengers: [{ cabin_class: "economy" }]
+      }]
+    }))
+  };
+}

@@ -3,12 +3,15 @@ import { extname, resolve } from "node:path";
 
 import { DELETE, GET, PATCH, POST, defineChannel } from "eve/channels";
 import {
+  type AdminCostRange,
   TripLimitError,
   TripNotFoundError,
   TripVersionConflictError,
   formatTripGoal,
+  tripGoalState,
   tripActionSchema,
   updateTripBriefSchema,
+  updateTripTitleSchema,
   updateTravellerProfileSchema
 } from "@agents/flight-domain";
 import { ZodError, z } from "zod";
@@ -44,9 +47,19 @@ export default defineChannel({
     GET("/preferences", serveIndex),
     GET("/travellers", serveIndex),
     GET("/payment", serveIndex),
+    GET("/admin", serveIndex),
+    GET("/admin/conversations", serveIndex),
+    GET("/admin/conversations/:id", serveIndex),
+    GET("/admin/costs", serveIndex),
     GET("/auth/link", exchangeLoginLink),
     GET("/assets/:asset", serveAsset),
     GET("/api/auth/session", authenticated(sessionStatus)),
+    GET("/api/admin/config", adminConfig),
+    GET("/api/admin/session", adminAuthenticated(adminSession)),
+    GET("/api/admin/overview", adminAuthenticated(adminOverview)),
+    GET("/api/admin/conversations", adminAuthenticated(adminConversations)),
+    GET("/api/admin/conversations/:conversationId", adminAuthenticated(adminConversation)),
+    GET("/api/admin/costs", adminAuthenticated(adminCosts)),
     GET("/api/me/profile", authenticated(getProfile)),
     PATCH("/api/me/profile", authenticatedMutation(updateProfile)),
     POST("/api/me/feedback", authenticatedMutation(requireSession(submitFeedback))),
@@ -69,6 +82,11 @@ type UserHandler = (
   context: RouteContext,
   userId: string,
   auth: ResolvedAuth
+) => Promise<Response>;
+type AdminHandler = (
+  request: Request,
+  context: RouteContext,
+  identity: { id: string; email: string }
 ) => Promise<Response>;
 
 function safely(handler: Handler): Handler {
@@ -138,6 +156,106 @@ function authenticatedMutation(handler: UserHandler): Handler {
     }
     return handler(request, context, userId, auth);
   });
+}
+
+function adminAuthenticated(handler: AdminHandler): Handler {
+  return async (request, context) => {
+    try {
+      const services = await getCaptainServices();
+      const auth = await services.adminAuth.authenticate(request);
+      if (auth.status === "unconfigured") return adminError("admin_unconfigured", 503);
+      if (auth.status === "unauthorized") return adminError("unauthorized", 401);
+      if (auth.status === "forbidden") return adminError("forbidden", 403);
+      return withNoStore(await handler(request, context, auth.identity));
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "captain.admin_api_error",
+        error: error instanceof Error ? error.name : "UnknownError"
+      }));
+      return adminError("internal_error", 500);
+    }
+  };
+}
+
+async function adminConfig(): Promise<Response> {
+  try {
+    const services = await getCaptainServices();
+    const config = services.adminAuth.publicConfig();
+    return config ? adminJson(config) : adminError("admin_unconfigured", 503);
+  } catch {
+    return adminError("admin_unconfigured", 503);
+  }
+}
+
+async function adminSession(
+  _request: Request,
+  _context: RouteContext,
+  identity: { id: string; email: string }
+): Promise<Response> {
+  return adminJson({ authenticated: true, identity });
+}
+
+async function adminOverview(): Promise<Response> {
+  const services = await getCaptainServices();
+  const overview = await services.adminStore.getOverview(new Date());
+  return adminJson({
+    health: {
+      service: "available",
+      database: services.env.databaseUrl ? "available" : "memory"
+    },
+    agent: {
+      name: "Captain",
+      environment: "production",
+      status: "operational",
+      model: services.env.aiModel,
+      lastActivityAt: overview.lastActivityAt,
+      activeTurns: overview.activeTurns
+    },
+    metrics: overview.metrics,
+    trackingStartedAt: overview.trackingStartedAt,
+    recentConversations: overview.recentConversations
+  });
+}
+
+async function adminConversations(request: Request): Promise<Response> {
+  const services = await getCaptainServices();
+  const search = new URL(request.url).searchParams;
+  const limit = boundedInteger(search.get("limit"), 25, 1, 50);
+  const query = search.get("query")?.trim().slice(0, 120) || undefined;
+  const cursor = search.get("cursor")?.trim() || undefined;
+  return adminJson(await services.adminStore.listConversations({
+    limit,
+    ...(query ? { query } : {}),
+    ...(cursor ? { cursor } : {})
+  }));
+}
+
+async function adminConversation(
+  request: Request,
+  context: RouteContext
+): Promise<Response> {
+  const conversationId = context.params.conversationId;
+  if (!conversationId || !z.uuid().safeParse(conversationId).success) {
+    return adminError("not_found", 404);
+  }
+  const services = await getCaptainServices();
+  const search = new URL(request.url).searchParams;
+  const before = search.get("before")?.trim() || undefined;
+  const detail = await services.adminStore.getConversation({
+    conversationId,
+    limit: boundedInteger(search.get("limit"), 50, 1, 100),
+    ...(before ? { before } : {})
+  });
+  return detail ? adminJson(detail) : adminError("not_found", 404);
+}
+
+async function adminCosts(request: Request): Promise<Response> {
+  const range = new URL(request.url).searchParams.get("range") ?? "30d";
+  if (!(["7d", "30d", "all"] as string[]).includes(range)) {
+    return adminError("invalid_range", 400);
+  }
+  const services = await getCaptainServices();
+  return adminJson(await services.adminStore.getCosts(range as AdminCostRange, new Date()));
 }
 
 function requireSession(handler: UserHandler): UserHandler {
@@ -330,6 +448,7 @@ async function getTrip(
       activity,
       priceHistory,
       goal: formatTripGoal({ brief: trip.brief, rankingMode: profile.rankingMode }),
+      goalState: tripGoalState(trip.status),
       ...(services.env.simplifiedMultiCityEnabled
         ? { cities: graph.cities, legs: graph.legs, latestSearches }
         : {})
@@ -479,8 +598,10 @@ async function updateTrip(
   if (!trip || ["cancelled", "completed", "archived"].includes(trip.status)) {
     throw new TripNotFoundError();
   }
-  const update = updateTripBriefSchema.parse(await requestJson(request));
-  const updated = await services.trips.update(userId, trip.id, update);
+  const body = await requestJson(request);
+  const updated = body && typeof body === "object" && "title" in body
+    ? await services.trips.rename(userId, trip.id, updateTripTitleSchema.parse(body))
+    : await services.trips.update(userId, trip.id, updateTripBriefSchema.parse(body));
   return Response.json({ trip: updated }, { headers: noStore() });
 }
 
@@ -581,6 +702,32 @@ async function requestJson(request: Request): Promise<unknown> {
 
 function noStore(): HeadersInit {
   return { "cache-control": "no-store" };
+}
+
+function adminJson(body: unknown, status = 200): Response {
+  return Response.json(body, { status, headers: noStore() });
+}
+
+function adminError(error: string, status: number): Response {
+  return adminJson({ error }, status);
+}
+
+function withNoStore(response: Response): Response {
+  response.headers.set("cache-control", "no-store");
+  return response;
+}
+
+function boundedInteger(
+  value: string | null,
+  fallback: number,
+  minimum: number,
+  maximum: number
+): number {
+  if (!value) return fallback;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed)
+    ? Math.max(minimum, Math.min(maximum, parsed))
+    : fallback;
 }
 
 function validTimeZone(value: string): string {

@@ -57,7 +57,6 @@ import {
 import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./components/icons";
 import { FilterSheet } from "./components/FilterSheet";
 import { PriceChart, TrackedFlightCard } from "./components/TrackedFlight";
-import { TripPlanEditor } from "./components/TripPlanEditor";
 import { inPageLink } from "./navigation";
 import { isWatchSearching, shouldAutoSearchOnOpen } from "./trip-stage";
 import {
@@ -158,6 +157,7 @@ export function App() {
   const [legSearchErrors, setLegSearchErrors] = useState<Record<string, string>>({});
   /** Trips already checked on arrival, so a reload of state can't re-fire it. */
   const autoSearchedTripIds = useRef(new Set<string>());
+  const autoSearchedLegIds = useRef(new Set<string>());
 
   async function load() {
     setLoading(true);
@@ -251,6 +251,13 @@ export function App() {
   const trip = tripData?.trip ?? null;
   const watch = tripData?.watch ?? null;
   const searching = searchBusy || isWatchSearching(watch, trip);
+
+  useEffect(() => {
+    if (page !== "trip-leg" || trip?.status !== "draft") return;
+    window.history.replaceState(null, "", tripHref(trip.id));
+    setPage("trip");
+    setTab("plan");
+  }, [page, trip?.id, trip?.status]);
 
   async function searchTripLeg(leg: TripCityLeg) {
     if (!trip) return;
@@ -450,6 +457,7 @@ export function App() {
       await tripAction("track", trip.id, trip.version);
       const next = await getTrip(trip.id);
       setTripData(next);
+      setTab("flights");
     } catch {
       setError("That tracking run didn’t start. Try again.");
     } finally {
@@ -467,6 +475,16 @@ export function App() {
     autoSearchedTripIds.current.add(trip.id);
     void searchFlights({ background: offers.length > 0 });
   }, [page, trip?.id, trip?.status, watch?.status]);
+
+  useEffect(() => {
+    if (page !== "trip" || tab !== "flights" || !trip || trip.status === "draft") return;
+    for (const leg of tripData?.legs ?? []) {
+      if (tripData?.latestSearches?.[leg.id] || legSearchProgress[leg.id]) continue;
+      if (autoSearchedLegIds.current.has(leg.id)) continue;
+      autoSearchedLegIds.current.add(leg.id);
+      void searchTripLeg(leg);
+    }
+  }, [page, tab, trip?.id, trip?.status, tripData?.legs, tripData?.latestSearches, legSearchPollKey]);
 
   if (loading) return <CenteredState title="Opening Captain…" detail="Loading your trip." />;
   if (!authenticated) {
@@ -718,7 +736,17 @@ export function App() {
           <section className="trip-heading">
             <div>
               {trip.status === "paused" && <p className="eyebrow">Tracking paused</p>}
-              <h1>{routeLabel(trip)}</h1>
+              <h1>
+                <a
+                  className="trip-title-link"
+                  href={tripHref(trip.id, "settings")}
+                  onClick={inPageLink(tripHref(trip.id, "settings"), navigate)}
+                  aria-label={`Edit trip name: ${trip.title}`}
+                >
+                  {trip.title}
+                  <span aria-hidden="true">✎</span>
+                </a>
+              </h1>
               <p className="trip-meta">
                 {dateLabel(trip.brief.departureWindow.start)} · {label(trip.brief.cabin)} · {trip.brief.currency}
               </p>
@@ -742,7 +770,7 @@ export function App() {
               <button
                 key={item}
                 className={tab === item ? "active" : ""}
-                onClick={() => setTab(item)}
+                onClick={() => setTab(trip.status === "draft" && item !== "plan" ? "plan" : item)}
               >
                 {TRIP_TAB_LABELS[item]}
                 {item === "flights" && offers.length > 0 ? <span>{offers.length}</span> : null}
@@ -761,8 +789,25 @@ export function App() {
                     cities={multiCityShared.cities}
                     legs={multiCityShared.legs}
                   />
-                ) : null}
-                <TripPlanEditor trip={trip} onSaved={load} />
+                ) : (
+                  <section className="simple-plan" aria-label="Trip itinerary">
+                    <strong>{routeLabel(trip)}</strong>
+                    <span>{dateLabel(trip.brief.departureWindow.start)}</span>
+                  </section>
+                )}
+                <div className="plan-actions">
+                  <a
+                    href={tripHref(trip.id, "settings")}
+                    onClick={inPageLink(tripHref(trip.id, "settings"), navigate)}
+                  >
+                    Edit plan
+                  </a>
+                  {trip.status === "draft" ? (
+                    <button className="primary" disabled={searchBusy} onClick={() => void trackPrices()}>
+                      {searchBusy ? "Confirming…" : "Confirm plan"}
+                    </button>
+                  ) : null}
+                </div>
               </div>
             )}
             {tab === "flights" && (multiCityShared ? (

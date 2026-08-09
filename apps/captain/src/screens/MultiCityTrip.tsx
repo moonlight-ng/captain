@@ -115,11 +115,6 @@ export function MultiCityFlightsOverview(props: SharedTripProps) {
   const byId = new Map(cities.map((city) => [city.id, city]));
   return (
     <section className="multi-city-page multi-city-tab-page">
-      <header className="multi-city-heading compact-heading">
-        <p className="eyebrow">Flights</p>
-        <h2>Search each leg</h2>
-        <p>Open a leg to sort and filter its verified options.</p>
-      </header>
       <div className="multi-city-flight-list">
         {legs.map((leg) => {
           const origin = byId.get(leg.originCityId);
@@ -164,16 +159,11 @@ export function MultiCityWatchlist(props: SharedTripProps) {
   });
   return (
     <section className="multi-city-page multi-city-tab-page">
-      <header className="multi-city-heading compact-heading">
-        <p className="eyebrow">Watchlist</p>
-        <h2>Flights you picked</h2>
-        <p>Your saved choice for each leg stays here for comparison.</p>
-      </header>
       {selected.length === 0 ? (
         <div className="results-empty compact">
           <span>⌁</span>
           <h2>No watched flights yet</h2>
-          <p>Open Flights, search a leg, and select an option to keep it here.</p>
+          <p>Open Flights and select an option to keep it here.</p>
         </div>
       ) : (
         <div className="multi-city-watchlist">
@@ -290,7 +280,7 @@ function LegCard({
           </button>
         ) : (
           <p className="leg-empty-copy">
-            {active ? "Looking across your date range…" : "No flight search yet"}
+            {active ? "Looking across your date range…" : "Preparing flight options…"}
           </p>
         )}
 
@@ -304,11 +294,13 @@ function LegCard({
         {error ? <p className="leg-inline-error">{error}</p> : null}
 
         <div className="leg-actions">
-          <button type="button" disabled={active} onClick={onSearch}>
-            {active ? "Searching…" : result ? "Search again" : "Search flights"}
-          </button>
+          {result || error ? (
+            <button type="button" disabled={active} onClick={onSearch}>
+              {active ? "Refreshing…" : error ? "Try again" : "Refresh"}
+            </button>
+          ) : null}
           {result && result.flights.length > 0 ? (
-            <button type="button" className="primary" onClick={onOpen}>View results</button>
+            <button type="button" className="primary" onClick={onOpen}>View all options</button>
           ) : null}
         </div>
       </div>

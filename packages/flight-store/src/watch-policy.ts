@@ -22,6 +22,13 @@ export function retainSearchOffers(offers: CompletedProviderOffer[]): CompletedP
   }
 
   const ranked = [...bestByItinerary.values()].sort(compareOffers);
+  const cheapestByDates = new Map<string, CompletedProviderOffer>();
+  for (const offer of ranked) {
+    const key = departureDateKey(offer.snapshot);
+    if (!key) continue;
+    const current = cheapestByDates.get(key);
+    if (!current || offer.price < current.price) cheapestByDates.set(key, offer);
+  }
   const offersByAirline = new Map<string, CompletedProviderOffer[]>();
   for (const offer of ranked) {
     const airline = primaryAirline(offer.snapshot) || offer.primaryAirlineCode || "UNKNOWN";
@@ -40,12 +47,21 @@ export function retainSearchOffers(offers: CompletedProviderOffer[]): CompletedP
       if (offer) representative.push(offer);
     }
   }
-  return representative.slice(0, MAX_RETAINED_OFFERS_PER_SEARCH);
+  // A window comparison is only truthful when even an expensive day survives
+  // compaction. Reserve its cheapest offer first, then use the remaining slots
+  // for the normal airline-diverse ranking.
+  const dateCoverage = [...cheapestByDates.values()].sort(compareOffers);
+  const coveredIds = new Set(dateCoverage.map((offer) => offer.itineraryKey));
+  return [
+    ...dateCoverage,
+    ...representative.filter((offer) => !coveredIds.has(offer.itineraryKey))
+  ].slice(0, MAX_RETAINED_OFFERS_PER_SEARCH);
 }
 
 export function compactOfferSnapshot(snapshot: Record<string, unknown>): Record<string, unknown> {
   return {
     route: boundedString(snapshot.route, 300),
+    departureDates: stringArray(snapshot.departureDates, 6, 10),
     airlineCodes: stringArray(snapshot.airlineCodes, 8, 3),
     flightNumbers: stringArray(snapshot.flightNumbers, 12, 16),
     stops: boundedNumber(snapshot.stops, 0, 12),
@@ -53,6 +69,10 @@ export function compactOfferSnapshot(snapshot: Record<string, unknown>): Record<
     conditions: stringRecord(snapshot.conditions, 12, 200),
     segments: compactSegments(snapshot.segments)
   };
+}
+
+function departureDateKey(snapshot: Record<string, unknown>): string {
+  return stringArray(snapshot.departureDates, 6, 10).join("|");
 }
 
 /**

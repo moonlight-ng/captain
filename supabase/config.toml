@@ -1,0 +1,19 @@
+project_id = "captain"
+
+[auth]
+site_url = "https://dr-captain.fly.dev/admin"
+additional_redirect_urls = [
+  "https://dr-captain.fly.dev/admin",
+  "http://127.0.0.1:4178/admin",
+]
+enable_signup = false
+
+[auth.email]
+enable_signup = false
+enable_confirmations = true
+max_frequency = "1m"
+otp_length = 8
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true

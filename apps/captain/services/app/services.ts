@@ -1,11 +1,16 @@
 import {
+  MemoryCaptainAdminStore,
   MemoryCaptainPlatformStore,
+  PostgresCaptainAdminStore,
   PostgresCaptainPlatformStore,
+  type CaptainAdminStore,
   type CaptainPlatformStore
 } from "@agents/flight-store";
 import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
 
 import { CaptainWebAuth } from "../auth/web-session.js";
+import { CaptainAdminAuth } from "../admin/auth.js";
+import { CaptainUsageRecorder } from "../admin/usage.js";
 import { LegSearchService } from "../flights/leg-search.js";
 import { FlightLookupService } from "../flights/lookup.js";
 import {
@@ -21,6 +26,9 @@ import { assertCaptainDatabase } from "./project-guard.js";
 export type CaptainServices = {
   env: CaptainEnv;
   platformStore: CaptainPlatformStore;
+  adminStore: CaptainAdminStore;
+  adminAuth: CaptainAdminAuth;
+  usage: CaptainUsageRecorder;
   auth: CaptainWebAuth;
   trips: TripService;
   tripPlanning: TripPlanningService;
@@ -47,6 +55,18 @@ export async function createCaptainServices(): Promise<CaptainServices> {
   const platformStore: CaptainPlatformStore = env.databaseUrl
     ? PostgresCaptainPlatformStore.connect(env.databaseUrl, 4, 600)
     : new MemoryCaptainPlatformStore();
+  const adminStore: CaptainAdminStore = env.databaseUrl
+    ? PostgresCaptainAdminStore.connect(env.databaseUrl, 2)
+    : new MemoryCaptainAdminStore();
+  const adminAuth = new CaptainAdminAuth({
+    url: env.supabaseUrl,
+    publishableKey: env.supabasePublishableKey,
+    allowedEmails: env.adminEmails
+  });
+  const usage = new CaptainUsageRecorder({
+    store: adminStore,
+    apiKey: env.aiGatewayApiKey
+  });
   const auth = new CaptainWebAuth({
     publicUrl: env.publicUrl,
     secret: env.telegramBotToken ?? "captain-local-design-secret",
@@ -70,6 +90,9 @@ export async function createCaptainServices(): Promise<CaptainServices> {
   return {
     env,
     platformStore,
+    adminStore,
+    adminAuth,
+    usage,
     auth,
     trips,
     feedback,
@@ -87,6 +110,7 @@ export async function createCaptainServices(): Promise<CaptainServices> {
       trips,
       model: env.tripInterpreterModel,
       apiKey: env.aiGatewayApiKey,
+      recordUsage: (input) => usage.recordGatewayGeneration(input),
       dashboardUrlForTrip: (userId, tripId) => {
         const url = new URL(auth.createAccessLink(userId, "/trip"));
         url.pathname = `/trip/${encodeURIComponent(tripId)}`;

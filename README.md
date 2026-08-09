@@ -4,20 +4,18 @@ Captain is a private Moonlight repository for a Telegram-first multi-city trip
 planner and real-time flight search product.
 
 You describe the cities and timing constraints. Captain turns each adjacent
-city pair into a flight leg and, when asked, checks every date in a window of up
-to seven days against live inventory. Results are a point-in-time snapshot;
-Captain does not automatically recheck them.
+city pair into a flight leg and checks every date in its window against live
+inventory after the traveller confirms the plan. Captain then rechecks fares
+and reports a useful initial cost picture or a material change.
 
 - `apps/captain` owns onboarding, trip planning, authenticated APIs, and the
   traveller dashboard.
-- `apps/flight-worker` retains the read-only legacy tracking runtime. New trips
-  never create its watches or scheduled work.
+- `apps/flight-worker` runs initial and scheduled fare checks for confirmed plans.
 - `packages` contains the flight domain, persistence, provider adapters,
   observability, and Telegram helpers shared by those two deployments.
 
-Captain deploys as `dr-captain`. The retained worker is independently deployed
-and disabled for new trip work. Pilot is a separate private product and
-repository.
+Captain deploys as `dr-captain`; its worker is independently deployed as
+`dr-flight-worker`. Pilot is a separate private product and repository.
 
 Captain plans cities and searches flights. It does not book travel, take
 payments, or hold any traveller identity: there is no passenger record and no

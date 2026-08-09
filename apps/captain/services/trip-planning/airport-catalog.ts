@@ -76,11 +76,13 @@ const AIRPORTS: Readonly<Record<string, Omit<AirportMarket, "code">>> = {
   AMS: { label: "Amsterdam", country: "NL", currency: "EUR" },
   MAD: { label: "Madrid", country: "ES", currency: "EUR" },
   BCN: { label: "Barcelona", country: "ES", currency: "EUR" },
+  LIS: { label: "Lisbon", country: "PT", currency: "EUR" },
   FCO: { label: "Rome Fiumicino", country: "IT", currency: "EUR" },
   MXP: { label: "Milan Malpensa", country: "IT", currency: "EUR" },
   TYO: { label: "Tokyo", country: "JP", currency: "JPY" },
   HND: { label: "Tokyo Haneda", country: "JP", currency: "JPY" },
-  NRT: { label: "Tokyo Narita", country: "JP", currency: "JPY" }
+  NRT: { label: "Tokyo Narita", country: "JP", currency: "JPY" },
+  SIN: { label: "Singapore", country: "SG", currency: "SGD" }
 };
 
 const LOCATION_CODES: Readonly<Record<string, string>> = {
@@ -159,13 +161,15 @@ const LOCATION_CODES: Readonly<Record<string, string>> = {
   amsterdam: "AMS",
   madrid: "MAD",
   barcelona: "BCN",
+  lisbon: "LIS",
   rome: "FCO",
   fiumicino: "FCO",
   milan: "MXP",
   malpensa: "MXP",
   tokyo: "TYO",
   haneda: "HND",
-  narita: "NRT"
+  narita: "NRT",
+  singapore: "SIN"
 };
 
 const ORDERED_ALIASES = Object.keys(LOCATION_CODES)

@@ -11,6 +11,9 @@ describe("legacyBearerAllowed", () => {
     expect(legacyBearerAllowed("PATCH", "/api/me/trip")).toBe(true);
     expect(legacyBearerAllowed("POST", "/api/me/trip/actions")).toBe(true);
     expect(legacyBearerAllowed("POST", "/api/me/trip/selections")).toBe(true);
+    expect(legacyBearerAllowed("POST", "/api/me/trip/legs/leg_1/searches")).toBe(true);
+    expect(legacyBearerAllowed("GET", "/api/me/trip/legs/leg_1/searches/search_1")).toBe(true);
+    expect(legacyBearerAllowed("POST", "/api/me/trip/legs/leg_1/selection")).toBe(true);
   });
 
   it("denies passengers, payments, account, and trip travellers", () => {
@@ -21,5 +24,8 @@ describe("legacyBearerAllowed", () => {
     expect(legacyBearerAllowed("DELETE", "/api/me/account")).toBe(false);
     expect(legacyBearerAllowed("GET", "/api/me/trip/travellers")).toBe(false);
     expect(legacyBearerAllowed("PUT", "/api/me/trip/travellers")).toBe(false);
+    expect(legacyBearerAllowed("POST", "/api/me/trip/legs/leg_1/searches/search_1")).toBe(false);
+    expect(legacyBearerAllowed("GET", "/api/me/trip/legs/leg_1/selection")).toBe(false);
+    expect(legacyBearerAllowed("POST", "/api/me/trip/legs//searches")).toBe(false);
   });
 });

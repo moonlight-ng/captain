@@ -94,6 +94,40 @@ describe("Trip service", () => {
     );
   });
 
+  it("renames a draft without confirming it, then atomically starts tracking", async () => {
+    const now = new Date("2026-08-01T12:00:00Z");
+    const store = new MemoryCaptainPlatformStore();
+    const owner = await store.ensureTelegramUser({
+      telegramUserId: 1,
+      telegramChatId: 1,
+      username: null,
+      firstName: "Ada",
+      lastName: null
+    }, now);
+    const service = new TripService({ store, now: () => now });
+    const created = await service.create(owner.id, {
+      title: "LOS → NBO",
+      brief: defaultTestBrief({ destinationAirports: ["NBO"] })
+    });
+    const renamed = await service.rename(owner.id, created.trip.id, {
+      expectedVersion: created.trip.version,
+      title: "Nairobi wedding"
+    });
+    expect(renamed).toMatchObject({ title: "Nairobi wedding", status: "draft", version: 2 });
+    expect(await store.getWatch(owner.id, created.trip.id)).toBeNull();
+
+    const confirmed = await service.action(owner.id, created.trip.id, {
+      type: "track",
+      expectedVersion: renamed.version
+    });
+    expect(confirmed).toMatchObject({ status: "tracking", version: 3 });
+    expect(await store.getWatch(owner.id, created.trip.id)).toMatchObject({
+      status: "active",
+      checksCompleted: 0,
+      nextCheckAt: now.toISOString()
+    });
+  });
+
   it("saves one active Trip without replacement and rejects a second", async () => {
     const now = new Date("2026-08-01T12:00:00Z");
     const store = new MemoryCaptainPlatformStore();

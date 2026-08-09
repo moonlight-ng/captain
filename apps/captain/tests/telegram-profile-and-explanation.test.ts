@@ -7,7 +7,6 @@ import {
   acknowledgeVoiceClarification,
   CAPTAIN_CLEAR_COMMAND,
   CAPTAIN_CLEAR_CONFIRMATION,
-  CAPTAIN_DEFAULTS_INTRO,
   CAPTAIN_FEEDBACK_COMMAND,
   CAPTAIN_FEEDBACK_PROMPT,
   CAPTAIN_HOLDING_STATUS,
@@ -29,16 +28,15 @@ import {
 } from "../agent/channels/telegram.js";
 
 describe("Telegram profile onboarding", () => {
-  it("starts every new traveller with the fixed three-message introduction", () => {
+  it("starts every new traveller with the fixed two-message introduction", () => {
     expect(CAPTAIN_NEW_USER_GREETING).toBe(
       "Hi, I’m Captain. I plan multi-city trips and compare real-time flight options across your possible dates.\n\n"
-      + "I’m still in early testing, so I can only keep one trip at a time. I never book or pay for anything."
-    );
-    expect(CAPTAIN_DEFAULTS_INTRO).toBe(
-      "You’re set up for USD fares and a balance of price and travel time. You can change these anytime."
+      + "I’m still in early testing, so I can only keep one trip at a time. "
+      + "You’re set up for USD fares and a balance of price and travel time. You can change these anytime. "
+      + "Can't book or pay yet"
     );
     expect(CAPTAIN_READY_PROMPT).toBe(
-      "Send the cities and dates you’re considering by text or voice note. I’ll help turn them into flight legs and search the dates that work."
+      "Share your travel plans via text or voice note and I'll help you explore the options."
     );
   });
 
@@ -47,15 +45,16 @@ describe("Telegram profile onboarding", () => {
     // message has to carry the demo framing and the one-trip limit itself.
     expect(CAPTAIN_NEW_USER_GREETING).toContain("early testing");
     expect(CAPTAIN_NEW_USER_GREETING).toContain("one trip at a time");
-    expect(CAPTAIN_DEFAULTS_INTRO).not.toContain("alert");
+    expect(CAPTAIN_NEW_USER_GREETING).toContain("USD fares");
+    expect(CAPTAIN_NEW_USER_GREETING).toContain("balance of price and travel time");
+    expect(CAPTAIN_NEW_USER_GREETING).toMatch(/Can't book or pay yet$/u);
     expect(CAPTAIN_READY_PROMPT).toContain("voice note");
-    expect(CAPTAIN_READY_PROMPT).toContain("flight legs");
+    expect(CAPTAIN_READY_PROMPT).toContain("explore the options");
     expect(CAPTAIN_NEW_USER_GREETING).toContain("real-time flight options");
   });
 
   it("introduces Captain once and welcomes returning travellers differently", () => {
     expect(CAPTAIN_NEW_USER_GREETING).toMatch(/I['’]m Captain/u);
-    expect(CAPTAIN_DEFAULTS_INTRO).not.toMatch(/I['’]m Captain/u);
     expect(CAPTAIN_READY_PROMPT).not.toMatch(/I['’]m Captain/u);
     expect(CAPTAIN_RETURNING_TRAVELLER_WELCOME).not.toMatch(/I['’]m Captain/u);
     expect(CAPTAIN_RETURNING_TRAVELLER_WELCOME).toBe(

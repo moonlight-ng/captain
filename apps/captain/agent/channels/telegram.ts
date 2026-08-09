@@ -28,6 +28,8 @@ import {
   reviewCaptainMessage,
   TripLimitError,
   type OfferSnapshot,
+  type Trip,
+  type TripCreationReceipt,
   type TripPlanDraft,
   type TripPlanResult
 } from "@agents/flight-domain";
@@ -97,17 +99,17 @@ export const CAPTAIN_PLANNING_STATUS = [
 ] as const;
 const CAPTAIN_PLANNING_STAGE_MS = 3_000;
 const PROCESSING_FAILURE_TEXT = "That one didn’t go through on my end. Your trip is untouched — try me again.";
-// Onboarding is three messages and no questions. Everything the old interview
+// Onboarding is two messages and no questions. Everything the old interview
 // asked for is seeded by DEFAULT_PROFILE and editable on /profile, so a new
 // traveller learns what Captain is and can start planning without answering
 // anything first.
 export const CAPTAIN_NEW_USER_GREETING =
   "Hi, I’m Captain. I plan multi-city trips and compare real-time flight options across your possible dates.\n\n"
-  + "I’m still in early testing, so I can only keep one trip at a time. I never book or pay for anything.";
-export const CAPTAIN_DEFAULTS_INTRO =
-  "You’re set up for USD fares and a balance of price and travel time. You can change these anytime.";
+  + "I’m still in early testing, so I can only keep one trip at a time. "
+  + "You’re set up for USD fares and a balance of price and travel time. You can change these anytime. "
+  + "Can't book or pay yet";
 export const CAPTAIN_READY_PROMPT =
-  "Send the cities and dates you’re considering by text or voice note. I’ll help turn them into flight legs and search the dates that work.";
+  "Share your travel plans via text or voice note and I'll help you explore the options.";
 // Captain introduces itself once, at the welcome step. A traveller who has
 // already onboarded gets this instead.
 export const CAPTAIN_RETURNING_TRAVELLER_WELCOME =
@@ -176,7 +178,7 @@ export default telegramChannel({
     let voiceTranscript: string | null = null;
     if (!content && voice) {
       try {
-        content = await transcribeVoice(voice);
+        content = await transcribeVoice(voice, user.id);
         if (!content) throw new Error("No voice transcript was generated");
         voiceTranscript = content;
       } catch {
@@ -461,6 +463,25 @@ export default telegramChannel({
         await postTripPlanResult(ctx, user.id, result);
         return;
       }
+      if (action.type === "confirm") {
+        await ctx.telegram.answerCallbackQuery({
+          callbackQueryId: query.id,
+          text: "Starting flight analysis…"
+        });
+        const trip = await services.trips.get(user.id, action.tripId);
+        if (!trip) throw new Error("Trip not found");
+        await services.trips.action(user.id, action.tripId, {
+          type: "track",
+          // Review may have renamed or edited the draft. Confirm the latest
+          // reviewed version; the store still makes this transition atomic.
+          expectedVersion: trip.status === "draft" ? trip.version : action.version
+        });
+        await clearCallbackButtons(ctx, query);
+        const message = "Plan confirmed. I’m analysing flight patterns now. I’ll send an update when I have a useful sense of the cost.";
+        await services.platformStore.appendMessage(user.id, "assistant", message, new Date());
+        await ctx.telegram.post(message);
+        return;
+      }
       if (action.type === "edit") {
         await services.tripPlanning.reopen(user.id, action.draftId, action.revision);
         await ctx.telegram.answerCallbackQuery({
@@ -602,6 +623,7 @@ export default telegramChannel({
       await clearAgentProgress(ctx.session.id);
       const userId = authUserId(ctx.session.auth.current?.attributes.captain_user_id);
       let message = data.message;
+      let reviewTrip: Trip | null = null;
       if (userId) {
         const services = await getCaptainServices();
         const draft = await services.tripPlanning.findOpen(userId);
@@ -624,7 +646,30 @@ export default telegramChannel({
         }
         const grounded = await services.tripPlanning.groundAssistantMessage(userId, message);
         message = reviewCaptainMessage(grounded.message);
+        const activeTrip = await services.platformStore.getActiveTrip(userId);
+        if (
+          activeTrip?.status === "draft"
+          && message.includes("Review or confirm to start exploring flights")
+        ) {
+          reviewTrip = activeTrip;
+        }
         await services.platformStore.appendMessage(userId, "assistant", message, new Date());
+      }
+      if (reviewTrip) {
+        const rendered = telegramDashboardMessage(message);
+        const dashboardUrl = rendered.links[0]?.url;
+        if (dashboardUrl) {
+          await channel.telegram.post({
+            text: rendered.text,
+            reply_markup: tripPlanReviewReplyMarkup({
+              tripId: reviewTrip.id,
+              version: reviewTrip.version,
+              status: reviewTrip.status,
+              dashboardUrl
+            })
+          });
+          return;
+        }
       }
       await channel.telegram.post(message);
     },
@@ -647,16 +692,14 @@ async function postNewUserOnboarding(
     services.platformStore.appendMessage(userId, "assistant", text, new Date());
 
   // The caller already completed onboarding by claiming the welcome step, so
-  // these three messages are the whole of it.
-  await ctx.telegram.post(CAPTAIN_NEW_USER_GREETING);
-  await remember(CAPTAIN_NEW_USER_GREETING);
+  // these two messages are the whole of it.
   await postWithLink(
     ctx,
-    CAPTAIN_DEFAULTS_INTRO,
+    CAPTAIN_NEW_USER_GREETING,
     "Preferences",
     await services.auth.createLoginLink(userId, "/profile")
   );
-  await remember(CAPTAIN_DEFAULTS_INTRO);
+  await remember(CAPTAIN_NEW_USER_GREETING);
   await ctx.telegram.post(CAPTAIN_READY_PROMPT);
   await remember(CAPTAIN_READY_PROMPT);
 }
@@ -833,7 +876,10 @@ export function promoteVoiceTranscriptToTelegramTurn(
   Object.assign(message, { text: transcript });
 }
 
-async function transcribeVoice(input: { fileId: string; size?: number }): Promise<string> {
+async function transcribeVoice(
+  input: { fileId: string; size?: number },
+  userId: string
+): Promise<string> {
   if (input.size !== undefined && input.size > MAX_VOICE_BYTES) throw new Error("Voice note is too large");
   const file = await getTelegramFile({ credentials, fileId: input.fileId });
   const response = await downloadTelegramFile({ credentials, filePath: file.filePath });
@@ -841,8 +887,9 @@ async function transcribeVoice(input: { fileId: string; size?: number }): Promis
   const audio = new Uint8Array(await response.arrayBuffer());
   if (audio.byteLength === 0 || audio.byteLength > MAX_VOICE_BYTES) throw new Error("Voice note has an invalid size");
   try {
-    return (await transcribe({
-      model: process.env.TRANSCRIPTION_MODEL?.trim() || "openai/gpt-4o-mini-transcribe",
+    const model = process.env.TRANSCRIPTION_MODEL?.trim() || "openai/gpt-4o-mini-transcribe";
+    const result = await transcribe({
+      model,
       audio,
       providerOptions: {
         gateway: {
@@ -853,7 +900,15 @@ async function transcribeVoice(input: { fileId: string; size?: number }): Promis
           ]
         }
       }
-    })).text.trim();
+    });
+    const services = await getCaptainServices();
+    await services.usage.recordGatewayGeneration({
+      userId,
+      operation: "voice_transcription",
+      model,
+      providerMetadata: result.providerMetadata
+    });
+    return result.text.trim();
   } catch (error) {
     if (NoTranscriptGeneratedError.isInstance(error)) return "";
     throw error;
@@ -890,13 +945,24 @@ async function postTripPlanResult(
   }
   parts = parts.map(reviewCaptainMessage);
   if (result.status === "awaiting_confirmation") {
-    await postTripConfirmationOnce(ctx.telegram, userId, result.draft, parts[0]!);
+    const saved = await services.tripPlanning.confirm(
+      userId,
+      result.draft.id,
+      result.draft.revision
+    );
+    await postTripPlanResult(ctx, userId, saved, options);
     return;
   }
   for (const part of parts) {
     await services.platformStore.appendMessage(userId, "assistant", part, new Date());
     if (result.status === "started") {
-      await postTelegramDashboardMessage(ctx, part);
+      const rendered = telegramDashboardMessage(part);
+      await ctx.telegram.post({
+        text: rendered.text,
+        reply_markup: result.receipt.status === "draft"
+          ? tripPlanReviewReplyMarkup(result.receipt)
+          : { inline_keyboard: rendered.links.map((link) => [{ text: link.text, url: link.url }]) }
+      });
       continue;
     }
     await ctx.telegram.post(part);
@@ -916,12 +982,14 @@ async function recoverUndeliveredTripConfirmation(
   const services = await getCaptainServices();
   const draft = await services.tripPlanning.findOpen(userId);
   if (draft?.status !== "awaiting_confirmation") return;
-  await postTripConfirmationOnce(
-    telegram,
-    userId,
-    draft,
-    formatTripPlanConfirmation(draft)
-  );
+  const saved = await services.tripPlanning.confirm(userId, draft.id, draft.revision);
+  if (saved.status !== "started") return;
+  const rendered = telegramDashboardMessage(saved.message);
+  await telegram.post({
+    text: rendered.text,
+    reply_markup: tripPlanReviewReplyMarkup(saved.receipt)
+  });
+  await services.platformStore.appendMessage(userId, "assistant", saved.message, new Date());
 }
 
 async function postTripConfirmationOnce(
@@ -957,6 +1025,20 @@ export function tripPlanConfirmationReplyMarkup(
     }, {
       text: "Cancel",
       callback_data: `captain-trip:cancel:${draft.id}:${draft.revision}`
+    }]]
+  };
+}
+
+export function tripPlanReviewReplyMarkup(
+  receipt: Pick<TripCreationReceipt, "tripId" | "dashboardUrl" | "status" | "version">
+) {
+  return {
+    inline_keyboard: [[{
+      text: "Review",
+      url: receipt.dashboardUrl
+    }, {
+      text: "Confirm",
+      callback_data: `captain-trip:confirm:${receipt.tripId}:${receipt.version}`
     }]]
   };
 }
@@ -1120,7 +1202,18 @@ export function parseTripPlanCallback(data: string | undefined): {
   type: "start" | "edit" | "cancel";
   draftId: string;
   revision: number;
+} | {
+  type: "confirm";
+  tripId: string;
+  version: number;
 } | null {
+  const confirm = /^captain-trip:confirm:([0-9a-f-]{36}):(\d+)$/u.exec(data ?? "");
+  if (confirm) {
+    const version = Number(confirm[2]);
+    return Number.isSafeInteger(version) && version > 0
+      ? { type: "confirm", tripId: confirm[1]!, version }
+      : null;
+  }
   const match = /^captain-trip:(start|edit|cancel):([0-9a-f-]{36}):(\d+)$/u.exec(data ?? "");
   if (!match) return null;
   const revision = Number(match[3]);

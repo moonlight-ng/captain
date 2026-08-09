@@ -32,6 +32,7 @@
     "@agents/provider-duffel": "workspace:*",
     "@agents/telegram-core": "workspace:*",
     "@duffel/components": "^3.17.0",
+    "@supabase/supabase-js": "2.112.2",
     "@workflow/world-postgres": "5.0.0-beta.24",
     "ai": "7.0.4",
     "eve": "0.23.0",

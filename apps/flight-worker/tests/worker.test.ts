@@ -191,6 +191,64 @@ describe("flight worker orchestration", () => {
     );
   });
 
+  it("reports the cheapest day and the daily-low range for a searched window", () => {
+    expect(notificationText({
+      id: "window", userId: "user", tripId: "trip", telegramChatId: 1,
+      kind: "initial_results", attempts: 0, telegramMessageId: null,
+      payload: {
+        tripTitle: "San Francisco to New York",
+        range: { count: 21, low: 198, high: 900, currency: "USD" },
+        dateSummary: {
+          currency: "USD",
+          combinations: [
+            { departureDates: ["2027-05-01"], low: 265, count: 3 },
+            { departureDates: ["2027-05-02"], low: 240, count: 3 },
+            { departureDates: ["2027-05-03"], low: 198, count: 3 }
+          ],
+          searchWindows: [{ start: "2027-05-01", end: "2027-05-07" }],
+          searchedCombinationCount: 7,
+          cheapestDepartureDates: ["2027-05-03"],
+          cheapest: 198,
+          highestCombinationLow: 265
+        }
+      }
+    })).toBe(
+      "San Francisco → New York is $198.00–$265.00 one-way across 1–7 May. "
+      + "Cheapest is 3 May at about $198.00.\n"
+      + "Open the trip to compare the best options and choose one to watch. "
+      + "I’ll check prices daily and only message you when something changes."
+    );
+  });
+
+  it("reports the cheapest multi-city date combination", () => {
+    expect(notificationText({
+      id: "multi", userId: "user", tripId: "trip", telegramChatId: 1,
+      kind: "initial_results", attempts: 0, telegramMessageId: null,
+      payload: {
+        tripTitle: "Chicago to London to Barcelona",
+        range: { count: 18, low: 901.41, high: 3_000, currency: "USD" },
+        dateSummary: {
+          currency: "USD",
+          combinations: [
+            { departureDates: ["2026-08-10", "2026-08-13"], low: 901.41, count: 3 },
+            { departureDates: ["2026-08-11", "2026-08-14"], low: 980, count: 3 }
+          ],
+          searchWindows: [
+            { start: "2026-08-10", end: "2026-08-12" },
+            { start: "2026-08-13", end: "2026-08-14" }
+          ],
+          searchedCombinationCount: 6,
+          cheapestDepartureDates: ["2026-08-10", "2026-08-13"],
+          cheapest: 901.41,
+          highestCombinationLow: 980
+        }
+      }
+    })).toContain(
+      "Best fit for Chicago → London → Barcelona: leave 10 Aug, then 13 Aug. "
+      + "Combined from $901.41 after checking 6 date combinations."
+    );
+  });
+
   it("says when tracking starts for a departure Captain is not yet watching daily", () => {
     expect(notificationText({
       id: "first",

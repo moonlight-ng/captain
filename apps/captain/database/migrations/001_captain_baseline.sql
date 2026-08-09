@@ -388,6 +388,7 @@ as $$
 begin
   new.snapshot = jsonb_strip_nulls(jsonb_build_object(
     'route', left(coalesce(new.snapshot ->> 'route', ''), 300),
+    'departureDates', coalesce(new.snapshot -> 'departureDates', '[]'::jsonb),
     'airlineCodes', coalesce(new.snapshot -> 'airlineCodes', '[]'::jsonb),
     'flightNumbers', coalesce(new.snapshot -> 'flightNumbers', '[]'::jsonb),
     'stops', coalesce(new.snapshot -> 'stops', '0'::jsonb),

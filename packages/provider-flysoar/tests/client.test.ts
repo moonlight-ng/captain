@@ -115,6 +115,54 @@ describe("Flysoar MCP flight provider", () => {
     });
   });
 
+  it("searches every exact date when it receives a fallback window", async () => {
+    const dates: string[] = [];
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        params: { arguments: { date: string } };
+      };
+      const date = body.params.arguments.date;
+      dates.push(date);
+      return Response.json({
+        jsonrpc: "2.0",
+        id: date,
+        result: {
+          structuredContent: {
+            ...SOAR_PAYLOAD,
+            offers: [{
+              ...SOAR_PAYLOAD.offers[0],
+              id: `off_${date}`,
+              slices: [{
+                ...SOAR_PAYLOAD.offers[0]!.slices[0],
+                departure: `${date}T19:30:00`,
+                arrival: `${date}T22:20:00`,
+                segments: [{
+                  ...SOAR_PAYLOAD.offers[0]!.slices[0]!.segments[0],
+                  departure: `${date}T19:30:00`,
+                  arrival: `${date}T22:20:00`
+                }]
+              }]
+            }]
+          },
+          content: []
+        }
+      }, { headers: { "x-request-id": `soar-${date}` } });
+    });
+    const provider = new FlysoarMcpFlightSearchProvider({ fetch });
+
+    const result = await provider.search({
+      ...REQUEST,
+      slices: [{
+        ...REQUEST.slices[0]!,
+        departureEnd: "2026-08-22"
+      }]
+    });
+
+    expect(dates).toEqual(["2026-08-20", "2026-08-21", "2026-08-22"]);
+    expect(result.offers.map((offer) => offer.slices[0]!.departureDate)).toEqual(dates);
+    expect(result.promptVersion).toBe("soar-search-flights-exhaustive-window-v2");
+  });
+
   it("accepts text MCP content and reports rate limits", async () => {
     const provider = new FlysoarMcpFlightSearchProvider({
       fetch: vi.fn(async () => Response.json({
