@@ -97,17 +97,17 @@ export const CAPTAIN_PLANNING_STATUS = [
 ] as const;
 const CAPTAIN_PLANNING_STAGE_MS = 3_000;
 const PROCESSING_FAILURE_TEXT = "That one didn’t go through on my end. Your trip is untouched — try me again.";
-// Onboarding is three messages and no questions. Everything the old interview
+// Onboarding is two messages and no questions. Everything the old interview
 // asked for is seeded by DEFAULT_PROFILE and editable on /profile, so a new
 // traveller learns what Captain is and can start planning without answering
 // anything first.
 export const CAPTAIN_NEW_USER_GREETING =
   "Hi, I’m Captain. I plan multi-city trips and compare real-time flight options across your possible dates.\n\n"
-  + "I’m still in early testing, so I can only keep one trip at a time. I never book or pay for anything.";
-export const CAPTAIN_DEFAULTS_INTRO =
-  "You’re set up for USD fares and a balance of price and travel time. You can change these anytime.";
+  + "I’m still in early testing, so I can only keep one trip at a time. "
+  + "You’re set up for USD fares and a balance of price and travel time. You can change these anytime. "
+  + "Can't book or pay yet";
 export const CAPTAIN_READY_PROMPT =
-  "Send the cities and dates you’re considering by text or voice note. I’ll help turn them into flight legs and search the dates that work.";
+  "Share your travel plans via text or voice note and I'll help you explore the options.";
 // Captain introduces itself once, at the welcome step. A traveller who has
 // already onboarded gets this instead.
 export const CAPTAIN_RETURNING_TRAVELLER_WELCOME =
@@ -647,16 +647,14 @@ async function postNewUserOnboarding(
     services.platformStore.appendMessage(userId, "assistant", text, new Date());
 
   // The caller already completed onboarding by claiming the welcome step, so
-  // these three messages are the whole of it.
-  await ctx.telegram.post(CAPTAIN_NEW_USER_GREETING);
-  await remember(CAPTAIN_NEW_USER_GREETING);
+  // these two messages are the whole of it.
   await postWithLink(
     ctx,
-    CAPTAIN_DEFAULTS_INTRO,
+    CAPTAIN_NEW_USER_GREETING,
     "Preferences",
     await services.auth.createLoginLink(userId, "/profile")
   );
-  await remember(CAPTAIN_DEFAULTS_INTRO);
+  await remember(CAPTAIN_NEW_USER_GREETING);
   await ctx.telegram.post(CAPTAIN_READY_PROMPT);
   await remember(CAPTAIN_READY_PROMPT);
 }
