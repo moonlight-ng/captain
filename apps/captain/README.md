@@ -108,6 +108,27 @@ Build the web dashboard separately with:
 pnpm --filter @agents/captain build:web
 ```
 
+### Private administrator dashboard
+
+`/admin` is a read-only production view of Captain health, user-centric
+conversations, and AI spend. Supabase supplies administrator identity only;
+the browser never receives production database credentials or queries Captain
+storage directly.
+
+Before a production release:
+
+1. Create each administrator in Supabase Auth and disable public user signup.
+2. Add `https://dr-captain.fly.dev/admin` to the Supabase Auth redirect URLs
+   (and `http://127.0.0.1:4178/admin` when testing locally).
+3. Configure `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and the comma-separated
+   `CAPTAIN_ADMIN_EMAILS` as Fly secrets. The email allowlist is checked again
+   by Captain after Supabase verifies every access token.
+
+The release migration sets the usage coverage timestamp. Existing transcripts
+remain browseable, but no earlier AI spend is estimated or backfilled. Direct
+Gateway generations whose exact cost is not immediately available are retried
+every five minutes for up to six attempts and remain visibly unresolved.
+
 The retained legacy flight worker has its own ignored `.env`. It requires:
 
 - `DATABASE_URL`

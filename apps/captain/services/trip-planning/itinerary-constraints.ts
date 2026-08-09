@@ -10,6 +10,7 @@ import {
 } from "@agents/flight-domain";
 
 import { createCaptainGateway } from "../ai/gateway.js";
+import type { GatewayGenerationUsageInput } from "../admin/usage.js";
 import {
   airportMarket,
   allowedModelAirportCodes,
@@ -47,6 +48,7 @@ export type CompiledItineraryConstraints = {
 };
 
 export type ItineraryConstraintInterpreter = (input: {
+  userId?: string;
   request: string;
   now: Date;
   timeZone: string;
@@ -82,6 +84,7 @@ export function isNarrativeItineraryRequest(request: string): boolean {
 export function createItineraryConstraintInterpreter(options: {
   apiKey: string | null;
   model: string;
+  recordUsage?: (input: GatewayGenerationUsageInput) => Promise<void>;
 }): ItineraryConstraintInterpreter {
   const gateway = options.apiKey ? createCaptainGateway(options.apiKey) : null;
   return async (input) => {
@@ -121,6 +124,13 @@ export function createItineraryConstraintInterpreter(options: {
         },
         maxOutputTokens: 1_500,
         abortSignal: AbortSignal.timeout(20_000)
+      });
+      await options.recordUsage?.({
+        userId: input.userId ?? null,
+        operation: "itinerary_constraint_extraction",
+        model: options.model,
+        providerMetadata: result.providerMetadata,
+        usage: result.usage
       });
       const sanitized = sanitizeConstraintSet(input.request, result.object);
       if (!sanitized) return fallback;

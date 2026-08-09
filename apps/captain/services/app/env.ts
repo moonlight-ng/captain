@@ -9,6 +9,9 @@ export type CaptainEnv = {
   aiModel: string;
   tripInterpreterModel: string;
   aiGatewayApiKey: string | null;
+  supabaseUrl: string | null;
+  supabasePublishableKey: string | null;
+  adminEmails: string[];
   betaUserLimit: number;
   publicBetaEnabled: boolean;
   simplifiedMultiCityEnabled: boolean;
@@ -43,6 +46,9 @@ export function loadEnv(): CaptainEnv {
     aiModel: process.env.AI_MODEL?.trim() || "openai/gpt-5.6-terra",
     tripInterpreterModel: process.env.TRIP_INTERPRETER_MODEL?.trim() || "openai/gpt-5.6-luna",
     aiGatewayApiKey: optional("AI_GATEWAY_API_KEY"),
+    supabaseUrl: optional("SUPABASE_URL"),
+    supabasePublishableKey: optional("SUPABASE_PUBLISHABLE_KEY"),
+    adminEmails: emailList(process.env.CAPTAIN_ADMIN_EMAILS),
     betaUserLimit: positiveInteger("CAPTAIN_BETA_USER_LIMIT", 25),
     publicBetaEnabled: booleanValue(
       process.env.CAPTAIN_PUBLIC_BETA_ENABLED,
@@ -59,12 +65,22 @@ export function loadEnv(): CaptainEnv {
     for (const [name, value] of [
       ["DATABASE_URL", env.databaseUrl],
       ["TELEGRAM_BOT_TOKEN", env.telegramBotToken],
-      ["TELEGRAM_WEBHOOK_SECRET_TOKEN", env.telegramWebhookSecretToken]
+      ["TELEGRAM_WEBHOOK_SECRET_TOKEN", env.telegramWebhookSecretToken],
+      ["SUPABASE_URL", env.supabaseUrl],
+      ["SUPABASE_PUBLISHABLE_KEY", env.supabasePublishableKey],
+      ["CAPTAIN_ADMIN_EMAILS", env.adminEmails.length > 0 ? "configured" : null]
     ] as const) {
       if (!value) throw new Error(`Missing required production environment variable: ${name}`);
     }
   }
   return env;
+}
+
+function emailList(value: string | undefined): string[] {
+  return [...new Set((value ?? "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)))];
 }
 
 function optional(name: string): string | null {

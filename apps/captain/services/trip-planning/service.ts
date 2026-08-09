@@ -21,6 +21,7 @@ import {
 import type { CaptainPlatformStore } from "@agents/flight-store";
 
 import type { TripService } from "../trips/service.js";
+import type { GatewayGenerationUsageInput } from "../admin/usage.js";
 import { applyTripTurnPatch } from "./draft-reducer.js";
 import { fallbackTripFactExtraction } from "./extractor.js";
 import {
@@ -87,6 +88,7 @@ export class TripPlanningService {
     interpretItineraryConstraints?: ItineraryConstraintInterpreter;
     model?: string;
     apiKey?: string | null;
+    recordUsage?: (input: GatewayGenerationUsageInput) => Promise<void>;
     now?: () => Date;
     dashboardUrlForTrip?: (userId: string, tripId: string) => string | Promise<string>;
   }) {
@@ -94,12 +96,14 @@ export class TripPlanningService {
     this.#trips = options.trips;
     this.#interpret = options.interpret ?? createTripTurnInterpreter({
       apiKey: options.apiKey ?? null,
-      model: options.model ?? "openai/gpt-5.6-luna"
+      model: options.model ?? "openai/gpt-5.6-luna",
+      ...(options.recordUsage ? { recordUsage: options.recordUsage } : {})
     });
     this.#interpretItineraryConstraints = options.interpretItineraryConstraints
       ?? createItineraryConstraintInterpreter({
         apiKey: options.apiKey ?? null,
-        model: options.model ?? "openai/gpt-5.6-luna"
+        model: options.model ?? "openai/gpt-5.6-luna",
+        ...(options.recordUsage ? { recordUsage: options.recordUsage } : {})
       });
     this.#now = options.now ?? (() => new Date());
     this.#dashboardUrlForTrip = options.dashboardUrlForTrip
@@ -127,7 +131,7 @@ export class TripPlanningService {
     const now = this.#now();
     const user = await this.#store.getUser(userId);
     const timeZone = user?.timezone ?? "UTC";
-    const constraintSet = await this.#interpretItineraryConstraints({ request, now, timeZone });
+    const constraintSet = await this.#interpretItineraryConstraints({ userId, request, now, timeZone });
     const compiledConstraints = constraintSet
       ? compileItineraryConstraints(constraintSet, now, timeZone)
       : null;
@@ -162,6 +166,7 @@ export class TripPlanningService {
     const turn = compiledConstraints || acceptProposedWindows || declineProposedWindows
       ? null
       : await this.#interpret({
+        userId,
         request,
         conversation,
         state: draft.state,

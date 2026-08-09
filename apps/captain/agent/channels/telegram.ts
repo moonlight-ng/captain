@@ -178,7 +178,7 @@ export default telegramChannel({
     let voiceTranscript: string | null = null;
     if (!content && voice) {
       try {
-        content = await transcribeVoice(voice);
+        content = await transcribeVoice(voice, user.id);
         if (!content) throw new Error("No voice transcript was generated");
         voiceTranscript = content;
       } catch {
@@ -876,7 +876,10 @@ export function promoteVoiceTranscriptToTelegramTurn(
   Object.assign(message, { text: transcript });
 }
 
-async function transcribeVoice(input: { fileId: string; size?: number }): Promise<string> {
+async function transcribeVoice(
+  input: { fileId: string; size?: number },
+  userId: string
+): Promise<string> {
   if (input.size !== undefined && input.size > MAX_VOICE_BYTES) throw new Error("Voice note is too large");
   const file = await getTelegramFile({ credentials, fileId: input.fileId });
   const response = await downloadTelegramFile({ credentials, filePath: file.filePath });
@@ -884,8 +887,9 @@ async function transcribeVoice(input: { fileId: string; size?: number }): Promis
   const audio = new Uint8Array(await response.arrayBuffer());
   if (audio.byteLength === 0 || audio.byteLength > MAX_VOICE_BYTES) throw new Error("Voice note has an invalid size");
   try {
-    return (await transcribe({
-      model: process.env.TRANSCRIPTION_MODEL?.trim() || "openai/gpt-4o-mini-transcribe",
+    const model = process.env.TRANSCRIPTION_MODEL?.trim() || "openai/gpt-4o-mini-transcribe";
+    const result = await transcribe({
+      model,
       audio,
       providerOptions: {
         gateway: {
@@ -896,7 +900,15 @@ async function transcribeVoice(input: { fileId: string; size?: number }): Promis
           ]
         }
       }
-    })).text.trim();
+    });
+    const services = await getCaptainServices();
+    await services.usage.recordGatewayGeneration({
+      userId,
+      operation: "voice_transcription",
+      model,
+      providerMetadata: result.providerMetadata
+    });
+    return result.text.trim();
   } catch (error) {
     if (NoTranscriptGeneratedError.isInstance(error)) return "";
     throw error;

@@ -10,6 +10,7 @@ import {
 } from "@agents/flight-domain";
 
 import { createCaptainGateway } from "../ai/gateway.js";
+import type { GatewayGenerationUsageInput } from "../admin/usage.js";
 import {
   allowedModelAirportCodes,
   orderedAirportCodesFromText
@@ -136,6 +137,7 @@ export type TripPlannerQuestion =
   | null;
 
 export type TripTurnInterpreter = (input: {
+  userId?: string;
   request: string;
   conversation: string[];
   state: TripDraftState;
@@ -147,6 +149,7 @@ export type TripTurnInterpreter = (input: {
 export function createTripTurnInterpreter(options: {
   apiKey: string | null;
   model: string;
+  recordUsage?: (input: GatewayGenerationUsageInput) => Promise<void>;
 }): TripTurnInterpreter {
   const gateway = options.apiKey ? createCaptainGateway(options.apiKey) : null;
   return async (input) => {
@@ -189,6 +192,13 @@ export function createTripTurnInterpreter(options: {
         },
         maxOutputTokens: 1_200,
         abortSignal: AbortSignal.timeout(20_000)
+      });
+      await options.recordUsage?.({
+        userId: input.userId ?? null,
+        operation: "trip_patch_interpretation",
+        model: options.model,
+        providerMetadata: result.providerMetadata,
+        usage: result.usage
       });
       const patch = sanitizeModelPatch(input.request, input.state, result.object);
       return patch;
