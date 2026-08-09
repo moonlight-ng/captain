@@ -581,8 +581,11 @@ function explicitDateRangeExpressions(request: string): string[] {
 
 function legAnchorsWeekday(leg: TripDraftState["legs"][number] | undefined): boolean {
   if (!leg) return false;
-  if (leg.departure) return leg.departure.kind === "window";
-  return Boolean(leg.feasibleDepartureWindow || leg.arriveBy);
+  return Boolean(
+    leg.departure?.kind === "window"
+    || leg.feasibleDepartureWindow
+    || leg.arriveBy
+  );
 }
 
 function targetFor(question: TripPlannerQuestion, fallbackLeg: number): DateTarget {

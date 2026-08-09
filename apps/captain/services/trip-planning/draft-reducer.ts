@@ -154,7 +154,7 @@ function resolveDateSelection(
       ? { start: current.start, end: current.end, label: `“${current.source}”` }
       : proposed?.kind === "window"
         ? { start: proposed.start, end: proposed.end, label: `“${proposed.source}”` }
-        : !current && leg?.feasibleDepartureWindow
+        : leg?.feasibleDepartureWindow
           ? {
               ...leg.feasibleDepartureWindow,
               label: `${leg.feasibleDepartureWindow.start} to ${leg.feasibleDepartureWindow.end}`
@@ -192,7 +192,7 @@ function resolveDateSelection(
     // No window to read it against, but the leg still has to land by a fixed
     // date. A traveller naming a weekday means the last one that arrives in
     // time — never the next one on this week's calendar.
-    if (!current && leg?.arriveBy) {
+    if (leg?.arriveBy) {
       // “After” counts forward from the day the envelope opens, and a leg with
       // only a deadline has no such day. Asking beats guessing a date the
       // traveller never named.
