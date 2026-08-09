@@ -43,7 +43,7 @@ Dark-only (`#000000` canvas, `color-scheme: dark`). Quiet density: body type is 
 | `--panel` / `--panel-soft` | `#0a0a0a` / `#050505` | Surfaces |
 | `--radius-card` | `19px` | Primary card radius |
 | `--type-title` / `--type-body` / `--type-caption` | `22` / `13` / `10` px | Type scale |
-| `--weight-regular` / `--weight-medium` / `--weight-bold` | `400` / `600` / `700` | Epilogue |
+| `--weight-regular` / `--weight-medium` / `--weight-bold` | `400` / `600` / `700` | Inter |
 | `--ease-out` / `--ease-drawer` | press / sheet open | Motion |
 | `--duration-press-out` / `--duration-ui` / `--duration-sheet` / `--duration-sheet-exit` | `100` / `180` / `240` / `160` ms | Motion |
 
@@ -51,7 +51,7 @@ Hardcoded companions (not tokenized): canvas `#000000`; soft white washes; coral
 
 ### Typography
 
-Epilogue 400/600/700. Titles and `.price` use `--type-title` + medium weight + tight tracking. Body everywhere else. Eyebrows: bold, uppercase, `.17em` tracking, ~42% white. Captions for badges/chips. Tabular nums on times, prices, peer-plot labels. Avoid a fourth type size.
+Inter 400/600/700. Titles and `.price` use `--type-title` + medium weight + tight tracking. Body everywhere else. Eyebrows: bold, uppercase, `.17em` tracking, ~42% white. Captions for badges/chips. Tabular nums on times, prices, peer-plot labels. Avoid a fourth type size.
 
 ### Color semantics
 
