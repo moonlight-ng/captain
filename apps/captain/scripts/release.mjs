@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import postgres from "postgres";
 
 await run(process.execPath, ["--import", "tsx", "scripts/migrate.ts"]);
+await assertRuntimeDatabasePermissions();
 
 const configuredUrl = process.env.WORKFLOW_POSTGRES_URL?.trim();
 if (!configuredUrl) throw new Error("WORKFLOW_POSTGRES_URL is required");
@@ -32,6 +33,42 @@ if (ready?.world && ready.migrations && ready.queue) {
 } else {
   process.stdout.write("Workflow schemas are blank or incomplete; running bootstrap.\n");
   await run("bootstrap", []);
+}
+
+async function assertRuntimeDatabasePermissions() {
+  const databaseUrl = process.env.DATABASE_URL?.trim();
+  if (!databaseUrl) throw new Error("DATABASE_URL is required");
+  const runtimeSql = postgres(databaseUrl, {
+    max: 1,
+    connect_timeout: 10,
+    idle_timeout: 2
+  });
+  try {
+    const missing = await runtimeSql`
+      select relation.relname as table_name
+      from pg_class relation
+      join pg_namespace namespace on namespace.oid = relation.relnamespace
+      where namespace.nspname = 'captain'
+        and relation.relkind in ('r', 'p')
+        and not (
+          has_table_privilege(relation.oid, 'select')
+          and has_table_privilege(relation.oid, 'insert')
+          and has_table_privilege(relation.oid, 'update')
+          and has_table_privilege(relation.oid, 'delete')
+        )
+      order by relation.relname
+    `;
+    if (missing.length > 0) {
+      throw new Error(
+        `Captain runtime role is missing table privileges on: ${missing
+          .map((row) => row.table_name)
+          .join(", ")}`
+      );
+    }
+  } finally {
+    await runtimeSql.end({ timeout: 2 });
+  }
+  process.stdout.write("Captain runtime database permissions verified.\n");
 }
 
 function run(command, args) {

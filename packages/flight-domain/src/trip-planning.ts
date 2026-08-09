@@ -62,6 +62,8 @@ export type TripDraftRouteLeg = z.infer<typeof tripDraftRouteLegSchema>;
 
 export const tripDraftStateSchema = z.object({
   version: z.literal(3),
+  /** Ambiguity questions Captain has asked while composing this draft. */
+  questionsAsked: z.number().int().min(0).max(2).default(0),
   tripType: z.enum(["one_way", "round_trip", "multi_city"]).nullable(),
   legs: z.array(tripDraftRouteLegSchema).max(6),
   travellers: z.object({
@@ -80,6 +82,7 @@ export type TripDraftState = z.infer<typeof tripDraftStateSchema>;
 
 export const EMPTY_TRIP_DRAFT_STATE: TripDraftState = {
   version: 3,
+  questionsAsked: 0,
   tripType: null,
   legs: [],
   travellers: null,
@@ -118,7 +121,11 @@ export const tripCreationReceiptSchema = z.object({
   legs: z.array(z.object({
     originAirports: z.array(z.string().regex(/^[A-Z]{3}$/u)).min(1),
     destinationAirports: z.array(z.string().regex(/^[A-Z]{3}$/u)).min(1),
-    departureDate: isoDateSchema
+    departureDate: isoDateSchema,
+    departureWindow: z.object({
+      start: isoDateSchema,
+      end: isoDateSchema
+    }).strict().optional()
   }).strict()).optional(),
   departureDate: isoDateSchema,
   returnDate: isoDateSchema.nullable(),

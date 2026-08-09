@@ -69,6 +69,7 @@ const CREATION_SUCCESS_PATTERNS = [
 ] as const;
 const UUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/iu;
 const UNGROUNDED_CREATION_MESSAGE = "I couldn’t verify a trip-creation receipt. Send /trip to check your trip.";
+const MAX_AMBIGUITY_QUESTIONS = 2;
 
 export class TripPlanningService {
   readonly #store: CaptainPlatformStore;
@@ -197,7 +198,12 @@ export class TripPlanningService {
           now,
           timeZone
         });
-    const state = reduced.state;
+    // Once Captain has used its two-question allowance, dates stop being a
+    // conversational gate. Fill only the values the GUI can safely expose and
+    // leave every choice editable on the saved, non-tracking trip.
+    let state = reduced.state.questionsAsked >= MAX_AMBIGUITY_QUESTIONS
+      ? fillDateAssumptions(reduced.state, now, timeZone)
+      : reduced.state;
     const unsupportedParty = Boolean(
       state.travellers
       && (
@@ -238,6 +244,14 @@ export class TripPlanningService {
     );
     // Only the replacement prompt is more than one turn; everything else is a
     // single message that happens to be a one-element list.
+    const needsTripClarification = Boolean(
+      !confirmationSnapshot
+      && !tripLimitReached
+      && !unsupportedParty
+      && !unsupportedCurrency
+    );
+    const questionLimitReached = needsTripClarification
+      && state.questionsAsked >= MAX_AMBIGUITY_QUESTIONS;
     const basePromptParts = !confirmationSnapshot || tripLimitReached
       ? tripLimitReached
         ? replacementPrompt(activeTrips[0]!, confirmationSnapshot!)
@@ -245,8 +259,19 @@ export class TripPlanningService {
             ? "Captain’s beta currently tracks fares for exactly one adult. Reply “just me” to continue, or cancel this trip."
             : unsupportedCurrency
               ? SUPPORTED_CURRENCY_MESSAGE
-              : reduced.issue ?? clarificationPrompt(missingFields, state)]
+              : questionLimitReached
+                ? ambiguityLimitPrompt(missingFields)
+                : reduced.issue ?? clarificationPrompt(missingFields, state)]
       : null;
+    if (needsTripClarification && !questionLimitReached) {
+      state = {
+        ...state,
+        questionsAsked: Math.min(
+          MAX_AMBIGUITY_QUESTIONS,
+          state.questionsAsked + 1
+        ) as 0 | 1 | 2
+      };
+    }
     const revised = await this.#store.reviseTripPlanDraft(
       userId,
       draft.id,
@@ -297,6 +322,17 @@ export class TripPlanningService {
         prompt: basePromptParts!.join("\n\n"),
         ...(basePromptParts!.length > 1 ? { promptParts: basePromptParts! } : {}),
         missingFields
+      };
+    }
+    // A clarification answer is consent to save a draft, not to start a fare
+    // search. Remove the redundant Create turn and hand the traveller the GUI
+    // immediately; fully specified requests keep the existing review step.
+    if (state.questionsAsked > 0) {
+      const started = await this.confirm(userId, revised.id, revised.revision);
+      if (started.status !== "started" || !reduced.issue) return started;
+      return {
+        ...started,
+        message: `${reduced.issue}\n\n${started.message}`
       };
     }
     return {
@@ -524,10 +560,11 @@ export class TripPlanningService {
     if (draft.status === "awaiting_confirmation" && CONFIRM_PATTERN.test(request.trim())) {
       return this.confirm(userId, draft.id, draft.revision);
     }
+    // Captain's own date guesses are declinable wherever they appear, now that
+    // they are composed straight into the plan rather than asked about first.
+    // “No” to a window Captain chose means those dates, not the whole trip.
     if (
-      draft.status === "collecting"
-      && !draft.confirmationSnapshot
-      && canAcceptProposedWindows(draft.state)
+      canAcceptProposedWindows(draft.state)
       && DECLINE_PROPOSAL_PATTERN.test(request.trim())
     ) {
       return this.#prepareTurn(userId, request, sourceMessageId, draft.id, false);
@@ -658,10 +695,18 @@ function missingTripFields(state: TripDraftState, dateIssue: string | null): str
       ...(!state.legs.at(-1) || state.legs.at(-1)!.destinationAirports.length === 0
         ? ["destinationAirports"]
         : []),
-      ...(state.legs.length < 2 || state.legs.some((leg) =>
+      // Later wide gaps can use best-fit windows, but the first flight is a
+      // high-value ambiguity worth one of Captain's two questions.
+      ...(state.legs.length < 2 || state.legs.some((leg, index) =>
         leg.originAirports.length === 0
         || leg.destinationAirports.length === 0
-        || leg.departure === null
+        || (leg.departure === null && leg.proposedDeparture === null)
+        || (
+          index === 0
+          && leg.departure === null
+          && Boolean(leg.proposedDeparture)
+          && state.questionsAsked < MAX_AMBIGUITY_QUESTIONS
+        )
       )
         ? ["itineraryLegs"]
         : [])
@@ -676,6 +721,10 @@ function missingTripFields(state: TripDraftState, dateIssue: string | null): str
             ? ["departureDate"]
             : []
           : !first?.departure
+            && !(
+              state.questionsAsked >= MAX_AMBIGUITY_QUESTIONS
+              && first?.proposedDeparture
+            )
             ? ["departureDate"]
             : []
       ),
@@ -764,9 +813,16 @@ function missingSummary(missingFields: string[]): string | null {
 
 function clarificationPrompt(missingFields: string[], state: TripDraftState): string {
   const missing = new Set(missingFields);
+  if (missing.has("originAirports") && missing.has("destinationAirports")) {
+    return "Where are you flying from and to?";
+  }
   if (missing.has("originAirports")) return "Where are you flying from?";
   if (missing.has("destinationAirports")) return "Where would you like to fly to?";
   if (missing.has("departureDate")) {
+    const first = state.legs[0];
+    if (first?.proposedDeparture) {
+      return `When can you fly ${formatDraftLegRoute(first)}?${first.arriveBy ? ` You need to arrive by ${formatCalendarDate(first.arriveBy)}.` : ""}`;
+    }
     const selection = state.legs[0]?.departure;
     if (selection?.kind === "window") {
       return `Which exact departure date should I use within ${selection.start} to ${selection.end}?`;
@@ -775,29 +831,114 @@ function clarificationPrompt(missingFields: string[], state: TripDraftState): st
   }
   if (missing.has("returnDate")) return "What date would you like to return?";
   if (missing.has("itineraryLegs")) {
-    const unresolved = state.legs.find((leg) => !leg.departure && !leg.proposedDeparture);
+    const unresolved = state.legs.find((leg, index) =>
+      !leg.departure
+      && (
+        !leg.proposedDeparture
+        || (index === 0 && state.questionsAsked < MAX_AMBIGUITY_QUESTIONS)
+      )
+    );
     if (unresolved) {
       const route = formatDraftLegRoute(unresolved);
+      if (unresolved.proposedDeparture) {
+        return `When can you fly ${route}?${unresolved.arriveBy ? ` You need to arrive by ${formatCalendarDate(unresolved.arriveBy)}.` : ""}`;
+      }
       if (unresolved.feasibleDepartureWindow) {
         return `What seven-day window should I use for ${route} within ${formatShortWindow(unresolved.feasibleDepartureWindow)}?`;
       }
       return `When can you fly ${route}?${unresolved.arriveBy ? ` You need to arrive by ${formatCalendarDate(unresolved.arriveBy)}.` : ""}`;
     }
-    const proposals = state.legs.filter((leg) => !leg.departure && leg.proposedDeparture);
-    if (proposals.length > 0) {
-      return [
-        "The longer gaps are possible travel envelopes, not search dates. I suggest checking:",
-        ...proposals.map((leg) => {
-          const feasible = leg.feasibleDepartureWindow;
-          return `• ${formatDraftLegRoute(leg)}: ${formatDraftSelection(leg.proposedDeparture!)} suggested`
-            + (feasible ? ` within ${formatShortWindow(feasible)}` : "");
-        }),
-        "Use these seven-day search windows?"
-      ].join("\n");
-    }
+    // A leg Captain proposed a window for is never asked about: it is composed
+    // into the plan and reviewed there.
     return "What departure window should I use for the next flight leg?";
   }
   return "What should I add to the trip?";
+}
+
+function ambiguityLimitPrompt(missingFields: string[]): string {
+  const missing = new Set(missingFields);
+  if (missing.has("originAirports") && missing.has("destinationAirports")) {
+    return "I still need a route before I can save a usable draft. Send it as “Lagos to Nairobi” and I’ll make the rest editable.";
+  }
+  if (missing.has("originAirports")) {
+    return "I still need a departure city before I can save a usable draft. Send the city name and I’ll make the rest editable.";
+  }
+  if (missing.has("destinationAirports")) {
+    return "I still need a destination before I can save a usable draft. Send the city name and I’ll make the rest editable.";
+  }
+  return "I couldn’t make a usable draft from those details. Send the route in one line and I’ll fill the remaining dates for you to edit.";
+}
+
+/** Fill date-only gaps after the second ambiguity question. */
+function fillDateAssumptions(
+  input: TripDraftState,
+  now: Date,
+  timeZone: string
+): TripDraftState {
+  const state = structuredClone(input);
+  if (state.legs.length === 0) return state;
+  const tripType = effectiveTripType(state);
+  const today = localIsoDate(now, timeZone);
+
+  if (tripType === "round_trip") {
+    const first = state.legs[0]!;
+    if (!first.departure) {
+      first.departure = first.proposedDeparture ?? { kind: "exact", date: today };
+      first.proposedDeparture = null;
+    }
+    const departure = selectionWindow(first)?.start ?? today;
+    if (state.legs.length < 2 && first.originAirports.length && first.destinationAirports.length) {
+      state.legs.push({
+        originAirports: [...first.destinationAirports],
+        destinationAirports: [...first.originAirports],
+        departure: { kind: "exact", date: addIsoDays(departure, 7) }
+      });
+    } else if (state.legs.at(-1) && !state.legs.at(-1)!.departure) {
+      state.legs.at(-1)!.departure = {
+        kind: "exact",
+        date: addIsoDays(departure, 7)
+      };
+    }
+    return state;
+  }
+
+  let cursor = today;
+  state.legs.forEach((leg) => {
+    const existing = selectionWindow(leg);
+    if (existing) {
+      cursor = existing.end;
+      return;
+    }
+    const feasible = leg.feasibleDepartureWindow;
+    const deadlineEnd = leg.arriveBy ? addIsoDays(leg.arriveBy, -1) : null;
+    const end = feasible?.end ?? deadlineEnd ?? addIsoDays(cursor, 6);
+    const candidateStart = feasible?.start ?? cursor;
+    const start = daysBetween(candidateStart, end) > 6
+      ? addIsoDays(end, -6)
+      : candidateStart;
+    if (daysBetween(start, end) < 0) return;
+    leg.proposedDeparture = {
+      kind: "window",
+      start,
+      end,
+      source: "Captain’s best-fit draft window"
+    };
+    cursor = end;
+  });
+  return state;
+}
+
+function localIsoDate(now: Date, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(now);
+  } catch {
+    return now.toISOString().slice(0, 10);
+  }
 }
 
 function canAcceptProposedWindows(state: TripDraftState): boolean {
@@ -882,10 +1023,11 @@ function exactDate(
 function selectionWindow(
   leg: TripDraftState["legs"][number] | undefined
 ): { start: string; end: string } | null {
-  if (!leg?.departure) return null;
-  return leg.departure.kind === "exact"
-    ? { start: leg.departure.date, end: leg.departure.date }
-    : { start: leg.departure.start, end: leg.departure.end };
+  const selection = leg?.departure ?? leg?.proposedDeparture ?? null;
+  if (!selection) return null;
+  return selection.kind === "exact"
+    ? { start: selection.date, end: selection.date }
+    : { start: selection.start, end: selection.end };
 }
 
 function buildReceipt(
@@ -926,7 +1068,8 @@ function buildReceiptFromTrip(
     legs: trip.brief.legs?.map((leg) => ({
       originAirports: leg.originAirports,
       destinationAirports: leg.destinationAirports,
-      departureDate: leg.departureWindow.start
+      departureDate: leg.departureWindow.start,
+      departureWindow: leg.departureWindow
     })),
     departureDate,
     returnDate,

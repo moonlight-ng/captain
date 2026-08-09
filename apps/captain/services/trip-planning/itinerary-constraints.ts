@@ -164,12 +164,24 @@ export function compileItineraryConstraints(
       ];
   let prompt = constraints.question
     ?? (!constraints.origin && visits[0] ? originQuestion(visits, resolved) : null);
+  const today = localIsoDate(now, timeZone);
   const legs = pairs.map(({ origin, destination }) => {
     const originPresence = resolved.filter((item) => item.airportCode === origin);
     const destinationPresence = resolved.filter((item) => item.airportCode === destination);
-    const leaveAfter = latest(originPresence.map((item) => item.end));
     const arriveBy = earliest(destinationPresence.map((item) => item.start));
-    const start = leaveAfter ? addIsoDays(leaveAfter, 1) : null;
+    // An itinerary that ends where it began — Lagos as both the start and the
+    // finale — gives the origin city commitments on both sides of the trip.
+    // Only the ones that fall before this destination's deadline can hold this
+    // flight back; the rest belong to a later leg.
+    const leaveAfter = latest(
+      originPresence
+        .filter((item) => !arriveBy || daysBetween(item.end, arriveBy) > 0)
+        .map((item) => item.end)
+    );
+    // Nothing said about leaving means the traveller can leave now. A deadline
+    // on its own is enough to compose a departure window from, which is what
+    // lets Captain propose a flight instead of asking for one.
+    const start = leaveAfter ? addIsoDays(leaveAfter, 1) : arriveBy ? today : null;
     const end = arriveBy ? addIsoDays(arriveBy, -1) : null;
     const feasible = start && end && daysBetween(start, end) >= 0
       ? { start, end }

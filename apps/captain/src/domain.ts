@@ -36,6 +36,7 @@ export type Trip = {
       originAirports: string[];
       destinationAirports: string[];
       departureWindow: { start: string; end: string };
+      arriveBy?: string | null;
     }>;
     stayNights: {
       minimum: number;

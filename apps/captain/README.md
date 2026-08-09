@@ -36,9 +36,10 @@ background.
 - Captain has no booking flow, no card, and no passenger record. When a
   traveller wants to buy, it points them at whoever is selling the fare.
 - Archived trips and retained legacy evidence follow the existing retention
-  policy. `/clear` resets preferences to
-  defaults. Account deletion removes the traveller, trip, sessions, and
-  retained evidence.
+  policy. `/clear` removes the traveller's trips and conversation history,
+  cancels the active owner-agent session, resets preferences to defaults, and
+  returns onboarding to its welcome step. Account deletion removes the traveller,
+  trip, sessions, and retained evidence.
 - `/feedback` opens a session-authenticated text form. A signed, one-way bridge
   sends the bounded submission to Pilot's owner in Telegram without exposing
   Pilot memory or opening a private agent turn.

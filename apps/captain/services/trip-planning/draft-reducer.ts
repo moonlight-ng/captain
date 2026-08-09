@@ -146,14 +146,20 @@ function resolveDateSelection(
 
   const weekday = weekdayIn(expression);
   if (weekday) {
+    const direction = weekdayDirectionIn(expression);
+    // The window the traveller is actually looking at wins: their own, then
+    // the one Captain proposed to them, then the wider travel envelope.
+    const proposed = !current ? leg?.proposedDeparture ?? null : null;
     const window = current?.kind === "window"
       ? { start: current.start, end: current.end, label: `“${current.source}”` }
-      : !current && leg?.feasibleDepartureWindow
-        ? {
-            ...leg.feasibleDepartureWindow,
-            label: `${leg.feasibleDepartureWindow.start} to ${leg.feasibleDepartureWindow.end}`
-          }
-        : null;
+      : proposed?.kind === "window"
+        ? { start: proposed.start, end: proposed.end, label: `“${proposed.source}”` }
+        : leg?.feasibleDepartureWindow
+          ? {
+              ...leg.feasibleDepartureWindow,
+              label: `${leg.feasibleDepartureWindow.start} to ${leg.feasibleDepartureWindow.end}`
+            }
+          : null;
     if (window) {
       const matches: string[] = [];
       for (let date = window.start; daysBetween(date, window.end) >= 0; date = addIsoDays(date, 1)) {
@@ -161,6 +167,18 @@ function resolveDateSelection(
       }
       if (matches.length === 1) {
         return { selection: { kind: "exact", date: matches[0]! } };
+      }
+      // A direction word already says which end of the envelope is meant:
+      // “before” the deadline is its last match, “after” it opens is the first.
+      // Only a bare weekday matching more than once is genuinely the
+      // traveller's to settle.
+      if (matches.length > 1 && direction) {
+        return {
+          selection: {
+            kind: "exact",
+            date: direction === "before" ? matches.at(-1)! : matches[0]!
+          }
+        };
       }
       if (matches.length > 1) {
         return {
@@ -174,7 +192,15 @@ function resolveDateSelection(
     // No window to read it against, but the leg still has to land by a fixed
     // date. A traveller naming a weekday means the last one that arrives in
     // time — never the next one on this week's calendar.
-    if (!current && leg?.arriveBy) {
+    if (leg?.arriveBy) {
+      // “After” counts forward from the day the envelope opens, and a leg with
+      // only a deadline has no such day. Asking beats guessing a date the
+      // traveller never named.
+      if (direction === "after") {
+        return {
+          issue: `I only have the ${leg.arriveBy} arrival deadline for this flight, so I can’t tell which ${titleCase(weekday)} comes after. Which date should I use?`
+        };
+      }
       const date = latestWeekdayOnOrBefore(weekday, leg.arriveBy);
       if (date && daysBetween(isoDate(localDate(now, timeZone)), date) >= 0) {
         return { selection: { kind: "exact", date } };
@@ -341,6 +367,11 @@ function validateStateDates(state: TripDraftState, now: Date, timeZone: string):
     if (!selection) continue;
     const start = selection.kind === "exact" ? selection.date : selection.start;
     const end = selection.kind === "exact" ? selection.date : selection.end;
+    // The deadline is the reason the window ends where it does, so a date past
+    // it is named for what it actually misses.
+    if (leg.arriveBy && end > leg.arriveBy) {
+      return `That departure is after the ${leg.arriveBy} arrival deadline. I kept the previous dates.`;
+    }
     if (
       leg.feasibleDepartureWindow
       && (
@@ -349,9 +380,6 @@ function validateStateDates(state: TripDraftState, now: Date, timeZone: string):
       )
     ) {
       return `That date is outside the feasible ${leg.feasibleDepartureWindow.start} to ${leg.feasibleDepartureWindow.end} travel window. I kept the previous dates.`;
-    }
-    if (leg.arriveBy && end > leg.arriveBy) {
-      return `That departure is after the ${leg.arriveBy} arrival deadline. I kept the previous dates.`;
     }
   }
   return null;
@@ -379,6 +407,13 @@ function ensureLeg(state: TripDraftState, index: number): void {
 function weekdayIn(expression: string): string | null {
   return /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/iu
     .exec(expression)?.[1]?.toLowerCase() ?? null;
+}
+
+/** The direction the interpreter kept from “the Sunday before”, if any. */
+function weekdayDirectionIn(expression: string): "before" | "after" | null {
+  const match = /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(before|after)\b/iu
+    .exec(expression);
+  return match ? match[1]!.toLowerCase() as "before" | "after" : null;
 }
 
 function latestWeekdayOnOrBefore(weekday: string, deadline: string): string | null {

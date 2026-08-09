@@ -73,6 +73,138 @@ export function MultiCityTripOverview(props: SharedTripProps) {
   );
 }
 
+export function MultiCityPlanOverview({
+  cities: unsortedCities,
+  legs: unsortedLegs
+}: Pick<SharedTripProps, "cities" | "legs">) {
+  const cities = sort(unsortedCities);
+  const legs = sort(unsortedLegs);
+  const byId = new Map(cities.map((city) => [city.id, city]));
+  return (
+    <section className="multi-city-page multi-city-tab-page plan-itinerary" aria-label="Trip itinerary">
+      <div className="trip-route">
+        {cities.map((city, index) => {
+          const leg = legs.find((item) => item.originCityId === city.id) ?? legs[index];
+          const destination = leg ? byId.get(leg.destinationCityId) : undefined;
+          return (
+            <div className="route-step" key={city.id}>
+              <CityStop city={city} />
+              {leg && destination ? (
+                <article className="trip-leg-card plan-leg-summary">
+                  <div className="trip-leg-rail" aria-hidden="true"><span>↓</span></div>
+                  <div className="trip-leg-body">
+                    <div className="trip-leg-topline">
+                      <span>{city.label} → {destination.label}</span>
+                      <small>{dateRangeLabel(leg.departureWindow.start, leg.departureWindow.end)}</small>
+                    </div>
+                    {leg.arriveBy ? <p>Arrive by {dateLabel(leg.arriveBy)}</p> : null}
+                  </div>
+                </article>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+export function MultiCityFlightsOverview(props: SharedTripProps) {
+  const cities = sort(props.cities);
+  const legs = sort(props.legs);
+  const byId = new Map(cities.map((city) => [city.id, city]));
+  return (
+    <section className="multi-city-page multi-city-tab-page">
+      <header className="multi-city-heading compact-heading">
+        <p className="eyebrow">Flights</p>
+        <h2>Search each leg</h2>
+        <p>Open a leg to sort and filter its verified options.</p>
+      </header>
+      <div className="multi-city-flight-list">
+        {legs.map((leg) => {
+          const origin = byId.get(leg.originCityId);
+          const destination = byId.get(leg.destinationCityId);
+          if (!origin || !destination) return null;
+          return (
+            <LegCard
+              key={leg.id}
+              leg={leg}
+              origin={origin}
+              destination={destination}
+              snapshot={props.latestSearches[leg.id]}
+              progress={props.searchProgress[leg.id]}
+              error={props.searchErrors[leg.id]}
+              onSearch={() => props.onSearch(leg)}
+              onOpen={() => props.onNavigate(tripLegHref(props.trip.id, leg.id))}
+              onOpenFlight={(flightKey) => props.onNavigate(canonicalFlightHref(flightKey))}
+            />
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+export function MultiCityWatchlist(props: SharedTripProps) {
+  const cities = sort(props.cities);
+  const legs = sort(props.legs);
+  const byId = new Map(cities.map((city) => [city.id, city]));
+  const selected = legs.flatMap((leg) => {
+    if (!leg.selectedFlightKey) return [];
+    const snapshot = props.latestSearches[leg.id];
+    const flight = snapshot?.flights.find((item) => item.key === leg.selectedFlightKey);
+    if (!snapshot || !flight) return [];
+    return [{
+      leg,
+      flight,
+      offer: bestOffer(flight.key, snapshot.offers),
+      origin: byId.get(leg.originCityId),
+      destination: byId.get(leg.destinationCityId)
+    }];
+  });
+  return (
+    <section className="multi-city-page multi-city-tab-page">
+      <header className="multi-city-heading compact-heading">
+        <p className="eyebrow">Watchlist</p>
+        <h2>Flights you picked</h2>
+        <p>Your saved choice for each leg stays here for comparison.</p>
+      </header>
+      {selected.length === 0 ? (
+        <div className="results-empty compact">
+          <span>⌁</span>
+          <h2>No watched flights yet</h2>
+          <p>Open Flights, search a leg, and select an option to keep it here.</p>
+        </div>
+      ) : (
+        <div className="multi-city-watchlist">
+          {selected.map(({ leg, flight, offer, origin, destination }) => (
+            <button
+              type="button"
+              className="recommendation-card selected"
+              key={leg.id}
+              onClick={() => props.onNavigate(canonicalFlightHref(flight.key))}
+            >
+              <div className="card-top">
+                <span className="mode-label">{origin?.label ?? "Origin"} → {destination?.label ?? "Destination"}</span>
+                <span className="pill">Watching</span>
+              </div>
+              <strong className="price">
+                {offer ? formatMoney(Number(offer.priceAmount), offer.currency) : "Fare unavailable"}
+              </strong>
+              <div className="metrics">
+                <span>{flight.primaryAirlineCode}</span>
+                <span>{flightSchedule(flight)}</span>
+                <span>{flight.stops === 0 ? "Nonstop" : `${flight.stops} stop${flight.stops === 1 ? "" : "s"}`}</span>
+              </div>
+              <small>{dateLabel(flight.departureDate)}</small>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function CityStop({ city }: { city: TripCity }) {
   const timing = cityTiming(city);
   return (

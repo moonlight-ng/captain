@@ -205,6 +205,8 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           quiet_hours_enabled = ${DEFAULT_PROFILE.quietHoursEnabled},
           quiet_hours_start = ${DEFAULT_PROFILE.quietHoursStart},
           quiet_hours_end = ${DEFAULT_PROFILE.quietHoursEnd},
+          onboarding_step = 'welcome',
+          onboarding_completed_at = null,
           updated_at = ${now}
         where user_id = ${userId}
       `;
@@ -216,6 +218,14 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       // price history—belongs to every traveller on the route, so it stays.
       await tx`delete from captain.trips where user_id = ${userId}`;
       await tx`delete from captain.trip_plan_drafts where user_id = ${userId}`;
+      await tx`delete from captain.messages where user_id = ${userId}`;
+      await tx`
+        update captain.conversations set
+          summary = '',
+          active_trip_id = null,
+          updated_at = ${now}
+        where user_id = ${userId}
+      `;
     });
   }
 
