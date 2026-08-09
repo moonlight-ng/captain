@@ -283,6 +283,19 @@ export function describeCaptainPlatformStore(
         flight.key,
         new Date("2026-08-01T12:04:00Z")
       )).resolves.toMatchObject({ selectedFlightKey: flight.key });
+      await expect(store.setTripLegFlight(
+        ada.id,
+        created.trip.id,
+        leg.id,
+        null,
+        new Date("2026-08-01T12:05:00Z")
+      )).resolves.toMatchObject({ selectedFlightKey: null });
+      await expect(store.listTripActivity(ada.id, created.trip.id)).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ eventType: "trip_leg_flight_selected" }),
+          expect.objectContaining({ eventType: "trip_leg_flight_unselected" })
+        ])
+      );
     });
 
     it("archives a replaced trip, clears its active pointer, and retires legacy work", async () => {

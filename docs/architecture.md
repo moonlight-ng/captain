@@ -130,6 +130,14 @@ lifecycle twins already narrated by a delivered notification. Feed authorship
 defaults to Captain; only explicit traveller mutations (title, pause/resume/
 refresh/cancel/complete, flight select/unselect) render as “You”.
 
+The conversational `get_trip` tool reads the same normalized leg graph and
+latest per-leg search snapshots as the web trip screen. Its compact
+`legSearches` payload includes coverage, failures, selected flights, current
+snapshot fares, and cheapest/fastest/balanced picks. That per-leg state is
+authoritative for new trips even when the legacy whole-trip offer and
+recommendation tables are empty, so Telegram answers and the web feed cannot
+disagree about whether verified options have been found.
+
 ## One-active-trip replacement
 
 A traveller may keep one active trip. A complete second request is preserved in

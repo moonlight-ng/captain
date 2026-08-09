@@ -21,6 +21,31 @@ export class AdminApiError extends Error {
   }
 }
 
+export function loadErrorCopy(error: unknown): { title: string; body: string } {
+  if (error instanceof AdminApiError) {
+    if (error.status === 401) {
+      return { title: "Production data couldn’t be loaded.", body: "Your session may have expired." };
+    }
+    if (error.status === 403) {
+      return { title: "This account isn’t allowed.", body: "Your identity is valid, but it is not on Captain’s administrator allowlist." };
+    }
+    if (error.status === 404) {
+      return {
+        title: "Trips isn’t available on this Captain yet.",
+        body: "The admin Trips API isn’t deployed on the server your Vite proxy targets. Run a local Captain agent, or deploy these changes."
+      };
+    }
+    return {
+      title: "Production data couldn’t be loaded.",
+      body: `The server returned ${error.status}${error.code ? ` (${error.code})` : ""}.`
+    };
+  }
+  return {
+    title: "Production data couldn’t be loaded.",
+    body: "Captain couldn’t reach the production API. Check the connection and try again."
+  };
+}
+
 export class AdminApi {
   readonly supabase: SupabaseClient;
 

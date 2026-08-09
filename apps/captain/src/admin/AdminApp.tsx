@@ -16,7 +16,7 @@ import type {
 import { ChevronRightIcon, CloseIcon, ConversationsIcon, CostsIcon, OverviewIcon, SearchIcon, SettingsIcon, TripsIcon } from "../components/icons";
 import { feedPostsFromActivity } from "../feed-posts";
 import type { TripActivity } from "../domain";
-import { AdminApi, AdminApiError } from "./api";
+import { AdminApi, AdminApiError, loadErrorCopy } from "./api";
 import { parseAdminRoute, type AdminRoute } from "./routing";
 import "./admin.css";
 
@@ -249,7 +249,7 @@ function OverviewPage({ api, navigate }: { api: AdminApi; navigate: (path: strin
   const { data, error, reload } = useRefreshing<AdminOverview>("overview", () => api.overview(), []);
   return (
     <Page title="Overview" action={<RefreshButton onClick={reload} />}>
-      {!data ? error ? <ErrorState onRetry={reload} /> : <Loading /> : <>
+      {!data ? error ? <ErrorState onRetry={reload} title={error.title} body={error.body} /> : <Loading /> : <>
         <section className="admin-agent-card">
           <div className="admin-agent-identity"><div><h2>Captain</h2><p>Production · {data.agent.model}</p></div><div className="admin-status-line"><span className="admin-status-dot" /> Operational</div></div>
           <div className="admin-agent-facts"><Fact label="Environment" value="Production" /><Fact label="Active work" value={`${data.agent.activeTurns} turn${data.agent.activeTurns === 1 ? "" : "s"}`} /><Fact label="Last activity" value={data.agent.lastActivityAt ? relativeTime(data.agent.lastActivityAt) : "No tracked activity"} /><Fact label="Database" value={data.health.database === "available" ? "Connected" : "Local memory"} /></div>
@@ -271,7 +271,7 @@ function ConversationsPage({ api, navigate }: { api: AdminApi; navigate: (path: 
   const [queryInput, setQueryInput] = useState("");
   const [query, setQuery] = useState("");
   const [page, setPage] = useState<AdminConversationPage | null>(() => readAdminCache("conversations:"));
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<{ title: string; body: string } | null>(null);
   const [loading, setLoading] = useState(() => !readAdminCache("conversations:"));
   const load = useCallback(async (cursor?: string, append = false) => {
     const cacheKey = `conversations:${query}`;
@@ -280,7 +280,7 @@ function ConversationsPage({ api, navigate }: { api: AdminApi; navigate: (path: 
       setPage(cached);
       setLoading(!cached);
     } else setLoading(true);
-    setError(false);
+    setError(null);
     try {
       const next = await api.conversations({
         limit: 25,
@@ -293,7 +293,7 @@ function ConversationsPage({ api, navigate }: { api: AdminApi; navigate: (path: 
           : next;
         return writeAdminCache(cacheKey, merged);
       });
-    } catch { setError(true); }
+    } catch (caught) { setError(loadErrorCopy(caught)); }
     finally { setLoading(false); }
   }, [api, query]);
   useEffect(() => { void load(); }, [load]);
@@ -306,7 +306,7 @@ function ConversationsPage({ api, navigate }: { api: AdminApi; navigate: (path: 
         <input id="conversation-search" value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="Search user ID, @username, name, or message…" autoComplete="off" spellCheck={false} enterKeyHint="search" />
         {queryInput && <button type="button" className="admin-omnibox-clear" aria-label="Clear search" onClick={() => { setQueryInput(""); setQuery(""); }}><CloseIcon /></button>}
       </form>
-      {error && !page ? <ErrorState onRetry={() => void load()} /> : loading && !page ? <Loading /> : <>
+      {error && !page ? <ErrorState onRetry={() => void load()} title={error.title} body={error.body} /> : loading && !page ? <Loading /> : <>
         {query && <p className="admin-result-note">Results for “{query}”</p>}
         <ConversationTable conversations={page?.conversations ?? []} navigate={navigate} empty={query ? "No matching conversations." : "No conversations yet."} />
         {page?.nextCursor && <div className="admin-load-more"><button className="admin-button" disabled={loading} onClick={() => void load(page.nextCursor!, true)}>{loading ? "Loading…" : "Load more"}</button></div>}
@@ -318,7 +318,7 @@ function ConversationsPage({ api, navigate }: { api: AdminApi; navigate: (path: 
 function ConversationPage({ api, id, navigate }: { api: AdminApi; id: string; navigate: (path: string) => void }) {
   const cacheKey = `conversation:${id}`;
   const [detail, setDetail] = useState<AdminConversationDetail | null>(() => readAdminCache(cacheKey));
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<{ title: string; body: string } | null>(null);
   const [loading, setLoading] = useState(() => !readAdminCache(cacheKey));
   const load = useCallback(async (before?: string) => {
     if (!before) {
@@ -326,7 +326,7 @@ function ConversationPage({ api, id, navigate }: { api: AdminApi; id: string; na
       setDetail(cached);
       setLoading(!cached);
     } else setLoading(true);
-    setError(false);
+    setError(null);
     try {
       const next = await api.conversation(id, before);
       setDetail((current) => {
@@ -335,14 +335,14 @@ function ConversationPage({ api, id, navigate }: { api: AdminApi; id: string; na
           : next;
         return writeAdminCache(cacheKey, merged);
       });
-    } catch { setError(true); }
+    } catch (caught) { setError(loadErrorCopy(caught)); }
     finally { setLoading(false); }
   }, [api, cacheKey, id]);
   useEffect(() => { setDetail(readAdminCache(cacheKey)); void load(); }, [cacheKey, load]);
   const identity = detail ? conversationName(detail.conversation) : "Conversation";
   return (
     <Page title={identity} action={<button className="admin-text-button" onClick={() => navigate("/admin/conversations")}>Back</button>}>
-      {error && !detail ? <ErrorState onRetry={() => void load()} /> : loading && !detail ? <Loading /> : detail && <div className="admin-detail-layout">
+      {error && !detail ? <ErrorState onRetry={() => void load()} title={error.title} body={error.body} /> : loading && !detail ? <Loading /> : detail && <div className="admin-detail-layout">
         <section className="admin-transcript" aria-label="Conversation transcript">
           <div className="admin-transcript-heading"><div><span>{detail.conversation.messageCount} messages</span><span>{formatUsd(detail.conversation.costUsd)} tracked spend</span></div><button className="admin-text-button" onClick={() => void load()} disabled={loading}>Reload</button></div>
           {detail.olderCursor && <div className="admin-load-older"><button className="admin-button" disabled={loading} onClick={() => void load(detail.olderCursor!)}>{loading ? "Loading…" : "Load older messages"}</button></div>}
@@ -513,7 +513,7 @@ function CostsPage({ api, navigate }: { api: AdminApi; navigate: (path: string) 
   return (
     <Page title="Costs" action={<RefreshButton onClick={reload} />}>
       <div className="admin-range" role="group" aria-label="Cost reporting range">{(["7d", "30d", "all"] as AdminCostRange[]).map((value) => <button key={value} className={range === value ? "active" : ""} aria-pressed={range === value} onClick={() => setRange(value)}>{value === "all" ? "All tracked" : value.replace("d", " days")}</button>)}</div>
-      {!data ? error ? <ErrorState onRetry={reload} /> : <Loading /> : <>
+      {!data ? error ? <ErrorState onRetry={reload} title={error.title} body={error.body} /> : <Loading /> : <>
         {data.summary.unresolvedCostCount > 0 && <div className="admin-cost-notice" role="status"><strong>{data.summary.unresolvedCostCount} cost {data.summary.unresolvedCostCount === 1 ? "lookup is" : "lookups are"} pending.</strong><span>Exact totals exclude unresolved charges.</span></div>}
         <section className="admin-metrics admin-cost-metrics"><Metric label="AI spend" value={formatUsd(data.summary.costUsd)} note={`Tracked since ${formatDate(data.trackingStartedAt)}`} /><Metric label="Model calls" value={formatNumber(data.summary.calls)} note={rangeLabel(data.range)} /><Metric label="Input tokens" value={formatCompact(data.summary.inputTokens)} note={`${formatCompact(data.summary.cacheReadTokens)} cache read`} /><Metric label="Output tokens" value={formatCompact(data.summary.outputTokens)} note={`${formatCompact(data.summary.cacheWriteTokens)} cache write`} /></section>
         {data.summary.calls === 0 ? <EmptyState text="No usage in this range." /> : <>
@@ -619,38 +619,16 @@ function ErrorState({ onRetry, title, body }: { onRetry: () => void; title?: str
 }
 function EmptyState({ text }: { text: string }) { return <div className="admin-empty"><strong>{text}</strong><p>New activity appears here.</p></div>; }
 
-function loadErrorCopy(error: unknown): { title: string; body: string } {
-  if (error instanceof AdminApiError) {
-    if (error.status === 401) {
-      return { title: "Production data couldn’t be loaded.", body: "Your session may have expired." };
-    }
-    if (error.status === 403) {
-      return { title: "This account isn’t allowed.", body: "Your identity is valid, but it is not on Captain’s administrator allowlist." };
-    }
-    if (error.status === 404) {
-      return {
-        title: "Trips isn’t available on this Captain yet.",
-        body: "The admin Trips API isn’t deployed on the server your Vite proxy targets. Run a local Captain agent, or deploy these changes."
-      };
-    }
-    return {
-      title: "Production data couldn’t be loaded.",
-      body: `The server returned ${error.status}${error.code ? ` (${error.code})` : ""}.`
-    };
-  }
-  return { title: "Production data couldn’t be loaded.", body: "Your session may have expired." };
-}
-
 function useRefreshing<T>(cacheKey: string, loader: () => Promise<T>, dependencies: unknown[]) {
   const [data, setData] = useState<T | null>(() => readAdminCache(cacheKey));
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<{ title: string; body: string } | null>(null);
   const reload = useCallback(() => {
     const cached = readAdminCache<T>(cacheKey);
     setData(cached);
-    setError(false);
+    setError(null);
     void loader()
       .then((value) => setData(writeAdminCache(cacheKey, value)))
-      .catch(() => setError(true));
+      .catch((caught) => setError(loadErrorCopy(caught)));
   // The caller supplies the request dependencies that should replace this polling closure.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cacheKey, ...dependencies]);

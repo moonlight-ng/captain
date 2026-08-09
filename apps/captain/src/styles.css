@@ -2067,13 +2067,6 @@ legend { margin-bottom: 11px; color: var(--quiet); font-size: var(--type-body); 
   border: 1px solid rgba(167, 196, 154, .28);
   background: rgba(167, 196, 154, .08);
 }
-.leg-pick.is-set > span {
-  color: var(--green);
-  font-size: var(--type-caption);
-  font-weight: var(--weight-bold);
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
 .leg-pick.is-set strong {
   color: var(--ink);
   font-size: 16px;

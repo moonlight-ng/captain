@@ -57,9 +57,14 @@ describe("feedPostsFromActivity", () => {
 
   it("falls back to agent-voice lines for silent lifecycle events", () => {
     expect(activityFeedLine("trip_refresh")).toBe("Ran a manual check.");
+    expect(activityFeedLine("trip_leg_flight_unselected")).toBe("Stopped watching a flight.");
     expect(feedPostsFromActivity([
-      activity({ id: "a1", eventType: "trip_refresh" })
-    ])[0]).toMatchObject({ body: "Ran a manual check.", author: "traveller" });
+      activity({ id: "a1", eventType: "trip_refresh" }),
+      activity({ id: "a2", eventType: "trip_leg_flight_unselected" })
+    ])).toEqual([
+      expect.objectContaining({ body: "Ran a manual check.", author: "traveller" }),
+      expect.objectContaining({ body: "Stopped watching a flight.", author: "traveller" })
+    ]);
   });
 });
 

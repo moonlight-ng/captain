@@ -427,7 +427,6 @@ function LegCard({
         >
           {selected ? (
             <>
-              <span>Selected</span>
               <strong>{flightSchedule(selected)}</strong>
               <small>
                 {selected.primaryAirlineCode}

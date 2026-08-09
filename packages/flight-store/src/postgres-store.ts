@@ -772,7 +772,8 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       await tx`
         insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
         values (
-          ${randomUUID()}, ${tripId}, ${userId}, 'trip_leg_flight_selected',
+          ${randomUUID()}, ${tripId}, ${userId},
+          ${flightKey ? "trip_leg_flight_selected" : "trip_leg_flight_unselected"},
           ${tx.json(json({ legId, flightKey }))}, ${now}
         )
       `;

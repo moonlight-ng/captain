@@ -45,6 +45,7 @@ const TRAVELLER_EVENT_TYPES = new Set([
   "trip_cancel",
   "trip_complete",
   "trip_leg_flight_selected",
+  "trip_leg_flight_unselected",
   "flight_selected",
   "flight_unselected"
 ]);
@@ -118,6 +119,7 @@ export function activityFeedLine(eventType: string): string {
     trip_brief_updated: "Updated the trip brief.",
     trip_title_updated: "Renamed this trip.",
     trip_leg_flight_selected: "Started watching a flight.",
+    trip_leg_flight_unselected: "Stopped watching a flight.",
     flight_selected: "Added a flight to watch.",
     flight_unselected: "Stopped watching a flight.",
     trip_pause: "Paused tracking.",

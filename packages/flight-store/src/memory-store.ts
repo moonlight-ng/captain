@@ -646,7 +646,12 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       version: trip.version + 1,
       updatedAt: now.toISOString()
     });
-    this.#recordTripActivity(tripId, "trip_leg_flight_selected", { legId, flightKey }, now);
+    this.#recordTripActivity(
+      tripId,
+      flightKey ? "trip_leg_flight_selected" : "trip_leg_flight_unselected",
+      { legId, flightKey },
+      now
+    );
     return clone(leg);
   }
 
