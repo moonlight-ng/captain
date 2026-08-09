@@ -157,6 +157,11 @@ export type TrackingMaintenance = {
   completed: number;
 };
 
+export type MultiCityLegSearchRecording = {
+  matched: number;
+  notified: number;
+};
+
 export type LoginTokenRecord = {
   userId: string;
   redirectPath: CaptainSessionPath;
@@ -285,8 +290,21 @@ export interface CaptainPlatformStore {
   scheduleDueSearchRuns(now: Date, freshnessMs: number, limit: number): Promise<number>;
   claimSearchRuns(workerId: string, now: Date, leaseMs: number, limit: number): Promise<ClaimedSearchRun[]>;
   completeSearchRun(workerId: string, runId: string, providerRequestId: string, offers: CompletedProviderOffer[], now: Date): Promise<void>;
+  recordMultiCityLegSearchResult(
+    searchSpecId: string,
+    offers: CompletedProviderOffer[] | null,
+    errorCode: string | null,
+    now: Date
+  ): Promise<MultiCityLegSearchRecording>;
   deferSearchRun(workerId: string, runId: string, until: Date, reason: string, now: Date): Promise<void>;
-  failSearchRun(workerId: string, runId: string, error: string, retryAfterMs: number | null, now: Date): Promise<void>;
+  failSearchRun(
+    workerId: string,
+    runId: string,
+    error: string,
+    retryAfterMs: number | null,
+    retryable: boolean,
+    now: Date
+  ): Promise<boolean>;
   maintainTracking(now: Date): Promise<TrackingMaintenance>;
   finalizeFarFutureBaseline(searchSpecId: string, now: Date): Promise<void>;
   pruneWatchData(now: Date): Promise<void>;

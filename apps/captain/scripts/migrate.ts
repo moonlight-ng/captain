@@ -110,34 +110,45 @@ async function reconcileActiveTripSearchSpecs(): Promise<void> {
   `;
   let reconciled = 0;
   for (const trip of trips) {
-    const [spec] = buildSearchSpecs(tripBriefSchema.parse(trip.brief));
-    if (!spec) continue;
+    const specs = buildSearchSpecs(tripBriefSchema.parse(trip.brief));
+    if (specs.length === 0) continue;
     const existing = await sql<Array<{ search_spec_id: string }>>`
       select search_spec_id from captain.watch_search_specs
       where watch_id = ${trip.watch_id}
     `;
-    if (existing.length === 1 && existing[0]?.search_spec_id === spec.id) continue;
+    const expectedIds = specs.map((spec) => spec.id).sort();
+    const existingIds = existing.map((link) => link.search_spec_id).sort();
+    if (JSON.stringify(existingIds) === JSON.stringify(expectedIds)) continue;
     await sql.begin(async (transaction) => {
-      await transaction`
-        insert into captain.search_specs (id, spec_key, provider, request, created_at, updated_at)
-        values (
-          ${spec.id}, ${spec.key}, ${spec.request.provider},
-          ${transaction.json(spec.request as never)}, now(), now()
-        )
-        on conflict (id) do update set
-          provider = excluded.provider,
-          request = excluded.request,
-          updated_at = excluded.updated_at
-      `;
-      await transaction`
-        insert into captain.watch_search_specs (watch_id, search_spec_id, created_at)
-        values (${trip.watch_id}, ${spec.id}, now())
-        on conflict do nothing
-      `;
       await transaction`
         delete from captain.watch_search_specs
         where watch_id = ${trip.watch_id}
-          and search_spec_id <> ${spec.id}
+      `;
+      for (const spec of specs) {
+        await transaction`
+          insert into captain.search_specs (id, spec_key, provider, request, created_at, updated_at)
+          values (
+            ${spec.id}, ${spec.key}, ${spec.request.provider},
+            ${transaction.json(spec.request as never)}, now(), now()
+          )
+          on conflict (id) do update set
+            provider = excluded.provider,
+            request = excluded.request,
+            updated_at = excluded.updated_at
+        `;
+        await transaction`
+          insert into captain.watch_search_specs (watch_id, search_spec_id, created_at)
+          values (${trip.watch_id}, ${spec.id}, now())
+          on conflict do nothing
+        `;
+      }
+      await transaction`
+        delete from captain.search_runs run
+        where run.status in ('queued', 'deferred', 'failed')
+          and not exists (
+            select 1 from captain.watch_search_specs link
+            where link.search_spec_id = run.search_spec_id
+          )
       `;
       await transaction`
         update captain.watches

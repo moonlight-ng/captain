@@ -49,12 +49,14 @@ import type {
   ConversationContext,
   TelegramUserInput,
   TrackingMaintenance,
+  MultiCityLegSearchRecording,
   TripFlightSelection,
   TrackedFlightPrices,
   TripActivity,
   TripRecommendation
 } from "./contracts.js";
 import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
+import { matchingMultiCityLegs, multiCityLegRevision } from "./multi-city-results.js";
 import { notificationGoalPayload, offerDateSummary, offerRangeSummary } from "./notification-payload.js";
 import {
   meetsAlertThreshold,
@@ -1843,6 +1845,90 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     });
   }
 
+  async recordMultiCityLegSearchResult(
+    searchSpecId: string,
+    offers: CompletedProviderOffer[] | null,
+    errorCode: string | null,
+    now: Date
+  ): Promise<MultiCityLegSearchRecording> {
+    const specs = await this.#sql<Array<{ request: SearchSpec["request"] }>>`
+      select request from captain.search_specs where id = ${searchSpecId}
+    `;
+    const request = specs[0]?.request;
+    if (!request) return { matched: 0, notified: 0 };
+    const rows = await this.#sql<TripRow[]>`
+      select distinct trip.* from captain.trips trip
+      join captain.watches watch on watch.trip_id = trip.id
+      join captain.watch_search_specs link on link.watch_id = watch.id
+      where link.search_spec_id = ${searchSpecId}
+        and trip.status not in ('cancelled', 'completed', 'archived')
+    `;
+    let matched = 0;
+    let notified = 0;
+    for (const row of rows) {
+      const trip = toTrip(row);
+      const graph = await this.getTripGraph(trip.userId, trip.id);
+      for (const match of matchingMultiCityLegs(trip, graph, request)) {
+        const datesRequested = enumerateIsoDates(
+          match.leg.departureWindow.start,
+          match.leg.departureWindow.end
+        );
+        const snapshot = await this.createLegSearchSnapshot(
+          trip.userId,
+          trip.id,
+          match.leg.id,
+          match.leg.departureWindow,
+          datesRequested,
+          now
+        );
+        const revision = multiCityLegRevision(match, trip, offers, errorCode, now);
+        const completed = await this.reviseLegSearchSnapshot(
+          trip.userId,
+          snapshot.id,
+          snapshot.revision,
+          revision,
+          now
+        );
+        matched += 1;
+        if (!completed || completed.analysis.optionsChecked === 0) continue;
+        const refreshed = await this.getTripGraph(trip.userId, trip.id);
+        const snapshots = await Promise.all(refreshed.legs.map((leg) =>
+          leg.latestSearchId
+            ? this.getLegSearchSnapshot(trip.userId, leg.latestSearchId)
+            : Promise.resolve(null)
+        ));
+        const remainingLegs = snapshots.filter((current) =>
+          !current || ["queued", "running"].includes(current.status)
+        ).length;
+        const queued = await enqueueNotification(this.#sql, {
+          userId: trip.userId,
+          tripId: trip.id,
+          kind: "initial_results",
+          dedupKey: `${trip.id}:initial_results:multi_city`,
+          payload: {
+            ...notificationGoalPayload(trip, await this.ensureProfile(trip.userId, now)),
+            tripTitle: trip.title,
+            multiCityProgress: {
+              legRoute: `${match.origin.airportCodes[0]} → ${match.destination.airportCodes[0]}`,
+              legsTotal: graph.legs.length,
+              remainingLegs
+            }
+          },
+          now
+        });
+        if (queued) {
+          notified += 1;
+          await this.#sql`
+            update captain.trips set status = 'recommended',
+              version = version + 1, updated_at = ${now}
+            where id = ${trip.id} and status = 'tracking'
+          `;
+        }
+      }
+    }
+    return { matched, notified };
+  }
+
   async pruneWatchData(now: Date): Promise<void> {
     const staleOfferBefore = new Date(now.getTime() - CURRENT_OFFER_RETENTION_MS);
     const staleHistoryBefore = new Date(now.getTime() - PRICE_HISTORY_RETENTION_MS);
@@ -1874,7 +1960,14 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     });
   }
 
-  async failSearchRun(workerId: string, runId: string, error: string, retryAfterMs: number | null, now: Date): Promise<void> {
+  async failSearchRun(
+    workerId: string,
+    runId: string,
+    error: string,
+    retryAfterMs: number | null,
+    retryable: boolean,
+    now: Date
+  ): Promise<boolean> {
     const terminal = await this.#sql.begin(async (tx) => {
       const rows = await tx<Array<{ attempt: number; search_spec_id: string }>>`
         select attempt, search_spec_id from captain.search_runs
@@ -1883,7 +1976,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       `;
       const run = rows[0];
       if (!run) throw new Error("Search run lease is not owned by this worker");
-      const retry = run.attempt < 3;
+      const retry = retryable && run.attempt < 3;
       const delay = retryAfterMs ?? [300_000, 900_000, 3_600_000][Math.max(0, run.attempt - 1)]!;
       await tx`
         update captain.search_runs set
@@ -1905,6 +1998,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           and link.search_spec_id = ${terminal}
       `;
     }
+    return terminal !== null;
   }
 
   async deferSearchRun(workerId: string, runId: string, until: Date, reason: string, now: Date): Promise<void> {
@@ -2154,7 +2248,13 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           updated_at = ${now}
         where status = 'pending'
           and available_at <= ${now}
-          and kind in ('inventory_gap', 'watch_attention')
+          and (
+            kind = 'watch_attention'
+            or (
+              kind = 'inventory_gap'
+              and coalesce(payload ->> 'initialSearchFailure', 'false') <> 'true'
+            )
+          )
       `;
       // A stale "better option" is worth dropping for a fresher one. The
       // opening overview is not one of those, so it always gets delivered.
@@ -2303,9 +2403,78 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
   }
 
   async enqueueInventoryGapForSearchSpec(searchSpecId: string, now: Date): Promise<number> {
-    void searchSpecId;
-    void now;
-    return 0;
+    const rows = await this.#sql<Array<{
+      watch_id: string;
+      trip_id: string;
+      user_id: string;
+      title: string;
+      brief: TripBrief;
+    }>>`
+      select distinct watch.id as watch_id, trip.id as trip_id,
+        trip.user_id, trip.title, trip.brief
+      from captain.watches watch
+      join captain.trips trip on trip.id = watch.trip_id
+      join captain.watch_search_specs link on link.watch_id = watch.id
+      where link.search_spec_id = ${searchSpecId}
+        and trip.status not in ('cancelled', 'completed', 'archived')
+    `;
+    let queued = 0;
+    for (const row of rows) {
+      const pending = await this.#sql<Array<{ exists: boolean }>>`
+        select exists (
+          select 1 from captain.watch_search_specs link
+          where link.watch_id = ${row.watch_id}
+            and (
+              exists (
+                select 1 from captain.search_runs run
+                where run.search_spec_id = link.search_spec_id
+                  and run.status in ('queued', 'running', 'deferred')
+              )
+              or not exists (
+                select 1 from captain.search_runs run
+                where run.search_spec_id = link.search_spec_id
+                  and run.status in ('completed', 'failed')
+              )
+            )
+        ) as exists
+      `;
+      if (pending[0]?.exists) continue;
+      const initial = await this.#sql<Array<{ exists: boolean }>>`
+        select exists (
+          select 1 from captain.notifications
+          where trip_id = ${row.trip_id}
+            and kind = 'initial_results'
+            and status <> 'superseded'
+        ) as exists
+      `;
+      if (initial[0]?.exists) continue;
+      const trip: Trip = {
+        id: row.trip_id,
+        userId: row.user_id,
+        title: row.title,
+        status: "tracking",
+        version: 1,
+        brief: row.brief,
+        archivedAt: null,
+        archiveReason: null,
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString()
+      };
+      if (await enqueueNotification(this.#sql, {
+        userId: row.user_id,
+        tripId: row.trip_id,
+        kind: "inventory_gap",
+        dedupKey: `${row.trip_id}:initial_search_failed`,
+        payload: {
+          ...notificationGoalPayload(trip, await this.ensureProfile(row.user_id, now)),
+          tripTitle: row.title,
+          multiCity: row.brief.tripType === "multi_city",
+          initialSearchFailure: true
+        },
+        now
+      })) queued += 1;
+    }
+    return queued;
   }
 
 }

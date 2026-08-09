@@ -35,8 +35,8 @@ describe("shared Duffel search specifications", () => {
     })).toHaveLength(1);
   });
 
-  it("keeps ordered multi-city legs in one request", () => {
-    const [spec] = buildSearchSpecs({
+  it("builds one bounded request per multi-city leg", () => {
+    const specs = buildSearchSpecs({
       ...brief,
       originAirports: ["LOS"],
       destinationAirports: ["LON"],
@@ -57,19 +57,28 @@ describe("shared Duffel search specifications", () => {
       ]
     });
 
-    expect(spec?.request.slices).toEqual([
-      {
+    expect(specs).toHaveLength(2);
+    expect(specs.map((spec) => spec.request)).toEqual([
+      expect.objectContaining({
+        tripType: "one_way",
+        stayNights: null,
+        slices: [{
         originAirports: ["LOS"],
         destinationAirports: ["NYC"],
         departureStart: "2026-08-16",
         departureEnd: "2026-08-16"
-      },
-      {
+        }]
+      }),
+      expect.objectContaining({
+        tripType: "one_way",
+        stayNights: null,
+        slices: [{
         originAirports: ["NYC"],
         destinationAirports: ["LON"],
         departureStart: "2026-08-23",
         departureEnd: "2026-08-23"
-      }
+        }]
+      })
     ]);
   });
 

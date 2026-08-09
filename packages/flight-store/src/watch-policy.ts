@@ -1,7 +1,8 @@
 import type { CompletedProviderOffer } from "./contracts.js";
 
-export const DISCOVERY_SEARCH_SPEC_LIMIT = 1;
-export const TRACKING_SEARCH_SPEC_LIMIT = 1;
+/** One bounded specification per multi-city leg; simple trips still have one. */
+export const DISCOVERY_SEARCH_SPEC_LIMIT = 6;
+export const TRACKING_SEARCH_SPEC_LIMIT = 6;
 export const CURRENT_OFFER_RETENTION_MS = 7 * 86_400_000;
 export const PRICE_HISTORY_RETENTION_MS = 400 * 86_400_000;
 export const WATCH_DATA_PRUNE_INTERVAL_MS = 24 * 3_600_000;

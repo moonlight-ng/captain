@@ -81,10 +81,15 @@ export class FlightWorker {
       if (this.#trackingEnabled) {
         while (processed < this.#claimLimit) {
           const runNow = new Date(Math.max(now.getTime(), Date.now()));
-          const [run] = await this.#store.claimSearchRuns(this.#workerId, runNow, this.#leaseMs, 1);
-          if (!run) break;
-          await this.#processRun(run, runNow);
-          processed += 1;
+          const runs = await this.#store.claimSearchRuns(
+            this.#workerId,
+            runNow,
+            this.#leaseMs,
+            this.#claimLimit - processed
+          );
+          if (runs.length === 0) break;
+          await Promise.all(runs.map((run) => this.#processRun(run, runNow)));
+          processed += runs.length;
         }
       }
       const deliveryNow = new Date(Math.max(now.getTime(), Date.now()));
@@ -158,7 +163,18 @@ export class FlightWorker {
       });
       await this.#store.completeSearchRun(this.#workerId, run.id, result.requestId, offers, completedAt);
       searchCompleted = true;
-      const changed = await this.#store.evaluateTripsForSearchSpec(run.searchSpecId, completedAt);
+      const multiCity = await this.#store.recordMultiCityLegSearchResult(
+        run.searchSpecId,
+        offers,
+        null,
+        completedAt
+      );
+      const changed = multiCity.matched > 0
+        ? multiCity.notified
+        : await this.#store.evaluateTripsForSearchSpec(run.searchSpecId, completedAt);
+      if (offers.length === 0) {
+        await this.#store.enqueueInventoryGapForSearchSpec(run.searchSpecId, completedAt);
+      }
       await this.#store.finalizeFarFutureBaseline(run.searchSpecId, completedAt);
       logEvent("info", "flight_worker.search_completed", {
         run_id: run.id,
@@ -183,13 +199,19 @@ export class FlightWorker {
       const retryAfterMs = error instanceof FlightSearchProviderError
         ? error.retryAfterMs
         : null;
-      await this.#store.failSearchRun(
+      const terminal = await this.#store.failSearchRun(
         this.#workerId,
         run.id,
         error instanceof Error ? error.message : "Unknown search failure",
         retryAfterMs,
+        retryableSearchError(error),
         now
       );
+      if (terminal) {
+        const code = error instanceof FlightSearchProviderError ? error.code : "unknown";
+        await this.#store.recordMultiCityLegSearchResult(run.searchSpecId, null, code, now);
+        await this.#store.enqueueInventoryGapForSearchSpec(run.searchSpecId, now);
+      }
       logEvent("error", "flight_worker.search_failed", {
         run_id: run.id,
         search_spec_id: run.searchSpecId,
@@ -265,6 +287,11 @@ export class FlightWorker {
   }
 }
 
+function retryableSearchError(error: unknown): boolean {
+  if (!(error instanceof FlightSearchProviderError)) return true;
+  return ["rate_limited", "timeout", "unavailable", "invalid_response"].includes(error.code);
+}
+
 /** Captain only writes when something happened, so every message has news. */
 export function notificationText(notification: CaptainNotification): string {
   return reviewCaptainMessage(notificationDraftText(notification));
@@ -276,7 +303,25 @@ function notificationDraftText(notification: CaptainNotification): string {
   if (notification.kind === "tracking_started") {
     return "Plan confirmed. Now checking flights…";
   }
+  if (notification.kind === "inventory_gap") {
+    const multiCity = notification.payload.multiCity === true;
+    return multiCity
+      ? `I couldn’t complete the first flight check for ${route} yet.\n`
+        + "Open the trip to review the legs or adjust the dates."
+      : `I couldn’t complete the first flight check for ${route} yet.\n`
+        + "Open the trip to try again or adjust the dates.";
+  }
   if (notification.kind === "initial_results") {
+    const progress = recordField(notification.payload, "multiCityProgress");
+    if (progress) {
+      const legRoute = stringField(progress, "legRoute") || "the first leg";
+      const remaining = numericField(progress, "remainingLegs");
+      const checking = remaining > 0
+        ? ` I’m still checking ${remaining} other ${remaining === 1 ? "leg" : "legs"}.`
+        : "";
+      return `I found flights for ${legRoute}.${checking}\n`
+        + "Open your trip to compare them as the remaining results arrive.";
+    }
     return firstUpdateText(notification, route);
   }
   if (notification.kind === "tracking_activation") {

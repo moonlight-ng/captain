@@ -44,12 +44,14 @@ import type {
   ConversationContext,
   TelegramUserInput,
   TrackingMaintenance,
+  MultiCityLegSearchRecording,
   TripFlightSelection,
   TrackedFlightPrices,
   TripActivity,
   TripRecommendation
 } from "./contracts.js";
 import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
+import { matchingMultiCityLegs, multiCityLegRevision } from "./multi-city-results.js";
 import {
   notificationGoalPayload,
   offerDateSummary,
@@ -1395,6 +1397,74 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     void providerRequestId;
   }
 
+  async recordMultiCityLegSearchResult(
+    searchSpecId: string,
+    offers: CompletedProviderOffer[] | null,
+    errorCode: string | null,
+    now: Date
+  ): Promise<MultiCityLegSearchRecording> {
+    const spec = this.#specs.get(searchSpecId);
+    if (!spec) return { matched: 0, notified: 0 };
+    let matched = 0;
+    let notified = 0;
+    for (const watch of this.#watchesForSpec(searchSpecId)) {
+      const trip = this.#trips.get(watch.tripId);
+      const graph = trip ? this.#tripGraphs.get(trip.id) : null;
+      if (!trip || !graph) continue;
+      for (const match of matchingMultiCityLegs(trip, graph, spec.request)) {
+        const snapshot = await this.createLegSearchSnapshot(
+          trip.userId,
+          trip.id,
+          match.leg.id,
+          match.leg.departureWindow,
+          enumerateIsoDates(match.leg.departureWindow.start, match.leg.departureWindow.end),
+          now
+        );
+        const revision = multiCityLegRevision(match, trip, offers, errorCode, now);
+        const completed = await this.reviseLegSearchSnapshot(
+          trip.userId,
+          snapshot.id,
+          snapshot.revision,
+          revision,
+          now
+        );
+        matched += 1;
+        if (!completed || completed.analysis.optionsChecked === 0) continue;
+        const remainingLegs = graph.legs.filter((leg) => {
+          const current = leg.latestSearchId
+            ? this.#legSearchSnapshots.get(leg.latestSearchId)
+            : null;
+          return !current || ["queued", "running"].includes(current.status);
+        }).length;
+        if (this.#enqueueSimpleNotification(
+          trip,
+          "initial_results",
+          `${trip.id}:initial_results:multi_city`,
+          {
+            tripTitle: trip.title,
+            multiCityProgress: {
+              legRoute: `${match.origin.airportCodes[0]} → ${match.destination.airportCodes[0]}`,
+              legsTotal: graph.legs.length,
+              remainingLegs
+            }
+          },
+          now
+        )) {
+          notified += 1;
+          if (trip.status === "tracking") {
+            this.#trips.set(trip.id, {
+              ...trip,
+              status: "recommended",
+              version: trip.version + 1,
+              updatedAt: now.toISOString()
+            });
+          }
+        }
+      }
+    }
+    return { matched, notified };
+  }
+
   async pruneWatchData(now: Date): Promise<void> {
     const staleBefore = now.getTime() - CURRENT_OFFER_RETENTION_MS;
     const staleHistoryBefore = now.getTime() - 90 * 86_400_000;
@@ -1445,10 +1515,17 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     }
   }
 
-  async failSearchRun(workerId: string, runId: string, error: string, retryAfterMs: number | null, now: Date): Promise<void> {
+  async failSearchRun(
+    workerId: string,
+    runId: string,
+    error: string,
+    retryAfterMs: number | null,
+    retryable: boolean,
+    now: Date
+  ): Promise<boolean> {
     const run = this.#runs.get(runId);
     if (!run || run.claimedBy !== workerId || run.status !== "running") throw new Error("Search run lease is not owned by this worker");
-    const retry = run.attempt < 3;
+    const retry = retryable && run.attempt < 3;
     this.#runs.set(runId, {
       ...run,
       status: retry ? "queued" : "failed",
@@ -1468,6 +1545,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         });
       }
     }
+    return !retry;
   }
 
   async deferSearchRun(workerId: string, runId: string, until: Date, reason: string, now: Date): Promise<void> {
@@ -1497,9 +1575,37 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   }
 
   async enqueueInventoryGapForSearchSpec(searchSpecId: string, now: Date): Promise<number> {
-    void searchSpecId;
-    void now;
-    return 0;
+    let queued = 0;
+    for (const watch of this.#watchesForSpec(searchSpecId)) {
+      const trip = this.#trips.get(watch.tripId);
+      if (!trip) continue;
+      const specIds = this.#watchSpecs.get(watch.id) ?? new Set<string>();
+      const allFinished = [...specIds].every((specId) => {
+        const latest = [...this.#runs.values()]
+          .filter((run) => run.searchSpecId === specId)
+          .sort((left, right) => (right.completedAt ?? right.scheduledAt)
+            .localeCompare(left.completedAt ?? left.scheduledAt))[0];
+        return latest && ["completed", "failed"].includes(latest.status);
+      });
+      const hasInitialResults = [...this.#notifications.values()].some((notification) =>
+        notification.tripId === trip.id
+        && notification.kind === "initial_results"
+        && notification.status !== "superseded"
+      );
+      if (!allFinished || hasInitialResults) continue;
+      if (this.#enqueueSimpleNotification(
+        trip,
+        "inventory_gap",
+        `${trip.id}:initial_search_failed`,
+        {
+          tripTitle: trip.title,
+          multiCity: trip.brief.tripType === "multi_city",
+          initialSearchFailure: true
+        },
+        now
+      )) queued += 1;
+    }
+    return queued;
   }
 
   async evaluateTripsForSearchSpec(searchSpecId: string, now: Date): Promise<number> {
@@ -1584,7 +1690,13 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const due = [...this.#notifications.values()]
       .filter((notification) => notification.status === "pending" && notification.availableAt <= now.toISOString());
     for (const notification of due) {
-      if (["inventory_gap", "watch_attention"].includes(notification.kind)) {
+      if (
+        notification.kind === "watch_attention"
+        || (
+          notification.kind === "inventory_gap"
+          && notification.payload.initialSearchFailure !== true
+        )
+      ) {
         this.#notifications.set(notification.id, { ...notification, status: "superseded" });
       }
     }

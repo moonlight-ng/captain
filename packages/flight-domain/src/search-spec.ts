@@ -47,32 +47,58 @@ export type SearchRun = {
 };
 
 export function buildSearchSpecs(brief: TripBrief, _liveMode = true): SearchSpec[] {
-  const slices: SearchSlice[] = brief.tripType === "multi_city"
-    ? (brief.legs ?? []).map((leg) => ({
-        originAirports: leg.originAirports,
-      destinationAirports: leg.destinationAirports,
-      departureStart: leg.departureWindow.start,
-      departureEnd: leg.departureWindow.end,
-      ...(leg.arriveBy ? { arriveBy: leg.arriveBy } : {})
-      }))
-    : [{
-        originAirports: brief.originAirports,
-        destinationAirports: brief.destinationAirports,
-        departureStart: brief.departureWindow.start,
-        departureEnd: brief.departureWindow.end
-      }];
-  const request: SearchSpecRequest = {
+  const common: Pick<
+    SearchSpecRequest,
+    | "provider"
+    | "apiVersion"
+    | "passenger"
+    | "cabin"
+    | "maxConnections"
+    | "currency"
+    | "maximumPrice"
+    | "fareContext"
+  > = {
     provider: "official_duffel",
     apiVersion: "v1",
-    tripType: brief.tripType,
-    slices,
-    stayNights: brief.stayNights,
     passenger: { adults: 1, childrenAges: [], infants: 0 },
     cabin: brief.cabin,
     maxConnections: brief.maxStops,
     currency: brief.currency,
     maximumPrice: brief.maximumPrice,
     fareContext: "public_beta"
+  };
+  // Flexible multi-city dates are searched one leg at a time. Expanding all
+  // windows as one provider request creates a Cartesian product (for example,
+  // 7 × 5 × 7 = 245 requests) even though the product presents and selects
+  // these flights independently.
+  if (brief.tripType === "multi_city") {
+    return (brief.legs ?? []).map((leg) => {
+      const request: SearchSpecRequest = {
+        ...common,
+        tripType: "one_way",
+        slices: [{
+          originAirports: leg.originAirports,
+          destinationAirports: leg.destinationAirports,
+          departureStart: leg.departureWindow.start,
+          departureEnd: leg.departureWindow.end,
+          ...(leg.arriveBy ? { arriveBy: leg.arriveBy } : {})
+        }],
+        stayNights: null
+      };
+      const key = searchSpecKey(request);
+      return { id: key, key, request };
+    });
+  }
+  const request: SearchSpecRequest = {
+    ...common,
+    tripType: brief.tripType,
+    slices: [{
+      originAirports: brief.originAirports,
+      destinationAirports: brief.destinationAirports,
+      departureStart: brief.departureWindow.start,
+      departureEnd: brief.departureWindow.end
+    }],
+    stayNights: brief.stayNights
   };
   const key = searchSpecKey(request);
   return [{ id: key, key, request }];

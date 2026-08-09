@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildSearchSpecs,
+  FlightSearchProviderError,
   type CreateTripInput,
   type FlightSearchProvider
 } from "@agents/flight-domain";
@@ -341,6 +342,197 @@ describe("flight worker orchestration", () => {
       + "British Airways is the best current option.\n"
       + "These prices are now stale. Open the trip and choose Track."
     );
+  });
+
+  it("searches a 7 × 5 × 7 multi-city plan by leg and posts once when results begin", async () => {
+    const now = new Date("2026-08-01T12:00:00Z");
+    const store = new MemoryCaptainPlatformStore();
+    const user = await store.ensureTelegramUser({
+      telegramUserId: 7,
+      telegramChatId: 7,
+      username: null,
+      firstName: "Ada",
+      lastName: null
+    }, now);
+    await store.updateProfile(user.id, { quietHoursEnabled: false }, now);
+    const input: CreateTripInput = {
+      title: "LOS to LON to EBB to LOS",
+      brief: {
+        originAirports: ["LOS"],
+        destinationAirports: ["LOS"],
+        tripType: "multi_city",
+        departureWindow: { start: "2026-10-29", end: "2026-11-04" },
+        stayNights: null,
+        legs: [
+          {
+            originAirports: ["LOS"], destinationAirports: ["LON"],
+            departureWindow: { start: "2026-10-29", end: "2026-11-04" },
+            arriveBy: "2026-11-04"
+          },
+          {
+            originAirports: ["LON"], destinationAirports: ["EBB"],
+            departureWindow: { start: "2026-11-15", end: "2026-11-19" },
+            arriveBy: "2026-11-19"
+          },
+          {
+            originAirports: ["EBB"], destinationAirports: ["LOS"],
+            departureWindow: { start: "2026-12-04", end: "2026-12-10" },
+            arriveBy: "2026-12-10"
+          }
+        ],
+        travellers: { adults: 1, childrenAges: [], infants: 0 },
+        cabin: "economy",
+        maxStops: 2,
+        currency: "USD",
+        maximumPrice: null,
+        preferredAirlines: [],
+        excludedAirlines: [],
+        context: ""
+      }
+    };
+    const specs = buildSearchSpecs(input.brief);
+    expect(specs).toHaveLength(3);
+    const created = await store.createTrip(user.id, input, specs, now);
+    await store.startTripTracking(user.id, created.trip.id, created.trip.version, specs, now);
+    const search = vi.fn(async (request: Parameters<FlightSearchProvider["search"]>[0]) => {
+      const slice = request.slices[0]!;
+      const origin = slice.originAirports[0]!;
+      const destination = slice.destinationAirports[0]!;
+      const date = slice.departureStart;
+      return {
+        provider: "official_duffel" as const,
+        requestId: `request-${origin}-${destination}`,
+        discoveryResponseId: `request-${origin}-${destination}`,
+        verificationResponseId: `request-${origin}-${destination}`,
+        model: "duffel",
+        promptVersion: "test",
+        rejectionCounts: {},
+        offers: [{
+          itineraryKey: `flight-${origin}-${destination}-${date}`,
+          providerOfferId: `offer-${origin}-${destination}`,
+          priceAmount: "500.00",
+          currency: "USD",
+          fareBasis: "one_adult_total" as const,
+          cabin: "economy" as const,
+          slices: [{
+            origin,
+            destination,
+            departureDate: date,
+            segments: [{
+              marketingAirlineCode: "BA",
+              marketingAirline: "British Airways",
+              flightNumber: "BA100",
+              origin,
+              destination,
+              departure: `${date}T09:00:00+00:00`,
+              arrival: `${date}T15:00:00+00:00`
+            }]
+          }],
+          primaryAirlineCode: "BA",
+          participatingAirlineCodes: ["BA"],
+          evidence: [{ url: "https://ba.com/fare", title: "Verified fare", domain: "ba.com" }]
+        }]
+      };
+    });
+    const sentBodies: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url, init?: RequestInit) => {
+      sentBodies.push(String(init?.body ?? ""));
+      return new Response(
+        JSON.stringify({ ok: true, result: { message_id: sentBodies.length } }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }));
+    const worker = new FlightWorker({
+      store,
+      provider: { provider: "official_duffel", search } as FlightSearchProvider,
+      telegramBotToken: "test",
+      captainPublicUrl: "https://captain.example.com",
+      trackingEnabled: true,
+      workerId: "worker-1",
+      leaseMs: 240_000,
+      freshnessMs: 0,
+      claimLimit: 4
+    });
+
+    await expect(worker.tick(now)).resolves.toEqual({ scheduled: 3, processed: 3, notified: 2 });
+    expect(search).toHaveBeenCalledTimes(3);
+    expect(search.mock.calls.every(([request]) => request.slices.length === 1)).toBe(true);
+    const searchedDays = search.mock.calls.reduce((total, [request]) => {
+      const slice = request.slices[0]!;
+      return total + Math.round(
+        (Date.parse(`${slice.departureEnd}T00:00:00Z`) - Date.parse(`${slice.departureStart}T00:00:00Z`))
+        / 86_400_000
+      ) + 1;
+    }, 0);
+    expect(searchedDays).toBe(19);
+    expect(sentBodies.filter((body) => body.includes("I found flights for"))).toHaveLength(1);
+    const graph = await store.getTripGraph(user.id, created.trip.id);
+    const snapshots = await Promise.all(graph.legs.map((leg) =>
+      store.getLatestLegSearchSnapshot(user.id, created.trip.id, leg.id)
+    ));
+    expect(snapshots).toHaveLength(3);
+    expect(snapshots.every((snapshot) =>
+      snapshot?.status === "completed" && snapshot.analysis.optionsChecked === 1
+    )).toBe(true);
+    expect(await store.getRecommendation(user.id, created.trip.id)).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("does not retry a deterministic invalid request and tells the traveller it stopped", async () => {
+    const now = new Date("2026-08-01T12:00:00Z");
+    const store = new MemoryCaptainPlatformStore();
+    const user = await store.ensureTelegramUser({
+      telegramUserId: 8, telegramChatId: 8, username: null, firstName: "Ada", lastName: null
+    }, now);
+    await store.updateProfile(user.id, { quietHoursEnabled: false }, now);
+    const input: CreateTripInput = {
+      title: "Lagos to London",
+      brief: {
+        originAirports: ["LOS"], destinationAirports: ["LON"], tripType: "one_way",
+        departureWindow: { start: "2026-10-29", end: "2026-10-29" }, stayNights: null,
+        legs: [], travellers: { adults: 1, childrenAges: [], infants: 0 }, cabin: "economy",
+        maxStops: 2, currency: "USD", maximumPrice: null,
+        preferredAirlines: [], excludedAirlines: [], context: ""
+      }
+    };
+    const specs = buildSearchSpecs(input.brief);
+    const created = await store.createTrip(user.id, input, specs, now);
+    await store.startTripTracking(user.id, created.trip.id, created.trip.version, specs, now);
+    const search = vi.fn(async () => {
+      throw new FlightSearchProviderError(
+        "official_duffel",
+        "invalid_request",
+        "This request cannot succeed"
+      );
+    });
+    const sentBodies: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url, init?: RequestInit) => {
+      sentBodies.push(String(init?.body ?? ""));
+      return new Response(
+        JSON.stringify({ ok: true, result: { message_id: sentBodies.length } }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }));
+    const worker = new FlightWorker({
+      store,
+      provider: { provider: "official_duffel", search } as unknown as FlightSearchProvider,
+      telegramBotToken: "test",
+      captainPublicUrl: "https://captain.example.com",
+      trackingEnabled: true,
+      workerId: "worker-1",
+      leaseMs: 240_000,
+      freshnessMs: 0,
+      claimLimit: 4
+    });
+
+    await expect(worker.tick(now)).resolves.toEqual({ scheduled: 1, processed: 1, notified: 2 });
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(sentBodies.some((body) => body.includes("couldn’t complete the first flight check")))
+      .toBe(true);
+    await expect(store.getWatch(user.id, created.trip.id)).resolves.toMatchObject({
+      delayedAt: now.toISOString()
+    });
+    vi.unstubAllGlobals();
   });
 
   it("keeps a manual-search trip out of legacy empty-search processing", async () => {
