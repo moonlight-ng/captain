@@ -743,10 +743,9 @@ export function App() {
                   className="trip-title-link"
                   href={tripHref(trip.id, "settings")}
                   onClick={inPageLink(tripHref(trip.id, "settings"), navigate)}
-                  aria-label={`Edit trip name: ${trip.title}`}
+                  aria-label={`Open settings for ${trip.title}`}
                 >
                   {trip.title}
-                  <span aria-hidden="true">✎</span>
                 </a>
               </h1>
               <p className="trip-meta">
@@ -785,15 +784,14 @@ export function App() {
 
           <section className="workspace">
             {tab === "plan" && (
-              <div className={`plan-tab plan-review-card${trip.status === "draft" ? " pending" : ""}`}>
+              <div className="plan-tab plan-review-card">
                 <header className="plan-review-heading">
-                  <h2>Itinerary</h2>
+                  <h2 className="eyebrow">Itinerary</h2>
                   {trip.status === "draft" ? <span>Not confirmed</span> : null}
                 </header>
                 {multiCityShared ? (
                   <MultiCityPlanOverview
                     cities={multiCityShared.cities}
-                    legs={multiCityShared.legs}
                   />
                 ) : (
                   <section className="simple-plan" aria-label="Trip itinerary">

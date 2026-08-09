@@ -10,7 +10,13 @@ import type {
   TripCityLeg
 } from "../domain";
 import { dateLabel, dateRangeLabel, formatMoney } from "../format";
-import { bestOffer, groupFlightsByDate, priceDateStatus, tripDateSpan } from "../multi-city-view";
+import {
+  bestOffer,
+  groupFlightsByDate,
+  planTimelineItems,
+  priceDateStatus,
+  tripDateSpan
+} from "../multi-city-view";
 
 type SearchProgress = Record<string, LegSearchSnapshot>;
 
@@ -75,33 +81,29 @@ export function MultiCityTripOverview(props: SharedTripProps) {
 
 export function MultiCityPlanOverview({
   cities: unsortedCities
-}: Pick<SharedTripProps, "cities" | "legs">) {
-  const cities = sort(unsortedCities);
-  const events = cities.flatMap((city) => {
-    const cityEvents: Array<{
-      label: "Arrive" | "Leave";
-      window: NonNullable<TripCity["arrivalWindow"]>;
-    }> = [];
-    if (city.arrivalWindow) cityEvents.push({ label: "Arrive", window: city.arrivalWindow });
-    if (city.departureWindow) cityEvents.push({ label: "Leave", window: city.departureWindow });
-    return cityEvents.map((event) => ({ ...event, city }));
-  });
+}: Pick<SharedTripProps, "cities">) {
+  const items = planTimelineItems(unsortedCities);
 
   return (
     <section className="multi-city-page multi-city-tab-page plan-itinerary" aria-label="Trip itinerary">
       <ol className="plan-timeline">
-        {events.map(({ city, label: eventLabel, window }) => {
-          const date = planTimelineDate(window.start, window.end);
+        {items.map((item) => {
+          const start = item.kind === "flight" ? item.date : item.window.start;
+          const end = item.kind === "flight" ? item.date : item.window.end;
+          const date = planTimelineDate(start, end);
           return (
-            <li className="plan-timeline-event" key={`${city.id}-${eventLabel}`}>
-              <time dateTime={window.start}>
+            <li
+              className={`plan-timeline-event ${item.kind === "event" ? "is-between" : "is-flight"}`}
+              key={`${item.cityId}-${item.kind}`}
+            >
+              <time dateTime={start}>
                 <strong>{date.day}</strong>
                 <small>{date.year}</small>
               </time>
               <span className="plan-timeline-track" aria-hidden="true"><i /></span>
               <div className="plan-timeline-city">
-                <strong>{city.label}</strong>
-                <small>{eventLabel}</small>
+                <strong>{item.cityLabel}</strong>
+                <small>{item.kind === "flight" ? item.action : "Event"}</small>
               </div>
             </li>
           );
