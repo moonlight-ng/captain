@@ -237,32 +237,42 @@ describe("flight worker orchestration", () => {
     );
   });
 
-  it("reports the cheapest multi-city date combination", () => {
+  it("summarizes every multi-city leg before the full-trip fare range", () => {
     expect(notificationText({
       id: "multi", userId: "user", tripId: "trip", telegramChatId: 1,
       kind: "initial_results", attempts: 0, telegramMessageId: null,
       payload: {
-        tripTitle: "Chicago to London to Barcelona",
-        range: { count: 18, low: 901.41, high: 3_000, currency: "USD" },
+        tripTitle: "LON to NBO to EBB to LOS",
+        range: { count: 18, low: 2_061.8, high: 4_000, currency: "USD" },
         dateSummary: {
           currency: "USD",
+          tripType: "multi_city",
           combinations: [
-            { departureDates: ["2026-08-10", "2026-08-13"], low: 901.41, count: 3 },
-            { departureDates: ["2026-08-11", "2026-08-14"], low: 980, count: 3 }
+            { departureDates: ["2026-11-01", "2026-11-15", "2026-12-03"], low: 2_061.8, count: 3 },
+            { departureDates: ["2026-11-01", "2026-11-18", "2026-12-09"], low: 2_480.25, count: 3 }
           ],
           searchWindows: [
-            { start: "2026-08-10", end: "2026-08-12" },
-            { start: "2026-08-13", end: "2026-08-14" }
+            { start: "2026-11-01", end: "2026-11-01" },
+            { start: "2026-11-15", end: "2026-11-18" },
+            { start: "2026-12-03", end: "2026-12-09" }
           ],
-          searchedCombinationCount: 6,
-          cheapestDepartureDates: ["2026-08-10", "2026-08-13"],
-          cheapest: 901.41,
-          highestCombinationLow: 980
+          searchedCombinationCount: 28,
+          cheapestDepartureDates: ["2026-11-01", "2026-11-15", "2026-12-03"],
+          cheapest: 2_061.8,
+          highestCombinationLow: 2_480.25
         }
       }
-    })).toContain(
-      "Best fit for Chicago → London → Barcelona: leave 10 Aug, then 13 Aug. "
-      + "Combined from $901.41 after checking 6 date combinations."
+    })).toBe(
+      "I’ve checked your dates and found options for every leg.\n\n"
+      + "LON → NBO\n"
+      + "1 Nov\n\n"
+      + "NBO → EBB\n"
+      + "15–18 Nov\n\n"
+      + "EBB → LOS\n"
+      + "3–9 Dec\n\n"
+      + "Altogether, the trip is coming in at $2,061.80–$2,480.25.\n\n"
+      + "I checked 28 date combinations around your dates.\n\n"
+      + "Open your trip to compare the best flights for each leg."
     );
   });
 
