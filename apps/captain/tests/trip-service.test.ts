@@ -113,6 +113,7 @@ describe("Trip service", () => {
       expectedVersion: created.trip.version,
       title: "Nairobi wedding"
     });
+    await store.updateProfile(owner.id, { notificationMode: "off" }, now);
     expect(renamed).toMatchObject({ title: "Nairobi wedding", status: "draft", version: 2 });
     expect(await store.getWatch(owner.id, created.trip.id)).toBeNull();
 
@@ -126,6 +127,21 @@ describe("Trip service", () => {
       checksCompleted: 0,
       nextCheckAt: now.toISOString()
     });
+    await expect(store.listPendingNotifications(now, 10)).resolves.toEqual([
+      expect.objectContaining({
+        tripId: created.trip.id,
+        kind: "tracking_started",
+        payload: expect.objectContaining({
+          eventType: "trip_tracking_started",
+          tripVersion: 3
+        })
+      })
+    ]);
+    await service.action(owner.id, created.trip.id, {
+      type: "track",
+      expectedVersion: confirmed.version
+    });
+    await expect(store.listPendingNotifications(now, 10)).resolves.toHaveLength(1);
   });
 
   it("saves one active Trip without replacement and rejects a second", async () => {

@@ -772,7 +772,10 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     this.#trips.set(tripId, updated);
     this.#watches.set(watch.id, watch);
     this.#setSpecs(watch.id, specs);
-    this.#recordTripActivity(tripId, "trip_tracking_started", {}, now);
+    this.#recordTripActivity(tripId, "trip_tracking_started", {
+      tripVersion: updated.version
+    }, now);
+    this.#enqueueTrackingStartedNotification(updated, now);
     return clone({ trip: updated, watch });
   }
 
@@ -1702,6 +1705,34 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       createdAt: now.toISOString()
     });
     this.#tripActivity.set(tripId, activity.slice(0, 50));
+  }
+
+  #enqueueTrackingStartedNotification(trip: Trip, now: Date): boolean {
+    const user = [...this.#usersByTelegram.values()].find((item) => item.id === trip.userId);
+    if (!user) return false;
+    const dedupKey = `${trip.id}:tracking_started:${trip.version}`;
+    if ([...this.#notifications.values()].some((item) => item.dedupKey === dedupKey)) return false;
+    const id = randomUUID();
+    this.#notifications.set(id, {
+      id,
+      userId: trip.userId,
+      tripId: trip.id,
+      telegramChatId: user.telegramChatId,
+      kind: "tracking_started",
+      payload: {
+        eventType: "trip_tracking_started",
+        tripTitle: trip.title,
+        tripVersion: trip.version
+      },
+      attempts: 0,
+      telegramMessageId: null,
+      status: "pending",
+      availableAt: now.toISOString(),
+      createdAt: now.toISOString(),
+      dedupKey,
+      error: null
+    });
+    return true;
   }
 
   #watchesForSpec(specId: string): Watch[] {

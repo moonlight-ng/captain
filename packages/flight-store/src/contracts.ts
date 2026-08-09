@@ -131,6 +131,7 @@ export type CaptainNotification = {
   tripId: string;
   telegramChatId: number;
   kind:
+    | "tracking_started"
     | "initial_results"
     | "price_drop"
     | "new_best"

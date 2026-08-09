@@ -366,30 +366,117 @@ h2 { margin-bottom: 7px; font-size: var(--type-title); font-weight: var(--weight
   flex-direction: column;
   gap: 12px;
 }
+.plan-review-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .055), rgba(255, 255, 255, .025));
+}
+.plan-review-card.pending { border-color: rgba(190, 212, 179, .28); }
+.plan-review-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.plan-review-heading h2 {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: -.015em;
+}
+.plan-review-heading span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(190, 212, 179, .1);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+}
 .workspace .plan-editor {
   margin: 0;
 }
 .plan-itinerary { padding-bottom: 0; }
-.plan-itinerary .city-stop { padding-top: 0; padding-bottom: 2px; }
-.plan-itinerary .city-stop p { margin-top: 3px; line-height: 1.3; }
-.plan-itinerary .city-stop small { margin-top: 1px; }
-.plan-itinerary .trip-leg-rail span { padding: 1px 0; }
-.plan-leg-summary { min-height: 76px; }
-.plan-leg-summary .trip-leg-body { width: 100%; }
-.plan-leg-summary .trip-leg-body { margin: 4px 0 7px; padding: 10px 12px; border-radius: 13px; }
-.plan-leg-summary p {
-  margin: 5px 0 0;
-  color: var(--muted);
-  font-size: var(--type-caption);
-}
-.plan-actions {
+.plan-timeline {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  margin: 0;
+  padding: 2px 0 5px;
+  list-style: none;
+}
+.plan-timeline-event {
+  display: grid;
+  grid-template-columns: 82px 16px minmax(0, 1fr);
+  gap: 12px;
+  min-height: 72px;
+}
+.plan-timeline-event time,
+.plan-timeline-city {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 1px;
+}
+.plan-timeline-event time {
+  color: rgba(255, 255, 255, .76);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.plan-timeline-event time strong {
+  font-size: var(--type-body);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+.plan-timeline-event time small,
+.plan-timeline-city small {
+  color: var(--quiet);
+  font-size: var(--type-caption);
+  font-weight: var(--weight-medium);
+}
+.plan-timeline-track {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+.plan-timeline-track::after {
+  position: absolute;
+  top: 16px;
+  bottom: 0;
+  left: 50%;
+  border-left: 1px solid rgba(167, 196, 154, .22);
+  content: "";
+}
+.plan-timeline-event:last-child .plan-timeline-track::after { display: none; }
+.plan-timeline-track i {
+  position: relative;
+  z-index: 1;
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: #000;
+  box-shadow: 0 0 0 4px rgba(167, 196, 154, .07);
+}
+.plan-timeline-city strong {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: var(--weight-bold);
+  letter-spacing: -.02em;
+}
+.plan-timeline-city small { color: var(--muted); }
+.plan-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+  padding-top: 2px;
 }
 .plan-actions a,
 .plan-actions button {
+  display: flex;
+  width: 100%;
   min-height: 38px;
+  align-items: center;
+  justify-content: center;
   padding: 9px 14px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -399,17 +486,32 @@ h2 { margin-bottom: 7px; font-size: var(--type-title); font-weight: var(--weight
   font-weight: var(--weight-medium);
   text-decoration: none;
 }
-.plan-actions .primary { background: rgba(255,255,255,.11); color: var(--ink); }
+.plan-actions .primary {
+  border-color: rgba(190, 212, 179, .4);
+  background: var(--accent);
+  color: #0a0a0a;
+}
+.plan-actions > :only-child { grid-column: 1 / -1; }
 .simple-plan {
   display: flex;
+  flex-direction: column;
   justify-content: space-between;
-  gap: 16px;
-  padding: 16px;
+  gap: 7px;
+  padding: 17px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--panel);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, .32);
 }
-.simple-plan span { color: var(--muted); }
+.simple-plan strong {
+  font-size: 20px;
+  line-height: 1.25;
+  letter-spacing: -.02em;
+}
+.simple-plan time {
+  color: rgba(255, 255, 255, .72);
+  font-size: 14px;
+  line-height: 1.45;
+}
 .multi-city-editor {
   display: flex;
   flex-direction: column;

@@ -257,7 +257,9 @@ function TripControls({
   if (stage === "planning") {
     return (
       <div className="trip-controls">
-        <button className="primary" disabled={busy} onClick={() => void act("track")}>Confirm plan</button>
+        <button className="primary" disabled={busy} onClick={() => void act("track")}>
+          {busy ? "Now checking flights…" : "Confirm"}
+        </button>
         {stop}
       </div>
     );

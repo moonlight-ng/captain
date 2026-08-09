@@ -67,14 +67,11 @@ function formatDateWindow(window: { start: string; end: string }): string {
 
 export function formatTripCreationReceipt(receipt: TripCreationReceipt): string {
   return [
-    receipt.created
-      ? "Ok, here's what I have. Review or confirm to start exploring flights."
-      : "Ok, here's the trip I already have. Review or confirm to start exploring flights.",
+    "Itinerary ready to confirm.",
     "",
-    ...formatTripSummaryLines(receipt),
+    ...formatTripItineraryLines(receipt),
     "",
-    `Open trip: ${receipt.dashboardUrl}`,
-    receipt.accessHint
+    `Open trip: ${receipt.dashboardUrl}`
   ].join("\n");
 }
 
@@ -201,6 +198,41 @@ function formatTripSummaryLines(input: {
         ]
       : []),
     `• ${travellers}, ${label(input.cabin)}, ${stopLabel(input.maxStops)}, ${input.currency}`
+  ];
+}
+
+function formatTripItineraryLines(input: {
+  originAirports: string[];
+  destinationAirports: string[];
+  legs?: Array<{
+    originAirports: string[];
+    destinationAirports: string[];
+    departureDate: string;
+    departureWindow?: { start: string; end: string } | undefined;
+  }> | undefined;
+  departureDate: string;
+  returnDate: string | null;
+  stayNights: number | null;
+}): string[] {
+  const legs = input.legs ?? [];
+  const isMultiCity = legs.length >= 2;
+  return [
+    isMultiCity ? formatLegRoute(legs) : `${input.originAirports.join("/")} → ${input.destinationAirports.join("/")}`,
+    ...(isMultiCity
+      ? legs.map((leg, index) =>
+          `Leg ${index + 1} · ${leg.originAirports.join("/")} → ${leg.destinationAirports.join("/")} · ${
+            leg.departureWindow
+              ? formatDateWindow(leg.departureWindow)
+              : formatCalendarDate(leg.departureDate)
+          }`
+        )
+      : [`Depart · ${formatCalendarDate(input.departureDate)}`]),
+    ...(!isMultiCity && input.returnDate
+      ? [
+          `Return · ${formatCalendarDate(input.returnDate)}`,
+          `Stay · ${input.stayNights} night${input.stayNights === 1 ? "" : "s"}`
+        ]
+      : [])
   ];
 }
 

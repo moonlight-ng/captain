@@ -74,37 +74,39 @@ export function MultiCityTripOverview(props: SharedTripProps) {
 }
 
 export function MultiCityPlanOverview({
-  cities: unsortedCities,
-  legs: unsortedLegs
+  cities: unsortedCities
 }: Pick<SharedTripProps, "cities" | "legs">) {
   const cities = sort(unsortedCities);
-  const legs = sort(unsortedLegs);
-  const byId = new Map(cities.map((city) => [city.id, city]));
+  const events = cities.flatMap((city) => {
+    const cityEvents: Array<{
+      label: "Arrive" | "Leave";
+      window: NonNullable<TripCity["arrivalWindow"]>;
+    }> = [];
+    if (city.arrivalWindow) cityEvents.push({ label: "Arrive", window: city.arrivalWindow });
+    if (city.departureWindow) cityEvents.push({ label: "Leave", window: city.departureWindow });
+    return cityEvents.map((event) => ({ ...event, city }));
+  });
+
   return (
     <section className="multi-city-page multi-city-tab-page plan-itinerary" aria-label="Trip itinerary">
-      <div className="trip-route">
-        {cities.map((city, index) => {
-          const leg = legs.find((item) => item.originCityId === city.id) ?? legs[index];
-          const destination = leg ? byId.get(leg.destinationCityId) : undefined;
+      <ol className="plan-timeline">
+        {events.map(({ city, label: eventLabel, window }) => {
+          const date = planTimelineDate(window.start, window.end);
           return (
-            <div className="route-step" key={city.id}>
-              <CityStop city={city} />
-              {leg && destination ? (
-                <article className="trip-leg-card plan-leg-summary">
-                  <div className="trip-leg-rail" aria-hidden="true"><span>↓</span></div>
-                  <div className="trip-leg-body">
-                    <div className="trip-leg-topline">
-                      <span>{city.label} → {destination.label}</span>
-                      <small>{dateRangeLabel(leg.departureWindow.start, leg.departureWindow.end)}</small>
-                    </div>
-                    {leg.arriveBy ? <p>Arrive by {dateLabel(leg.arriveBy)}</p> : null}
-                  </div>
-                </article>
-              ) : null}
-            </div>
+            <li className="plan-timeline-event" key={`${city.id}-${eventLabel}`}>
+              <time dateTime={window.start}>
+                <strong>{date.day}</strong>
+                <small>{date.year}</small>
+              </time>
+              <span className="plan-timeline-track" aria-hidden="true"><i /></span>
+              <div className="plan-timeline-city">
+                <strong>{city.label}</strong>
+                <small>{eventLabel}</small>
+              </div>
+            </li>
           );
         })}
-      </div>
+      </ol>
     </section>
   );
 }
@@ -538,6 +540,27 @@ function cityTiming(city: TripCity): string[] {
       : `Leave ${dateRangeLabel(city.departureWindow.start, city.departureWindow.end)}`);
   }
   return timing;
+}
+
+function planTimelineDate(start: string, end: string): { day: string; year: string } {
+  const startDate = new Date(`${start}T12:00:00Z`);
+  const endDate = new Date(`${end}T12:00:00Z`);
+  const month = new Intl.DateTimeFormat("en", { month: "short", timeZone: "UTC" });
+  const day = new Intl.DateTimeFormat("en", { day: "numeric", timeZone: "UTC" });
+  const year = new Intl.DateTimeFormat("en", { year: "numeric", timeZone: "UTC" });
+  const startMonth = month.format(startDate);
+  const endMonth = month.format(endDate);
+  const startDay = day.format(startDate);
+  const endDay = day.format(endDate);
+  const startYear = year.format(startDate);
+  const endYear = year.format(endDate);
+
+  if (start === end) return { day: `${startMonth} ${startDay}`, year: startYear };
+  if (startYear !== endYear) {
+    return { day: `${startMonth} ${startDay}–${endMonth} ${endDay}`, year: `${startYear}–${endYear}` };
+  }
+  if (startMonth === endMonth) return { day: `${startMonth} ${startDay}–${endDay}`, year: startYear };
+  return { day: `${startMonth} ${startDay}–${endMonth} ${endDay}`, year: startYear };
 }
 
 function shortDay(date: string): string {

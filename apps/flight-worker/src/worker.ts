@@ -241,7 +241,8 @@ export class FlightWorker {
    */
   #notificationReplyMarkup(notification: CaptainNotification): {
     inline_keyboard: Array<Array<{ text: string; url?: string; callback_data?: string }>>;
-  } {
+  } | undefined {
+    if (notification.kind === "tracking_started") return undefined;
     return {
       inline_keyboard: [[{
         text: "Open trip",
@@ -271,6 +272,9 @@ export function notificationText(notification: CaptainNotification): string {
 function notificationDraftText(notification: CaptainNotification): string {
   const title = stringField(notification.payload, "tripTitle") || "your trip";
   const route = shortRoute(title);
+  if (notification.kind === "tracking_started") {
+    return "Plan confirmed. Now checking flights…";
+  }
   if (notification.kind === "initial_results") {
     return firstUpdateText(notification, route);
   }
