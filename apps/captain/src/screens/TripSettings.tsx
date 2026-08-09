@@ -1,11 +1,10 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 
-import { tripAction } from "../api";
+import { ApiError, tripAction, updateTripTitle } from "../api";
 import { TripPlanEditor } from "../components/TripPlanEditor";
 import type { TripPayload } from "../domain";
+import { feedPostsFromActivity } from "../feed-posts";
 import {
-  activityLabel,
-  dateRangeLabel,
   relativeTime,
   routeLabel,
   scheduleTime,
@@ -30,6 +29,7 @@ export function TripSettings({
   const trip = stopped ? null : tripData?.trip ?? null;
   const watch = stopped ? null : tripData?.watch ?? null;
   const stage = tripStage({ trip, watch });
+  const posts = feedPostsFromActivity(tripData?.activity ?? []);
 
   if (!trip || !tripData) {
     return (
@@ -46,11 +46,7 @@ export function TripSettings({
   return (
     <main className="settings-shell">
       <SettingsTopbar onBack={onBack} />
-      <section className="settings-intro">
-        <h1>{trip.title}</h1>
-        <p>{dateRangeLabel(trip.brief.departureWindow.start, trip.brief.departureWindow.end)}</p>
-      </section>
-
+      <TripNameCard key={`${trip.id}:${trip.version}:title`} trip={trip} onSaved={onTripChanged} />
       <TripPlanEditor key={`${trip.id}:${trip.version}`} trip={trip} onSaved={onTripChanged} />
       <TrackingCard
         data={tripData}
@@ -63,17 +59,17 @@ export function TripSettings({
       <details className="settings-card settings-disclosure">
         <summary>
           <span><strong>Activity</strong></span>
-          <em>{tripData.activity.length}</em>
+          <em>{posts.length}</em>
         </summary>
         <div className="settings-body">
-          {tripData.activity.length > 0 ? (
+          {posts.length > 0 ? (
             <div className="activity-list">
-              {tripData.activity.map((item) => (
+              {posts.map((item) => (
                 <article key={item.id}>
                   <i />
                   <span>
-                    <strong>{activityLabel(item.eventType)}</strong>
-                    <small>{timestampLabel(item.createdAt)}</small>
+                    <strong>{item.body}</strong>
+                    <small>{item.createdAt ? timestampLabel(item.createdAt) : ""}</small>
                   </span>
                 </article>
               ))}
@@ -82,6 +78,70 @@ export function TripSettings({
         </div>
       </details>
     </main>
+  );
+}
+
+function TripNameCard({
+  trip,
+  onSaved
+}: {
+  trip: NonNullable<TripPayload["trip"]>;
+  onSaved: () => Promise<void>;
+}) {
+  const [title, setTitle] = useState(trip.title);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
+  const dirty = title.trim() !== trip.title.trim();
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    const next = title.trim();
+    if (!next || busy) return;
+    if (next === trip.title.trim()) {
+      setSaved(true);
+      return;
+    }
+    setBusy(true);
+    setSaved(false);
+    setError("");
+    try {
+      await updateTripTitle(trip.id, trip.version, next);
+      setSaved(true);
+      await onSaved();
+    } catch (cause) {
+      setError(cause instanceof ApiError && cause.status === 409
+        ? "This trip changed elsewhere. Reload it from Telegram before editing."
+        : "Captain couldn’t rename this trip. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <details className="settings-card settings-disclosure" open>
+      <summary>
+        <span><strong>Trip name</strong></span>
+      </summary>
+      <div className="settings-body">
+        <form onSubmit={(event) => void save(event)}>
+          <input
+            value={title}
+            maxLength={120}
+            required
+            aria-label="Trip name"
+            onChange={(event) => {
+              setTitle(event.target.value);
+              setSaved(false);
+            }}
+          />
+          {error && <p className="form-error" role="alert">{error}</p>}
+          <button className="save-button" disabled={busy || !title.trim() || !dirty}>
+            {busy ? "Saving…" : saved ? "Saved" : "Save"}
+          </button>
+        </form>
+      </div>
+    </details>
   );
 }
 

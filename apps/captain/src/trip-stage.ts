@@ -81,3 +81,37 @@ export function isWatchSearching(
   if (watch.nextCheckAt && Date.parse(watch.nextCheckAt) <= Date.now() + 60_000) return true;
   return false;
 }
+
+/** When the current check started — for the live running-time status. */
+export function searchStartedAt(
+  watch: TripPayload["watch"] | null | undefined
+): string | null {
+  if (!watch || watch.status !== "active") return null;
+  if (
+    watch.lastManualRefreshAt
+    && (!watch.lastCheckAt || Date.parse(watch.lastManualRefreshAt) > Date.parse(watch.lastCheckAt))
+  ) {
+    return watch.lastManualRefreshAt;
+  }
+  if (!watch.lastCheckAt) {
+    return watch.activatedAt ?? watch.runStartedAt;
+  }
+  if (watch.nextCheckAt && Date.parse(watch.nextCheckAt) <= Date.now() + 60_000) {
+    return Date.parse(watch.nextCheckAt) <= Date.now()
+      ? watch.nextCheckAt
+      : new Date().toISOString();
+  }
+  return null;
+}
+
+/** Compact mm:ss (or h:mm:ss) elapsed clock for a live search. */
+export function formatElapsedClock(totalSeconds: number): string {
+  const total = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}

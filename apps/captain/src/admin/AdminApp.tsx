@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 
 import type {
   AdminConversationDetail,
@@ -7,9 +7,15 @@ import type {
   AdminCostRange,
   AdminCostReport,
   AdminOverview,
+  AdminTripDetail,
+  AdminTripFlight,
+  AdminTripPage,
+  AdminTripSummary,
 } from "@agents/flight-domain/admin";
 
-import { ChevronRightIcon, ConversationsIcon, CostsIcon, OverviewIcon } from "../components/icons";
+import { ChevronRightIcon, CloseIcon, ConversationsIcon, CostsIcon, OverviewIcon, SearchIcon, SettingsIcon, TripsIcon } from "../components/icons";
+import { feedPostsFromActivity } from "../feed-posts";
+import type { TripActivity } from "../domain";
 import { AdminApi, AdminApiError } from "./api";
 import { parseAdminRoute, type AdminRoute } from "./routing";
 import "./admin.css";
@@ -85,7 +91,16 @@ export function AdminApp() {
     window.scrollTo({ top: 0, behavior: "auto" });
   }, []);
 
-  if (state === "booting" || state === "checking") return <AdminGate title="Verifying access…" />;
+  if (state === "booting" || state === "checking") {
+    return (
+      <main className="admin-gate">
+        <section className="admin-login-card admin-login-status">
+          <Brand />
+          <p className="admin-gate-status" role="status">Verifying access…</p>
+        </section>
+      </main>
+    );
+  }
   if (state === "unconfigured") {
     return <AdminGate title="Admin access isn’t configured" body="Add the Supabase URL, publishable key, and administrator allowlist to the Captain service." />;
   }
@@ -101,6 +116,8 @@ export function AdminApp() {
       {route.page === "overview" && <OverviewPage api={api} navigate={navigate} />}
       {route.page === "conversations" && <ConversationsPage api={api} navigate={navigate} />}
       {route.page === "conversation" && <ConversationPage api={api} id={route.id} navigate={navigate} />}
+      {route.page === "trips" && <TripsPage api={api} navigate={navigate} />}
+      {route.page === "trip" && <TripPage api={api} id={route.id} navigate={navigate} />}
       {route.page === "costs" && <CostsPage api={api} navigate={navigate} />}
       {route.page === "settings" && <SettingsPage api={api} identity={identity} signOut={() => { clearAdminDataCache(); void api.signOut(); }} />}
     </AdminShell>
@@ -148,23 +165,21 @@ function AdminLogin({ api }: { api: AdminApi | null }) {
     <main className="admin-gate">
       <section className="admin-login-card" aria-labelledby="admin-login-title">
         <Brand />
-        <h1 id="admin-login-title">Sign in</h1>
-        <p className="admin-login-copy">Review Captain’s conversations and AI spend.</p>
+        <h1 id="admin-login-title">{sent ? "Check your inbox" : "Sign in"}</h1>
+        <p className="admin-login-copy" {...(sent ? { role: "status" } : {})}>
+          {sent
+            ? "If this address is authorized, a secure sign-in link is on its way."
+            : "Review Captain’s conversations and AI spend."}
+        </p>
         {sent ? (
-          <div className="admin-success" role="status">
-            <strong>Check your inbox</strong>
-            <span>If this address is authorized, a secure sign-in link is on its way.</span>
-            <button className="admin-text-button" onClick={() => setSent(false)}>Send another link</button>
-          </div>
+          <button className="admin-text-button" onClick={() => setSent(false)}>Send another link</button>
         ) : (
           <form onSubmit={submit} className="admin-login-form">
-            <label htmlFor="admin-email">Administrator email</label>
-            <input id="admin-email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" />
+            <input id="admin-email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" aria-label="Email" />
             {error && <p className="admin-form-error" role="alert">{error}</p>}
             <button className="admin-button admin-button-primary" disabled={!api || busy}>{busy ? "Sending…" : "Email me a sign-in link"}</button>
           </form>
         )}
-        <p className="admin-fine-print">Private access · no public signup</p>
       </section>
     </main>
   );
@@ -198,12 +213,13 @@ function AdminShell({ identity, route, navigate, children }: {
         <nav aria-label="Admin navigation">
           <NavButton active={route.page === "overview"} onClick={() => navigate("/admin")} label="Overview" icon={<OverviewIcon />} />
           <NavButton active={route.page === "conversations" || route.page === "conversation"} onClick={() => navigate("/admin/conversations")} label="Conversations" icon={<ConversationsIcon />} />
+          <NavButton active={route.page === "trips" || route.page === "trip"} onClick={() => navigate("/admin/trips")} label="Trips" icon={<TripsIcon />} />
           <NavButton active={route.page === "costs"} onClick={() => navigate("/admin/costs")} label="Costs" icon={<CostsIcon />} />
         </nav>
         <div className="admin-sidebar-footer">
-          <button className={`admin-profile admin-profile-link${route.page === "settings" ? " active" : ""}`} aria-current={route.page === "settings" ? "page" : undefined} title="Account settings" onClick={() => navigate("/admin/settings")}>
-            <span>{identity.email.slice(0, 1).toUpperCase()}</span><div><strong>{identity.email}</strong><small>Administrator</small></div>
-          </button>
+          <nav aria-label="Account">
+            <NavButton active={route.page === "settings"} onClick={() => navigate("/admin/settings")} label="Settings" icon={<SettingsIcon />} />
+          </nav>
         </div>
       </aside>
       <header className="admin-mobile-nav">
@@ -211,6 +227,7 @@ function AdminShell({ identity, route, navigate, children }: {
         <nav aria-label="Admin navigation">
           <button aria-current={route.page === "overview" ? "page" : undefined} onClick={() => navigate("/admin")}>Overview</button>
           <button aria-current={route.page === "conversations" || route.page === "conversation" ? "page" : undefined} onClick={() => navigate("/admin/conversations")}>Chats</button>
+          <button aria-current={route.page === "trips" || route.page === "trip" ? "page" : undefined} onClick={() => navigate("/admin/trips")}>Trips</button>
           <button aria-current={route.page === "costs" ? "page" : undefined} onClick={() => navigate("/admin/costs")}>Costs</button>
         </nav>
         <button className={`admin-mobile-profile${route.page === "settings" ? " active" : ""}`} aria-label="Account settings" aria-current={route.page === "settings" ? "page" : undefined} onClick={() => navigate("/admin/settings")}>{identity.email.slice(0, 1).toUpperCase()}</button>
@@ -231,12 +248,11 @@ function NavButton({ active, onClick, label, icon }: { active: boolean; onClick:
 function OverviewPage({ api, navigate }: { api: AdminApi; navigate: (path: string) => void }) {
   const { data, error, reload } = useRefreshing<AdminOverview>("overview", () => api.overview(), []);
   return (
-    <Page title="Overview" subtitle="Production Captain" action={<RefreshButton onClick={reload} />}>
+    <Page title="Overview" action={<RefreshButton onClick={reload} />}>
       {!data ? error ? <ErrorState onRetry={reload} /> : <Loading /> : <>
         <section className="admin-agent-card">
           <div className="admin-agent-identity"><div><h2>Captain</h2><p>Production · {data.agent.model}</p></div><div className="admin-status-line"><span className="admin-status-dot" /> Operational</div></div>
           <div className="admin-agent-facts"><Fact label="Environment" value="Production" /><Fact label="Active work" value={`${data.agent.activeTurns} turn${data.agent.activeTurns === 1 ? "" : "s"}`} /><Fact label="Last activity" value={data.agent.lastActivityAt ? relativeTime(data.agent.lastActivityAt) : "No tracked activity"} /><Fact label="Database" value={data.health.database === "available" ? "Connected" : "Local memory"} /></div>
-          <div className="admin-coverage"><span>Spend tracked</span><strong>Since {formatDateTime(data.trackingStartedAt)}</strong><small>Earlier spend is not included.</small></div>
         </section>
         <section className="admin-metrics" aria-label="Key metrics">
           <Metric label="Conversations" value={formatNumber(data.metrics.conversations)} note={`${formatNumber(data.metrics.users)} users`} />
@@ -283,8 +299,13 @@ function ConversationsPage({ api, navigate }: { api: AdminApi; navigate: (path: 
   useEffect(() => { void load(); }, [load]);
   const search = (event: FormEvent) => { event.preventDefault(); setQuery(queryInput.trim()); };
   return (
-    <Page title="Conversations" subtitle="Search users, usernames, or message text" action={<RefreshButton onClick={() => void load()} />}>
-      <form className="admin-search" onSubmit={search} role="search"><label htmlFor="conversation-search" className="sr-only">Search conversations</label><input id="conversation-search" value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="Search user ID, @username, name, or message…" /><button className="admin-button">Search</button>{query && <button type="button" className="admin-text-button" onClick={() => { setQueryInput(""); setQuery(""); }}>Clear</button>}</form>
+    <Page title="Conversations" action={<RefreshButton onClick={() => void load()} />}>
+      <form className="admin-omnibox" onSubmit={search} role="search">
+        <label htmlFor="conversation-search" className="sr-only">Search conversations</label>
+        <span className="admin-omnibox-icon" aria-hidden="true"><SearchIcon /></span>
+        <input id="conversation-search" value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="Search user ID, @username, name, or message…" autoComplete="off" spellCheck={false} enterKeyHint="search" />
+        {queryInput && <button type="button" className="admin-omnibox-clear" aria-label="Clear search" onClick={() => { setQueryInput(""); setQuery(""); }}><CloseIcon /></button>}
+      </form>
       {error && !page ? <ErrorState onRetry={() => void load()} /> : loading && !page ? <Loading /> : <>
         {query && <p className="admin-result-note">Results for “{query}”</p>}
         <ConversationTable conversations={page?.conversations ?? []} navigate={navigate} empty={query ? "No matching conversations." : "No conversations yet."} />
@@ -320,7 +341,7 @@ function ConversationPage({ api, id, navigate }: { api: AdminApi; id: string; na
   useEffect(() => { setDetail(readAdminCache(cacheKey)); void load(); }, [cacheKey, load]);
   const identity = detail ? conversationName(detail.conversation) : "Conversation";
   return (
-    <Page title={identity} subtitle={detail ? detail.conversation.userId : "Loading transcript"} action={<button className="admin-text-button" onClick={() => navigate("/admin/conversations")}>Back</button>}>
+    <Page title={identity} action={<button className="admin-text-button" onClick={() => navigate("/admin/conversations")}>Back</button>}>
       {error && !detail ? <ErrorState onRetry={() => void load()} /> : loading && !detail ? <Loading /> : detail && <div className="admin-detail-layout">
         <section className="admin-transcript" aria-label="Conversation transcript">
           <div className="admin-transcript-heading"><div><span>{detail.conversation.messageCount} messages</span><span>{formatUsd(detail.conversation.costUsd)} tracked spend</span></div><button className="admin-text-button" onClick={() => void load()} disabled={loading}>Reload</button></div>
@@ -328,12 +349,161 @@ function ConversationPage({ api, id, navigate }: { api: AdminApi; id: string; na
           {detail.messages.length === 0 ? <EmptyState text="No messages in this conversation." /> : <div className="admin-messages">{detail.messages.map((message) => <article key={message.id} className={`admin-message ${message.role}`}><header><strong>{message.role === "user" ? identity : "Captain"}</strong><time dateTime={message.createdAt}>{formatDateTime(message.createdAt)}</time></header><p>{message.content}</p></article>)}</div>}
         </section>
         <aside className="admin-detail-sidebar">
-          <DetailCard title="User"><Fact label="Internal ID" value={detail.conversation.userId} mono />{detail.conversation.identities.map((channel) => <Fact key={`${channel.channel}:${channel.username}`} label="Telegram" value={`${channel.displayName}${channel.username ? ` · @${channel.username}` : ""}`} />)}</DetailCard>
+          <DetailCard title="User">
+            <Fact label="Internal ID" value={shortId(detail.conversation.userId)} title={detail.conversation.userId} />
+            {detail.conversation.identities.map((channel) => (
+              <Fragment key={`${channel.channel}:${channel.username}`}>
+                <Fact label="Name" value={channel.displayName || "—"} />
+                {channel.username ? <Fact label="Username" value={`@${channel.username}`} /> : null}
+              </Fragment>
+            ))}
+          </DetailCard>
           <DetailCard title="Usage"><Fact label="Exact spend" value={formatUsd(detail.conversation.costUsd)} /><Fact label="Pending costs" value={String(detail.conversation.unresolvedCostCount)} /><Fact label="Sessions" value={String(detail.conversation.sessionCount)} /></DetailCard>
-          <DetailCard title="Recent sessions">{detail.sessions.length === 0 ? <p className="admin-card-empty">No tracked sessions.</p> : detail.sessions.map((session) => <div className="admin-session" key={session.sessionId}><span className={`admin-session-status ${session.status}`} /> <div><strong>{humanize(session.status)}</strong><small>{session.model} · {formatDateTime(session.lastEventAt)}</small>{session.failureCode && <small>Failure: {session.failureCode}</small>}</div></div>)}</DetailCard>
         </aside>
       </div>}
     </Page>
+  );
+}
+
+function TripsPage({ api, navigate }: { api: AdminApi; navigate: (path: string) => void }) {
+  const [queryInput, setQueryInput] = useState("");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState<AdminTripPage | null>(() => readAdminCache("trips:"));
+  const [error, setError] = useState<{ title: string; body: string } | null>(null);
+  const [loading, setLoading] = useState(() => !readAdminCache("trips:"));
+  const load = useCallback(async (cursor?: string, append = false) => {
+    const cacheKey = `trips:${query}`;
+    if (!cursor && !append) {
+      const cached = readAdminCache<AdminTripPage>(cacheKey);
+      setPage(cached);
+      setLoading(!cached);
+    } else setLoading(true);
+    setError(null);
+    try {
+      const next = await api.trips({
+        limit: 25,
+        ...(query ? { query } : {}),
+        ...(cursor ? { cursor } : {})
+      });
+      setPage((current) => {
+        const merged = append && current
+          ? { trips: [...current.trips, ...next.trips], nextCursor: next.nextCursor }
+          : next;
+        return writeAdminCache(cacheKey, merged);
+      });
+    } catch (caught) { setError(loadErrorCopy(caught)); }
+    finally { setLoading(false); }
+  }, [api, query]);
+  useEffect(() => { void load(); }, [load]);
+  return (
+    <Page title="Trips" action={<RefreshButton onClick={() => void load()} />}>
+      <form className="admin-omnibox" onSubmit={(event) => { event.preventDefault(); setQuery(queryInput.trim()); }}>
+        <label htmlFor="trip-search" className="sr-only">Search trips</label>
+        <span className="admin-omnibox-icon" aria-hidden="true"><SearchIcon /></span>
+        <input id="trip-search" value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="Search title, route, status, user ID, or @username…" autoComplete="off" spellCheck={false} enterKeyHint="search" />
+        {queryInput && <button type="button" className="admin-omnibox-clear" aria-label="Clear search" onClick={() => { setQueryInput(""); setQuery(""); }}><CloseIcon /></button>}
+      </form>
+      {error && !page ? <ErrorState onRetry={() => void load()} title={error.title} body={error.body} /> : loading && !page ? <Loading /> : <>
+        {query && <p className="admin-result-note">Results for “{query}”</p>}
+        <TripTable trips={page?.trips ?? []} navigate={navigate} empty={query ? "No matching trips." : "No trips yet."} />
+        {page?.nextCursor && <div className="admin-load-more"><button className="admin-button" disabled={loading} onClick={() => void load(page.nextCursor!, true)}>{loading ? "Loading…" : "Load more"}</button></div>}
+      </>}
+    </Page>
+  );
+}
+
+function TripPage({ api, id, navigate }: { api: AdminApi; id: string; navigate: (path: string) => void }) {
+  const cacheKey = `trip:${id}`;
+  const [detail, setDetail] = useState<AdminTripDetail | null>(() => readAdminCache(cacheKey));
+  const [error, setError] = useState<{ title: string; body: string } | null>(null);
+  const [loading, setLoading] = useState(() => !readAdminCache(cacheKey));
+  const load = useCallback(async () => {
+    const cached = readAdminCache<AdminTripDetail>(cacheKey);
+    setDetail(cached);
+    setLoading(!cached);
+    setError(null);
+    try {
+      setDetail(writeAdminCache(cacheKey, await api.trip(id)));
+    } catch (caught) { setError(loadErrorCopy(caught)); }
+    finally { setLoading(false); }
+  }, [api, cacheKey, id]);
+  useEffect(() => { setDetail(readAdminCache(cacheKey)); void load(); }, [cacheKey, load]);
+  const title = detail?.trip.title || detail?.trip.routeLabel || "Trip";
+  const posts = detail
+    ? feedPostsFromActivity(detail.activity as TripActivity[])
+    : [];
+  return (
+    <Page title={title} action={<button className="admin-text-button" onClick={() => navigate("/admin/trips")}>Back</button>}>
+      {error && !detail ? <ErrorState onRetry={() => void load()} title={error.title} body={error.body} /> : loading && !detail ? <Loading /> : detail && <div className="admin-detail-layout">
+        <div className="admin-trip-main">
+          <section className="admin-trip-panel" aria-label="Flights">
+            <div className="admin-trip-panel-heading">
+              <SectionHeader title="Flights" detail={`${detail.flights.length} selected`} />
+              <button className="admin-text-button" onClick={() => void load()} disabled={loading}>Reload</button>
+            </div>
+            {detail.flights.length === 0
+              ? <EmptyState text="No selected flights on this trip." />
+              : <div className="admin-flight-list">{detail.flights.map((flight) => <FlightRow key={flight.id} flight={flight} />)}</div>}
+          </section>
+          <section className="admin-trip-panel" aria-label="Agent actions">
+            <SectionHeader title="Agent actions" detail={`${posts.length} posts`} />
+            {posts.length === 0
+              ? <EmptyState text="No agent actions recorded for this trip." />
+              : <div className="admin-action-list">{posts.map((post) => (
+                <article key={post.id} className="admin-action-post">
+                  <header>
+                    <strong>{post.author === "traveller" ? "Traveller" : "Captain"}</strong>
+                    <span>
+                      {post.channel !== "system" ? `${post.channel} · ` : ""}
+                      {post.createdAt ? formatDateTime(post.createdAt) : "—"}
+                    </span>
+                  </header>
+                  <p>{post.body}</p>
+                </article>
+              ))}</div>}
+          </section>
+        </div>
+        <aside className="admin-detail-sidebar">
+          <DetailCard title="Trip">
+            <Fact label="Status" value={labelStatus(detail.trip.status)} />
+            <Fact label="Route" value={detail.trip.routeLabel} />
+            <Fact label="Title" value={detail.trip.title || "—"} />
+            <Fact label="Updated" value={formatDateTime(detail.trip.updatedAt)} />
+            <Fact label="Trip ID" value={shortId(detail.trip.tripId)} title={detail.trip.tripId} />
+          </DetailCard>
+          <DetailCard title="User">
+            <Fact label="Internal ID" value={shortId(detail.trip.userId)} title={detail.trip.userId} />
+            {detail.trip.identities.map((channel) => (
+              <Fragment key={`${channel.channel}:${channel.username}`}>
+                <Fact label="Name" value={channel.displayName || "—"} />
+                {channel.username ? <Fact label="Username" value={`@${channel.username}`} /> : null}
+              </Fragment>
+            ))}
+            {detail.trip.conversationId
+              ? <button className="admin-button admin-open-conversation" onClick={() => navigate(`/admin/conversations/${detail.trip.conversationId}`)}>Open conversation</button>
+              : <p className="admin-card-empty">No conversation linked.</p>}
+          </DetailCard>
+        </aside>
+      </div>}
+    </Page>
+  );
+}
+
+function FlightRow({ flight }: { flight: AdminTripFlight }) {
+  const price = flight.priceAmount && flight.currency
+    ? formatMoneyAmount(flight.priceAmount, flight.currency)
+    : null;
+  return (
+    <article className="admin-flight-row">
+      <div>
+        <strong>{flight.routeLabel}</strong>
+        <span>{flight.legLabel}{flight.airlineCode ? ` · ${flight.airlineCode}` : ""}{flight.selectedBy ? ` · ${flight.selectedBy}` : ""}</span>
+      </div>
+      <div>
+        <strong>{price ?? "—"}</strong>
+        <span>{flight.departureDate ? formatDate(flight.departureDate) : "Date unknown"}</span>
+      </div>
+    </article>
   );
 }
 
@@ -341,7 +511,7 @@ function CostsPage({ api, navigate }: { api: AdminApi; navigate: (path: string) 
   const [range, setRange] = useState<AdminCostRange>("30d");
   const { data, error, reload } = useRefreshing<AdminCostReport>(`costs:${range}`, () => api.costs(range), [range]);
   return (
-    <Page title="Costs" subtitle="Exact Gateway-reported AI usage" action={<RefreshButton onClick={reload} />}>
+    <Page title="Costs" action={<RefreshButton onClick={reload} />}>
       <div className="admin-range" role="group" aria-label="Cost reporting range">{(["7d", "30d", "all"] as AdminCostRange[]).map((value) => <button key={value} className={range === value ? "active" : ""} aria-pressed={range === value} onClick={() => setRange(value)}>{value === "all" ? "All tracked" : value.replace("d", " days")}</button>)}</div>
       {!data ? error ? <ErrorState onRetry={reload} /> : <Loading /> : <>
         {data.summary.unresolvedCostCount > 0 && <div className="admin-cost-notice" role="status"><strong>{data.summary.unresolvedCostCount} cost {data.summary.unresolvedCostCount === 1 ? "lookup is" : "lookups are"} pending.</strong><span>Exact totals exclude unresolved charges.</span></div>}
@@ -360,7 +530,7 @@ function CostsPage({ api, navigate }: { api: AdminApi; navigate: (path: string) 
 function SettingsPage({ api, identity, signOut }: { api: AdminApi; identity: Identity; signOut: () => void }) {
   const { data, error, reload } = useRefreshing<AdminOverview>("overview", () => api.overview(), []);
   return (
-    <Page title="Settings" subtitle="Admin account">
+    <Page title="Settings">
       <div className="admin-settings-stack">
         <section className="admin-settings-card">
           <div className="admin-settings-profile"><span>{identity.email.slice(0, 1).toUpperCase()}</span><div><strong>{identity.email}</strong><small>Administrator</small></div></div>
@@ -378,8 +548,8 @@ function SettingsPage({ api, identity, signOut }: { api: AdminApi; identity: Ide
   );
 }
 
-function Page({ title, subtitle, action, children }: { title: string; subtitle: string; action?: ReactNode; children: ReactNode }) {
-  return <><header className="admin-page-header"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</header><div className="admin-page-body">{children}</div></>;
+function Page({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+  return <><header className="admin-page-header"><h1>{title}</h1>{action}</header><div className="admin-page-body">{children}</div></>;
 }
 
 function SectionHeader({ title, detail, action }: { title: string; detail?: string; action?: ReactNode }) {
@@ -390,13 +560,36 @@ function Metric({ label, value, note }: { label: string; value: string; note: st
   return <div className="admin-metric"><span>{label}</span><strong>{value}</strong><small>{note}</small></div>;
 }
 
-function Fact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return <div className="admin-fact"><span>{label}</span><strong className={mono ? "mono" : ""}>{value}</strong></div>;
+function Fact({ label, value, title }: { label: string; value: string; title?: string }) {
+  return <div className="admin-fact"><span>{label}</span><strong title={title}>{value}</strong></div>;
 }
 
 function ConversationTable({ conversations, navigate, empty }: { conversations: AdminConversationSummary[]; navigate: (path: string) => void; empty: string }) {
   if (conversations.length === 0) return <EmptyState text={empty} />;
-  return <div className="admin-table"><div className="admin-table-head"><span>User</span><span>Latest message</span><span>Activity</span><span>Spend</span></div>{conversations.map((conversation) => <button className="admin-table-row" key={conversation.conversationId} onClick={() => navigate(`/admin/conversations/${conversation.conversationId}`)}><span className="admin-user-cell"><i>{conversationName(conversation).slice(0, 1).toUpperCase()}</i><span><strong>{conversationName(conversation)}</strong><small>{shortId(conversation.userId)} · {conversation.messageCount} messages</small></span></span><span className="admin-latest"><strong>{conversation.lastMessage?.role === "assistant" ? "Captain" : "User"}</strong> {conversation.lastMessage?.content ?? "No messages"}</span><span>{relativeTime(conversation.lastActivityAt)}</span><span className="admin-spend">{formatUsd(conversation.costUsd)}{conversation.unresolvedCostCount > 0 && <small>{conversation.unresolvedCostCount} pending</small>}</span></button>)}</div>;
+  return <div className="admin-table"><div className="admin-table-head"><span>User</span><span>Latest message</span><span>Activity</span><span>Spend</span></div>{conversations.map((conversation) => <button className="admin-table-row" key={conversation.conversationId} onClick={() => navigate(`/admin/conversations/${conversation.conversationId}`)}><span className="admin-user-cell"><i>{conversationName(conversation).slice(0, 1).toUpperCase()}</i><span><strong>{conversationName(conversation)}</strong></span></span><span className="admin-latest">{conversation.lastMessage?.content ?? "No messages"}</span><span>{relativeTime(conversation.lastActivityAt)}</span><span className="admin-spend">{formatUsd(conversation.costUsd)}{conversation.unresolvedCostCount > 0 && <small>{conversation.unresolvedCostCount} pending</small>}</span></button>)}</div>;
+}
+
+function TripTable({ trips, navigate, empty }: { trips: AdminTripSummary[]; navigate: (path: string) => void; empty: string }) {
+  if (trips.length === 0) return <EmptyState text={empty} />;
+  return (
+    <div className="admin-table admin-trip-table">
+      <div className="admin-table-head"><span>User</span><span>Trip</span><span>Status</span><span>Updated</span></div>
+      {trips.map((trip) => (
+        <button className="admin-table-row" key={trip.tripId} onClick={() => navigate(`/admin/trips/${trip.tripId}`)}>
+          <span className="admin-user-cell">
+            <i>{tripName(trip).slice(0, 1).toUpperCase()}</i>
+            <span><strong>{tripName(trip)}</strong></span>
+          </span>
+          <span className="admin-latest">
+            <strong>{trip.title || trip.routeLabel}</strong>
+            <small>{trip.routeLabel}{trip.flightCount > 0 ? ` · ${trip.flightCount} flight${trip.flightCount === 1 ? "" : "s"}` : ""}</small>
+          </span>
+          <span>{labelStatus(trip.status)}</span>
+          <span>{relativeTime(trip.updatedAt)}</span>
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function DetailCard({ title, children }: { title: string; children: ReactNode }) {
@@ -415,8 +608,38 @@ function Breakdown({ title, items, total }: { title: string; items: Array<{ key:
 
 function RefreshButton({ onClick }: { onClick: () => void }) { return <button className="admin-button" onClick={onClick}>Refresh</button>; }
 function Loading() { return <div className="admin-loading" role="status"><span />Loading production data…</div>; }
-function ErrorState({ onRetry }: { onRetry: () => void }) { return <div className="admin-empty" role="alert"><strong>Production data couldn’t be loaded.</strong><p>Your session may have expired.</p><button className="admin-button" onClick={onRetry}>Try again</button></div>; }
+function ErrorState({ onRetry, title, body }: { onRetry: () => void; title?: string; body?: string }) {
+  return (
+    <div className="admin-empty" role="alert">
+      <strong>{title ?? "Production data couldn’t be loaded."}</strong>
+      <p>{body ?? "Your session may have expired."}</p>
+      <button className="admin-button" onClick={onRetry}>Try again</button>
+    </div>
+  );
+}
 function EmptyState({ text }: { text: string }) { return <div className="admin-empty"><strong>{text}</strong><p>New activity appears here.</p></div>; }
+
+function loadErrorCopy(error: unknown): { title: string; body: string } {
+  if (error instanceof AdminApiError) {
+    if (error.status === 401) {
+      return { title: "Production data couldn’t be loaded.", body: "Your session may have expired." };
+    }
+    if (error.status === 403) {
+      return { title: "This account isn’t allowed.", body: "Your identity is valid, but it is not on Captain’s administrator allowlist." };
+    }
+    if (error.status === 404) {
+      return {
+        title: "Trips isn’t available on this Captain yet.",
+        body: "The admin Trips API isn’t deployed on the server your Vite proxy targets. Run a local Captain agent, or deploy these changes."
+      };
+    }
+    return {
+      title: "Production data couldn’t be loaded.",
+      body: `The server returned ${error.status}${error.code ? ` (${error.code})` : ""}.`
+    };
+  }
+  return { title: "Production data couldn’t be loaded.", body: "Your session may have expired." };
+}
 
 function useRefreshing<T>(cacheKey: string, loader: () => Promise<T>, dependencies: unknown[]) {
   const [data, setData] = useState<T | null>(() => readAdminCache(cacheKey));
@@ -451,8 +674,22 @@ function clearAuthFragment() {
 function conversationName(conversation: AdminConversationSummary): string {
   return conversation.identities[0]?.displayName || shortId(conversation.userId);
 }
+function tripName(trip: AdminTripSummary): string {
+  return trip.identities[0]?.displayName || shortId(trip.userId);
+}
+function labelStatus(value: string): string {
+  return value.replaceAll("_", " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
+}
+function formatMoneyAmount(amount: string, currency: string): string {
+  const parsed = Number(amount);
+  if (!Number.isFinite(parsed)) return `${currency} ${amount}`;
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(parsed);
+  } catch {
+    return `${currency} ${amount}`;
+  }
+}
 function shortId(value: string): string { return value.length > 15 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value; }
-function humanize(value: string): string { return value.replace(/[_-]+/gu, " ").replace(/^\w/u, (letter) => letter.toUpperCase()); }
 function formatUsd(value: number): string { return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", minimumFractionDigits: value < 1 ? 4 : 2, maximumFractionDigits: value < 1 ? 6 : 2 }).format(value); }
 function formatNumber(value: number): string { return new Intl.NumberFormat().format(value); }
 function formatCompact(value: number): string { return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value); }
@@ -460,9 +697,10 @@ function formatDateTime(value: string): string { return new Intl.DateTimeFormat(
 function formatDate(value: string): string { return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeZone: /^\d{4}-\d{2}-\d{2}$/u.test(value) ? "UTC" : undefined }).format(new Date(value)); }
 function shortDate(value: string): string { return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`)); }
 function relativeTime(value: string): string {
-  const seconds = Math.round((new Date(value).getTime() - Date.now()) / 1000);
-  const absolute = Math.abs(seconds);
-  const [amount, unit]: [number, Intl.RelativeTimeFormatUnit] = absolute < 60 ? [seconds, "second"] : absolute < 3_600 ? [Math.round(seconds / 60), "minute"] : absolute < 86_400 ? [Math.round(seconds / 3_600), "hour"] : [Math.round(seconds / 86_400), "day"];
-  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(amount, unit);
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3_600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86_400) return `${Math.round(seconds / 3_600)}h`;
+  return `${Math.round(seconds / 86_400)}d`;
 }
 function rangeLabel(range: AdminCostRange): string { return range === "all" ? "All tracked usage" : `Last ${range.replace("d", " days")}`; }

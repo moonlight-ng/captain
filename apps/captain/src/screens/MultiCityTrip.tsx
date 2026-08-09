@@ -1,22 +1,38 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode, type UIEvent } from "react";
 
-import { canonicalFlightHref, tripHref, tripLegHref } from "../api";
-import type {
-  CanonicalFlight,
-  FlightOfferSnapshot,
-  LegSearchSnapshot,
-  Trip,
-  TripCity,
-  TripCityLeg
+import { canonicalFlightHref, tripLegHref } from "../api";
+import { CaptainFeedPosts } from "../components/CaptainFeedPosts";
+import { AgentScheduleStatus, AgentScheduleChecks } from "../components/AgentScheduleStatus";
+import { ChevronRightIcon, FilterIcon } from "../components/icons";
+import {
+  EMPTY_BROWSE_PREFERENCES,
+  departurePeriod,
+  type BrowsePreferences,
+  type CanonicalFlight,
+  type FlightOfferSnapshot,
+  type LegSearchSnapshot,
+  type Recommendation,
+  type Trip,
+  type TripActivity,
+  type TripCity,
+  type TripCityLeg,
+  type Watch
 } from "../domain";
-import { dateLabel, dateRangeLabel, formatMoney } from "../format";
+import { activityFeedLine, feedPostsFromActivity, withFeedUpdateAction } from "../feed-posts";
+import {
+  countFilters,
+  dateLabel,
+  dateRangeLabel,
+  filterChips,
+  formatMoney,
+  sortLabel
+} from "../format";
 import {
   bestOffer,
-  groupFlightsByDate,
   planTimelineItems,
-  priceDateStatus,
   tripDateSpan
 } from "../multi-city-view";
+import { tripStage } from "../trip-stage";
 
 type SearchProgress = Record<string, LegSearchSnapshot>;
 
@@ -29,6 +45,12 @@ type SharedTripProps = {
   searchErrors: Record<string, string>;
   onSearch: (leg: TripCityLeg) => void;
   onNavigate: (href: string) => void;
+};
+
+type FeedTripProps = SharedTripProps & {
+  activity: TripActivity[];
+  recommendation: Recommendation | null;
+  watch: Watch | null;
 };
 
 export function MultiCityTripOverview(props: SharedTripProps) {
@@ -66,9 +88,7 @@ export function MultiCityTripOverview(props: SharedTripProps) {
                   snapshot={props.latestSearches[leg.id]}
                   progress={props.searchProgress[leg.id]}
                   error={props.searchErrors[leg.id]}
-                  onSearch={() => props.onSearch(leg)}
                   onOpen={() => props.onNavigate(tripLegHref(props.trip.id, leg.id))}
-                  onOpenFlight={(flightKey) => props.onNavigate(canonicalFlightHref(flightKey))}
                 />
               ) : null}
             </div>
@@ -76,6 +96,26 @@ export function MultiCityTripOverview(props: SharedTripProps) {
         })}
       </div>
     </section>
+  );
+}
+
+export function MultiCityPlanSummary({
+  cities: unsortedCities,
+  legs: unsortedLegs
+}: Pick<SharedTripProps, "cities" | "legs">) {
+  const cities = sort(unsortedCities);
+  const legs = sort(unsortedLegs);
+  const span = tripDateSpan(cities, legs);
+
+  return (
+    <header className="plan-summary">
+      <p>
+        {cities.length} {cities.length === 1 ? "city" : "cities"}
+        {" · "}
+        {legs.length} {legs.length === 1 ? "flight" : "flights"}
+      </p>
+      {span ? <p>{span}</p> : null}
+    </header>
   );
 }
 
@@ -98,13 +138,19 @@ export function MultiCityPlanOverview({
             >
               <time dateTime={start}>
                 <strong>{date.day}</strong>
-                <small>{date.year}</small>
+                {item.kind === "flight" ? <small>{date.year}</small> : null}
               </time>
               <span className="plan-timeline-track" aria-hidden="true"><i /></span>
-              <div className="plan-timeline-city">
-                <strong>{item.cityLabel}</strong>
-                <small>{item.kind === "flight" ? item.action : "Event"}</small>
-              </div>
+              {item.kind === "flight" ? (
+                <div className="plan-timeline-city">
+                  <strong>{item.cityLabel}</strong>
+                  <small>{item.action}</small>
+                </div>
+              ) : (
+                <div className="plan-timeline-city">
+                  <strong>Event</strong>
+                </div>
+              )}
             </li>
           );
         })}
@@ -113,10 +159,27 @@ export function MultiCityPlanOverview({
   );
 }
 
-export function MultiCityFlightsOverview(props: SharedTripProps) {
+export function MultiCityFlightsOverview(
+  props: SharedTripProps & {
+    onSelect: (leg: TripCityLeg, flightKey: string) => void;
+  }
+) {
   const cities = sort(props.cities);
   const legs = sort(props.legs);
   const byId = new Map(cities.map((city) => [city.id, city]));
+  const onlyLeg = legs.length === 1 ? legs[0] : undefined;
+
+  if (onlyLeg) {
+    return (
+      <TripLegResults
+        {...props}
+        legId={onlyLeg.id}
+        embedded
+        onSelect={props.onSelect}
+      />
+    );
+  }
+
   return (
     <section className="multi-city-page multi-city-tab-page">
       <div className="multi-city-flight-list">
@@ -133,9 +196,7 @@ export function MultiCityFlightsOverview(props: SharedTripProps) {
               snapshot={props.latestSearches[leg.id]}
               progress={props.searchProgress[leg.id]}
               error={props.searchErrors[leg.id]}
-              onSearch={() => props.onSearch(leg)}
               onOpen={() => props.onNavigate(tripLegHref(props.trip.id, leg.id))}
-              onOpenFlight={(flightKey) => props.onNavigate(canonicalFlightHref(flightKey))}
             />
           );
         })}
@@ -144,11 +205,11 @@ export function MultiCityFlightsOverview(props: SharedTripProps) {
   );
 }
 
-export function MultiCityWatchlist(props: SharedTripProps) {
+export function MultiCityFeed(props: FeedTripProps) {
   const cities = sort(props.cities);
   const legs = sort(props.legs);
   const byId = new Map(cities.map((city) => [city.id, city]));
-  const selected = legs.flatMap((leg) => {
+  const watching = legs.flatMap((leg) => {
     if (!leg.selectedFlightKey) return [];
     const snapshot = props.latestSearches[leg.id];
     const flight = snapshot?.flights.find((item) => item.key === leg.selectedFlightKey);
@@ -161,41 +222,148 @@ export function MultiCityWatchlist(props: SharedTripProps) {
       destination: byId.get(leg.destinationCityId)
     }];
   });
+  const recommendationFlight = props.recommendation
+    ? Object.values(props.latestSearches)
+      .flatMap((snapshot) => snapshot.flights)
+      .find((flight) => flight.key === props.recommendation!.itineraryKey)
+    : undefined;
+  const posts = withFeedUpdateAction(
+    feedPostsFromActivity(props.activity, (item) => feedActivityTitle(item, byId, legs)),
+    recommendationFlight
+      ? {
+        label: "Open flight",
+        onClick: () => props.onNavigate(canonicalFlightHref(recommendationFlight.key))
+      }
+      : undefined
+  );
+  const stage = tripStage({ trip: props.trip, watch: props.watch });
+  const empty = watching.length === 0
+    && posts.length === 0
+    && !props.recommendation;
+
   return (
     <section className="multi-city-page multi-city-tab-page">
-      {selected.length === 0 ? (
+      {empty ? (
         <div className="results-empty compact">
           <span>⌁</span>
-          <h2>No watched flights yet</h2>
-          <p>Open Flights and select an option to keep it here.</p>
+          <h2>No activity yet</h2>
+          <p>Select a flight on any leg to start watching it. Captain’s actions and recommendations land here.</p>
         </div>
       ) : (
-        <div className="multi-city-watchlist">
-          {selected.map(({ leg, flight, offer, origin, destination }) => (
-            <button
-              type="button"
-              className="recommendation-card selected"
-              key={leg.id}
-              onClick={() => props.onNavigate(canonicalFlightHref(flight.key))}
-            >
+        <div className="multi-city-feed">
+          {watching.length > 0 ? (
+            <WatchingFeed
+              items={watching}
+              onOpen={(flightKey) => props.onNavigate(canonicalFlightHref(flightKey))}
+            />
+          ) : null}
+
+          {props.watch && props.watch.status !== "completed" ? (
+            <div className="feed-checks watchlist-panel">
               <div className="card-top">
-                <span className="mode-label">{origin?.label ?? "Origin"} → {destination?.label ?? "Destination"}</span>
-                <span className="pill">Watching</span>
+                <h2>Agent schedule</h2>
+                <AgentScheduleStatus stage={stage} watch={props.watch} />
               </div>
-              <strong className="price">
-                {offer ? formatMoney(Number(offer.priceAmount), offer.currency) : "Fare unavailable"}
-              </strong>
-              <div className="metrics">
-                <span>{flight.primaryAirlineCode}</span>
-                <span>{flightSchedule(flight)}</span>
-                <span>{flight.stops === 0 ? "Nonstop" : `${flight.stops} stop${flight.stops === 1 ? "" : "s"}`}</span>
-              </div>
-              <small>{dateLabel(flight.departureDate)}</small>
-            </button>
-          ))}
+              <AgentScheduleChecks stage={stage} watch={props.watch} />
+            </div>
+          ) : null}
+
+          <CaptainFeedPosts posts={posts} />
         </div>
       )}
     </section>
+  );
+}
+
+function feedActivityTitle(
+  item: TripActivity,
+  cities: Map<string, TripCity>,
+  legs: TripCityLeg[]
+): string {
+  if (item.eventType === "trip_leg_flight_selected") {
+    const legId = typeof item.payload.legId === "string" ? item.payload.legId : null;
+    const leg = legId ? legs.find((candidate) => candidate.id === legId) : undefined;
+    if (leg) {
+      const origin = cities.get(leg.originCityId)?.label ?? "Origin";
+      const destination = cities.get(leg.destinationCityId)?.label ?? "Destination";
+      return `Started watching ${origin} → ${destination}.`;
+    }
+  }
+  return activityFeedLine(item.eventType);
+}
+
+type WatchingItem = {
+  leg: TripCityLeg;
+  flight: CanonicalFlight;
+  offer: FlightOfferSnapshot | null | undefined;
+  origin: TripCity | undefined;
+  destination: TripCity | undefined;
+};
+
+function WatchingFeed({
+  items,
+  onOpen
+}: {
+  items: WatchingItem[];
+  onOpen: (flightKey: string) => void;
+}) {
+  const carousel = items.length > 1;
+  const [active, setActive] = useState(0);
+
+  function onScroll(event: UIEvent<HTMLDivElement>) {
+    const track = event.currentTarget;
+    const width = track.clientWidth;
+    if (width <= 0) return;
+    setActive(Math.round(track.scrollLeft / width));
+  }
+
+  return (
+    <div className={`feed-watching${carousel ? " is-carousel" : ""}`}>
+      <div
+        className={carousel ? "feed-watching-track" : undefined}
+        role={carousel ? "region" : undefined}
+        aria-label={carousel ? "Watched flights" : "Watched flight"}
+        onScroll={carousel ? onScroll : undefined}
+      >
+        {items.map(({ leg, flight, offer, origin, destination }) => (
+          <button
+            type="button"
+            className="recommendation-card feed-watching-card"
+            key={leg.id}
+            onClick={() => onOpen(flight.key)}
+          >
+            <div className="card-top">
+              <span className="mode-label">
+                {origin?.label ?? "Origin"} → {destination?.label ?? "Destination"}
+              </span>
+              <span className="pill">Watching</span>
+            </div>
+            <strong className="price">
+              {offer ? formatMoney(Number(offer.priceAmount), offer.currency) : "Fare unavailable"}
+            </strong>
+            <div className="metrics">
+              <span>{flight.primaryAirlineCode}</span>
+              <span className="metrics-emphasis">{stopLabel(flight.stops)}</span>
+              <span className="metrics-emphasis">{dateLabel(flight.departureDate)}</span>
+            </div>
+            <div className="metrics">
+              <span>{flightSchedule(flight)}</span>
+            </div>
+          </button>
+        ))}
+      </div>
+      {carousel ? (
+        <div className="feed-watching-dots" role="tablist" aria-label="Watched flight pages">
+          {items.map((item, index) => (
+            <span
+              key={item.leg.id}
+              className={`feed-watching-dot${index === active ? " active" : ""}`}
+              aria-hidden="true"
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -220,9 +388,7 @@ function LegCard({
   snapshot,
   progress,
   error,
-  onSearch,
-  onOpen,
-  onOpenFlight
+  onOpen
 }: {
   leg: TripCityLeg;
   origin: TripCity;
@@ -230,83 +396,62 @@ function LegCard({
   snapshot?: LegSearchSnapshot | undefined;
   progress?: LegSearchSnapshot | undefined;
   error?: string | undefined;
-  onSearch: () => void;
   onOpen: () => void;
-  onOpenFlight: (flightKey: string) => void;
 }) {
   const active = progress?.status === "queued" || progress?.status === "running";
   const result = snapshot ?? (progress && !active ? progress : undefined);
   const selected = leg.selectedFlightKey
     ? result?.flights.find((flight) => flight.key === leg.selectedFlightKey)
     : undefined;
-  const best = result?.analysis.cheapest ?? null;
-  const progressAnalysis = progress?.analysis;
+  const offer = selected ? bestOffer(selected.key, result?.offers ?? []) : null;
+  const placeholder = active ? "Looking for flights…" : "Browse flights";
+  const flightDate = selected?.departureDate ?? (
+    leg.departureWindow.start === leg.departureWindow.end
+      ? leg.departureWindow.start
+      : null
+  );
 
   return (
     <article className="trip-leg-card">
-      <div className="trip-leg-rail" aria-hidden="true"><span>↓</span></div>
+      <div className="trip-leg-rail" aria-hidden="true"><i /></div>
       <div className="trip-leg-body">
         <div className="trip-leg-topline">
           <span>{origin.label} → {destination.label}</span>
-          <small>{dateRangeLabel(leg.departureWindow.start, leg.departureWindow.end)}</small>
+          {flightDate ? <small>{dateLabel(flightDate)}</small> : null}
         </div>
 
-        {active && progressAnalysis ? (
-          <div className="leg-progress" role="status">
-            <span
-              style={{
-                width: `${Math.round(
-                  progressAnalysis.datesCompleted.length
-                  / Math.max(1, progressAnalysis.datesRequested.length) * 100
-                )}%`
-              }}
-            />
-            <p>
-              {progressAnalysis.datesCompleted.length} of {progressAnalysis.datesRequested.length} dates checked
-            </p>
-          </div>
-        ) : null}
-
-        {selected ? (
-          <button
-            type="button"
-            className="leg-best leg-selected"
-            onClick={() => onOpenFlight(selected.key)}
-          >
-            <span>Selected flight</span>
-            <strong>{flightSchedule(selected)}</strong>
-          </button>
-        ) : best && result ? (
-          <button type="button" className="leg-best" onClick={onOpen}>
-            <span>{result?.analysis.complete ? "Lowest in range" : "Lowest found"}</span>
-            <strong>{formatMoney(Number(best.priceAmount), best.currency)}</strong>
-            <small>{flightPickSchedule(best.flightKey, result)}</small>
-          </button>
-        ) : (
-          <p className="leg-empty-copy">
-            {active ? "Looking across your date range…" : "Preparing flight options…"}
-          </p>
-        )}
+        <button
+          type="button"
+          className={`leg-pick${selected ? " is-set" : " is-empty"}`}
+          onClick={onOpen}
+        >
+          {selected ? (
+            <>
+              <span>Selected</span>
+              <strong>{flightSchedule(selected)}</strong>
+              <small>
+                {selected.primaryAirlineCode}
+                {" · "}
+                {stopLabel(selected.stops)}
+                {offer ? ` · ${formatMoney(Number(offer.priceAmount), offer.currency)}` : ""}
+              </small>
+            </>
+          ) : (
+            <span className="leg-pick-placeholder">{placeholder}</span>
+          )}
+        </button>
 
         {result ? (
           <p className="leg-coverage">
-            {result.analysis.datesCompleted.length} of {result.analysis.datesRequested.length} dates
-            {" · "}{result.analysis.optionsChecked} verified options
+            {result.analysis.optionsChecked} verified option{result.analysis.optionsChecked === 1 ? "" : "s"}
             {result.analysis.observedAt ? ` · ${observedLabel(result.analysis.observedAt)}` : ""}
+          </p>
+        ) : active && progress?.analysis ? (
+          <p className="leg-coverage">
+            {progress.analysis.optionsChecked} verified option{progress.analysis.optionsChecked === 1 ? "" : "s"} so far
           </p>
         ) : null}
         {error ? <p className="leg-inline-error">{error}</p> : null}
-
-        <div className="leg-actions">
-          {result || error ? (
-            <button type="button" disabled={active} onClick={onSearch}>
-              {active ? "Refreshing…" : error ? "Try again" : "Refresh"}
-            </button>
-          ) : null}
-          {result && result.flights.length > 0 ? (
-            <button type="button" className="primary" onClick={onOpen}>View all options</button>
-          ) : null}
-        </div>
       </div>
     </article>
   );
@@ -315,13 +460,16 @@ function LegCard({
 export function TripLegResults({
   legId,
   onSelect,
+  embedded = false,
   ...props
 }: SharedTripProps & {
   legId: string;
   onSelect: (leg: TripCityLeg, flightKey: string) => void;
+  embedded?: boolean;
 }) {
-  const [sortMode, setSortMode] = useState<"recommended" | "price" | "duration" | "departure">("recommended");
-  const [stopFilter, setStopFilter] = useState<"all" | "nonstop" | "one_stop">("all");
+  const [preferences, setPreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
+  const [draftPreferences, setDraftPreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const leg = props.legs.find((item) => item.id === legId);
   const origin = leg && props.cities.find((city) => city.id === leg.originCityId);
   const destination = leg && props.cities.find((city) => city.id === leg.destinationCityId);
@@ -329,25 +477,33 @@ export function TripLegResults({
   const progress = leg ? props.searchProgress[leg.id] : undefined;
   const displaySnapshot = snapshot ?? (progress && !isSearching(progress) ? progress : undefined);
   const flights = useMemo(
-    () => sortFlights(
-      (displaySnapshot?.flights ?? []).filter((flight) => {
-        if (stopFilter === "nonstop") return flight.stops === 0;
-        if (stopFilter === "one_stop") return flight.stops <= 1;
-        return true;
-      }),
-      displaySnapshot,
-      sortMode
-    ),
-    [displaySnapshot, sortMode, stopFilter]
+    () => sortAndFilterLegFlights(displaySnapshot?.flights ?? [], displaySnapshot, preferences),
+    [displaySnapshot, preferences]
   );
-  const grouped = groupFlightsByDate(flights);
+  const activeFilters = countFilters(preferences);
 
   if (!leg || !origin || !destination) {
     return (
       <section className="multi-city-page leg-results-page">
-        <button type="button" className="back-link" onClick={() => props.onNavigate(tripHref(props.trip.id))}>Back</button>
         <div className="results-empty compact"><h2>Flight leg unavailable</h2><p>This leg is no longer part of the trip.</p></div>
       </section>
+    );
+  }
+
+  if (filtersOpen) {
+    return (
+      <TripLegFiltersPage
+        preferences={draftPreferences}
+        flights={displaySnapshot?.flights ?? []}
+        snapshot={displaySnapshot}
+        onPreferences={setDraftPreferences}
+        onBack={() => setFiltersOpen(false)}
+        onApply={() => {
+          setPreferences(draftPreferences);
+          setFiltersOpen(false);
+        }}
+        onReset={() => setDraftPreferences(EMPTY_BROWSE_PREFERENCES)}
+      />
     );
   }
 
@@ -356,17 +512,32 @@ export function TripLegResults({
   const expired = displaySnapshot?.offers.some(
     (offer) => offer.expiresAt !== null && Date.parse(offer.expiresAt) <= Date.now()
   ) ?? false;
+  const refresh = () => props.onSearch(leg);
 
   return (
-    <section className="multi-city-page leg-results-page">
+    <section className={`multi-city-page leg-results-page${embedded ? " is-embedded" : ""}`}>
       <header className="leg-results-heading">
-        <button type="button" className="back-link" onClick={() => props.onNavigate(tripHref(props.trip.id))}>Back</button>
-        <p className="eyebrow">Flight {leg.position + 1} of {props.legs.length}</p>
-        <h1>{origin.label} → {destination.label}</h1>
+        {!embedded || active ? (
+          <div className="leg-results-heading-top">
+            {!embedded ? <p className="eyebrow">Flight {leg.position + 1} of {props.legs.length}</p> : <span />}
+            {embedded && active ? (
+              <p className="leg-results-status" role="status">
+                {progress && progress.analysis.datesRequested.length > 0
+                  ? `Checking ${progress.analysis.datesCompleted.length}/${progress.analysis.datesRequested.length}`
+                  : "Updating…"}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="leg-results-title-row">
+          <h1>{origin.label} → {destination.label}</h1>
+          {displaySnapshot ? (
+            <span>{flights.length} option{flights.length === 1 ? "" : "s"}</span>
+          ) : null}
+        </div>
         <p>{dateRangeLabel(leg.departureWindow.start, leg.departureWindow.end)}</p>
       </header>
 
-      {active && progress ? <SearchCoverage snapshot={progress} /> : null}
       {partial && displaySnapshot ? (
         <div className="leg-notice">
           <strong>Partial results.</strong> {displaySnapshot.analysis.datesCompleted.length} of {displaySnapshot.analysis.datesRequested.length} dates completed, so this is the lowest fare found—not necessarily the lowest in the full range.
@@ -377,108 +548,218 @@ export function TripLegResults({
 
       {displaySnapshot ? (
         <>
-          <PriceByDate snapshot={displaySnapshot} />
-          <div className="leg-result-tools">
-            <label>
-              <span>Sort</span>
-              <select value={sortMode} onChange={(event) => setSortMode(event.target.value as typeof sortMode)}>
-                <option value="recommended">Captain’s pick</option>
-                <option value="price">Lowest price</option>
-                <option value="duration">Shortest</option>
-                <option value="departure">Earliest</option>
-              </select>
-            </label>
-            <label>
-              <span>Stops</span>
-              <select value={stopFilter} onChange={(event) => setStopFilter(event.target.value as typeof stopFilter)}>
-                <option value="all">Any</option>
-                <option value="nonstop">Nonstop</option>
-                <option value="one_stop">Up to 1 stop</option>
-              </select>
-            </label>
-            <button type="button" disabled={active} onClick={() => props.onSearch(leg)}>
-              {active ? "Searching…" : "Search again"}
+          <div className="browse-toolbar">
+            <button
+              type="button"
+              className={`sort-filter-button${activeFilters ? " active" : ""}`}
+              onClick={() => {
+                setDraftPreferences(preferences);
+                setFiltersOpen(true);
+              }}
+            >
+              <span className="sort-filter-title">
+                <FilterIcon />
+                <strong>Sort &amp; filter</strong>
+              </span>
+              <span className="sort-filter-summary">
+                <span>{sortLabel(preferences.sort)}</span>
+                {activeFilters > 0 ? <b>{activeFilters}</b> : null}
+                <ChevronRightIcon />
+              </span>
             </button>
           </div>
+          {activeFilters > 0 ? (
+            <div className="active-filter-row" aria-label="Active filters">
+              {filterChips(preferences).map((chip) => <span key={chip}>{chip}</span>)}
+              <button type="button" onClick={() => setPreferences(EMPTY_BROWSE_PREFERENCES)}>Clear all</button>
+            </div>
+          ) : null}
 
           {flights.length === 0 ? (
-            <div className="results-empty compact"><h2>No matching flights</h2><p>Adjust the stops filter or search again.</p></div>
+            <div className="results-empty compact">
+              <h2>No matching flights</h2>
+              <p>
+                {displaySnapshot.flights.length === 0
+                  ? "No verified options yet for this date range."
+                  : "Adjust filters or refresh to check again."}
+              </p>
+              <button type="button" disabled={active} onClick={refresh}>
+                {active ? "Refreshing…" : "Refresh"}
+              </button>
+            </div>
           ) : (
-            <div className="dated-flight-groups">
-              {grouped.map(([date, items]) => (
-                <section key={date} className="dated-flight-group">
-                  <h2>{dateLabel(date)} <span>{items.length} option{items.length === 1 ? "" : "s"}</span></h2>
-                  <div className="leg-flight-list">
-                    {items.map((flight) => (
-                      <LegFlightCard
-                        key={flight.key}
-                        flight={flight}
-                        offer={bestOffer(flight.key, displaySnapshot.offers)}
-                        snapshot={displaySnapshot}
-                        selected={leg.selectedFlightKey === flight.key}
-                        onOpen={() => props.onNavigate(canonicalFlightHref(flight.key))}
-                        onSelect={() => onSelect(leg, flight.key)}
-                      />
-                    ))}
-                  </div>
-                </section>
+            <div className="leg-flight-list">
+              {flights.map((flight) => (
+                <LegFlightCard
+                  key={flight.key}
+                  flight={flight}
+                  offer={bestOffer(flight.key, displaySnapshot.offers)}
+                  snapshot={displaySnapshot}
+                  selected={leg.selectedFlightKey === flight.key}
+                  onOpen={() => props.onNavigate(canonicalFlightHref(flight.key))}
+                  onSelect={() => onSelect(leg, flight.key)}
+                />
               ))}
             </div>
           )}
         </>
-      ) : (
+      ) : active ? null : (
         <div className="results-empty leg-search-empty">
-          <h2>Search this date range</h2>
-          <p>Captain will check each day from {dateRangeLabel(leg.departureWindow.start, leg.departureWindow.end)} and compare verified flights.</p>
-          <button className="primary" type="button" disabled={active} onClick={() => props.onSearch(leg)}>
-            {active ? "Searching…" : "Search flights"}
-          </button>
+          <h2>No flights found</h2>
+          <p>Search again to check current options for this leg.</p>
+          <button type="button" onClick={refresh}>Refresh</button>
         </div>
       )}
     </section>
   );
 }
 
-function SearchCoverage({ snapshot }: { snapshot: LegSearchSnapshot }) {
-  const { datesCompleted, datesRequested, optionsChecked } = snapshot.analysis;
+function TripLegFiltersPage({
+  preferences,
+  flights,
+  snapshot,
+  onPreferences,
+  onBack,
+  onApply,
+  onReset
+}: {
+  preferences: BrowsePreferences;
+  flights: CanonicalFlight[];
+  snapshot: LegSearchSnapshot | undefined;
+  onPreferences: (value: BrowsePreferences | ((current: BrowsePreferences) => BrowsePreferences)) => void;
+  onBack: () => void;
+  onApply: () => void;
+  onReset: () => void;
+}) {
+  const matches = sortAndFilterLegFlights(flights, snapshot, preferences).length;
+  const airlines = [...new Set(flights.map((flight) => flight.primaryAirlineCode))].sort();
+  const airports = [...new Set(flights.flatMap(flightAirports))].sort();
+  const hasDepartures = flights.some((flight) => flight.segments[0]?.departure);
+  function update<Key extends keyof BrowsePreferences>(key: Key, value: BrowsePreferences[Key]) {
+    onPreferences((current) => ({ ...current, [key]: value }));
+  }
+
   return (
-    <div className="leg-search-progress" role="status">
-      <div><span style={{ width: `${datesCompleted.length / Math.max(1, datesRequested.length) * 100}%` }} /></div>
-      <p>Checking {datesCompleted.length} of {datesRequested.length} dates · {optionsChecked} verified options so far</p>
-    </div>
+    <section className="leg-filters-page" aria-label="Sort and filter flights">
+      <header className="topbar leg-filters-topbar">
+        <button type="button" className="back-link" onClick={onBack}>← Results</button>
+        <span className="name">Sort &amp; filter</span>
+      </header>
+      <div className="leg-filters-scroll">
+        <FilterGroup label="Sort">
+          <select
+            value={preferences.sort}
+            onChange={(event) => update("sort", event.target.value as BrowsePreferences["sort"])}
+          >
+            <option value="recommended">Captain’s pick</option>
+            <option value="price">Lowest price</option>
+            <option value="duration">Shortest duration</option>
+            <option value="departure">Earliest departure</option>
+          </select>
+        </FilterGroup>
+        <FilterGroup label="Stops">
+          <div className="filter-choice-row">
+            {[0, 1, 2].map((stops) => (
+              <button
+                type="button"
+                className={preferences.stops.includes(stops) ? "selected" : ""}
+                key={stops}
+                onClick={() => update("stops", toggle(preferences.stops, stops))}
+              >
+                {stops === 0 ? "Direct" : `${stops} stop${stops === 1 ? "" : "s"}`}
+              </button>
+            ))}
+          </div>
+        </FilterGroup>
+        {airlines.length > 0 ? (
+          <FilterGroup label="Airlines">
+            <div className="filter-choice-row wrap">
+              {airlines.map((airline) => (
+                <button
+                  type="button"
+                  className={preferences.airlines.includes(airline) ? "selected" : ""}
+                  key={airline}
+                  onClick={() => update("airlines", toggle(preferences.airlines, airline))}
+                >
+                  {airlineLabel(airline, flights)}
+                </button>
+              ))}
+            </div>
+          </FilterGroup>
+        ) : null}
+        {airports.length > 0 ? (
+          <FilterGroup label="Airports">
+            <div className="filter-choice-row wrap">
+              {airports.map((airport) => (
+                <button
+                  type="button"
+                  className={preferences.airports.includes(airport) ? "selected" : ""}
+                  key={airport}
+                  onClick={() => update("airports", toggle(preferences.airports, airport))}
+                >
+                  {airport}
+                </button>
+              ))}
+            </div>
+          </FilterGroup>
+        ) : null}
+        {hasDepartures ? (
+          <FilterGroup label="Departure">
+            <div className="filter-choice-row">
+              {(["morning", "afternoon", "evening"] as const).map((period) => (
+                <button
+                  type="button"
+                  className={preferences.departurePeriods.includes(period) ? "selected" : ""}
+                  key={period}
+                  onClick={() => update("departurePeriods", toggle(preferences.departurePeriods, period))}
+                >
+                  {period[0]!.toUpperCase() + period.slice(1)}
+                </button>
+              ))}
+            </div>
+          </FilterGroup>
+        ) : null}
+        <FilterGroup label="Maximum price">
+          <input
+            className="sheet-input"
+            type="number"
+            min={1}
+            value={preferences.maximumPrice ?? ""}
+            placeholder="No maximum"
+            onChange={(event) => update(
+              "maximumPrice",
+              event.target.value ? Number(event.target.value) : null
+            )}
+          />
+        </FilterGroup>
+      </div>
+      <footer className="leg-filters-footer">
+        <button type="button" className="secondary-action" onClick={onReset}>Reset</button>
+        <button type="button" className="primary-action" onClick={onApply}>
+          Show {matches}
+        </button>
+      </footer>
+    </section>
   );
 }
 
-function PriceByDate({ snapshot }: { snapshot: LegSearchSnapshot }) {
-  const byDate = new Map(snapshot.analysis.cheapestByDate.map((pick) => [pick.departureDate, pick]));
-  return (
-    <section className="price-by-date" aria-labelledby="price-by-date-title">
-      <div className="section-title-row">
-        <h2 id="price-by-date-title">Price by date</h2>
-        {snapshot.analysis.observedAt ? <span>{observedLabel(snapshot.analysis.observedAt)}</span> : null}
-      </div>
-      <div className="price-date-strip">
-        {snapshot.analysis.datesRequested.map((date) => {
-          const pick = byDate.get(date);
-          const status = priceDateStatus(
-            date,
-            snapshot.analysis.datesCompleted,
-            snapshot.analysis.failedDates
-          );
-          return (
-            <div className={`price-date${pick ? " has-price" : ""}`} key={date}>
-              <span>{shortDay(date)}</span>
-              <strong>
-                {pick
-                  ? formatMoney(Number(pick.priceAmount), pick.currency)
-                  : status}
-              </strong>
-            </div>
-          );
-        })}
-      </div>
-    </section>
+function FilterGroup({ label, children }: { label: string; children: ReactNode }) {
+  return <div className="filter-group"><strong>{label}</strong>{children}</div>;
+}
+
+function toggle<T>(values: readonly T[], value: T): T[] {
+  return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
+}
+
+function flightAirports(flight: CanonicalFlight): string[] {
+  return [...new Set(flight.segments.flatMap((segment) => [segment.origin, segment.destination]))];
+}
+
+function airlineLabel(code: string, flights: CanonicalFlight[]): string {
+  const named = flights.find((flight) =>
+    flight.primaryAirlineCode === code && flight.segments[0]?.marketingAirline.trim()
   );
+  return named?.segments[0]?.marketingAirline.trim() || code;
 }
 
 function LegFlightCard({
@@ -515,7 +796,7 @@ function LegFlightCard({
         {tags.length > 0 ? <div className="flight-tags">{tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
       </button>
       <button type="button" className="select-flight" disabled={selected || !offer} onClick={onSelect}>
-        {selected ? "Selected" : "Select flight"}
+        {selected ? "Watching" : "Select & watch"}
       </button>
     </article>
   );
@@ -559,15 +840,10 @@ function planTimelineDate(start: string, end: string): { day: string; year: stri
 
   if (start === end) return { day: `${startMonth} ${startDay}`, year: startYear };
   if (startYear !== endYear) {
-    return { day: `${startMonth} ${startDay}–${endMonth} ${endDay}`, year: `${startYear}–${endYear}` };
+    return { day: `${startMonth} ${startDay} – ${endMonth} ${endDay}`, year: `${startYear}–${endYear}` };
   }
-  if (startMonth === endMonth) return { day: `${startMonth} ${startDay}–${endDay}`, year: startYear };
-  return { day: `${startMonth} ${startDay}–${endMonth} ${endDay}`, year: startYear };
-}
-
-function shortDay(date: string): string {
-  return new Intl.DateTimeFormat("en", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" })
-    .format(new Date(`${date}T12:00:00Z`));
+  if (startMonth === endMonth) return { day: `${startMonth} ${startDay} – ${endDay}`, year: startYear };
+  return { day: `${startMonth} ${startDay} – ${endMonth} ${endDay}`, year: startYear };
 }
 
 function observedLabel(value: string): string {
@@ -591,19 +867,45 @@ function flightSchedule(flight: CanonicalFlight): string {
   return `${clock(first.departure)} ${first.origin} → ${clock(last.arrival)} ${last.destination}`;
 }
 
-function flightPickSchedule(flightKey: string, snapshot: LegSearchSnapshot): string {
-  const flight = snapshot.flights.find((item) => item.key === flightKey);
-  return flight ? `${shortDay(flight.departureDate)} · ${flightSchedule(flight)}` : "View flight options";
-}
-
 function clock(value: string): string {
   return new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit" }).format(new Date(value));
+}
+
+function sortAndFilterLegFlights(
+  flights: CanonicalFlight[],
+  snapshot: LegSearchSnapshot | undefined,
+  preferences: BrowsePreferences
+): CanonicalFlight[] {
+  const filtered = flights.filter((flight) => {
+    if (preferences.stops.length > 0 && !preferences.stops.includes(flight.stops)) return false;
+    if (preferences.airlines.length > 0 && !preferences.airlines.includes(flight.primaryAirlineCode)) {
+      return false;
+    }
+    if (
+      preferences.airports.length > 0
+      && !preferences.airports.some((airport) => flightAirports(flight).includes(airport))
+    ) {
+      return false;
+    }
+    if (preferences.maximumPrice !== null) {
+      const price = Number(bestOffer(flight.key, snapshot?.offers ?? [])?.priceAmount ?? Number.POSITIVE_INFINITY);
+      if (price > preferences.maximumPrice) return false;
+    }
+    if (preferences.departurePeriods.length > 0) {
+      const departure = flight.segments[0]?.departure;
+      if (!departure || !preferences.departurePeriods.includes(departurePeriod(departure))) {
+        return false;
+      }
+    }
+    return true;
+  });
+  return sortFlights(filtered, snapshot, preferences.sort);
 }
 
 function sortFlights(
   flights: CanonicalFlight[],
   snapshot: LegSearchSnapshot | undefined,
-  mode: "recommended" | "price" | "duration" | "departure"
+  mode: BrowsePreferences["sort"]
 ): CanonicalFlight[] {
   const balancedKey = snapshot?.analysis.balanced?.flightKey;
   return [...flights].sort((left, right) => {

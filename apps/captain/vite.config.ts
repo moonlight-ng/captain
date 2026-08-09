@@ -6,6 +6,11 @@ const apiProxyTarget = process.env.CAPTAIN_API_PROXY_TARGET?.trim()
 
 export default defineConfig({
   plugins: [react()],
+  // Surfaced to the client so mock-mode can avoid forcing `#access=design`
+  // when this Vite process is proxying `/api` at a remote Captain.
+  define: {
+    "import.meta.env.VITE_CAPTAIN_API_PROXY_TARGET": JSON.stringify(apiProxyTarget)
+  },
   server: {
     host: "127.0.0.1",
     port: 4178,

@@ -50,6 +50,8 @@ export default defineChannel({
     GET("/admin", serveIndex),
     GET("/admin/conversations", serveIndex),
     GET("/admin/conversations/:id", serveIndex),
+    GET("/admin/trips", serveIndex),
+    GET("/admin/trips/:id", serveIndex),
     GET("/admin/costs", serveIndex),
     GET("/auth/link", exchangeLoginLink),
     GET("/assets/:asset", serveAsset),
@@ -59,6 +61,8 @@ export default defineChannel({
     GET("/api/admin/overview", adminAuthenticated(adminOverview)),
     GET("/api/admin/conversations", adminAuthenticated(adminConversations)),
     GET("/api/admin/conversations/:conversationId", adminAuthenticated(adminConversation)),
+    GET("/api/admin/trips", adminAuthenticated(adminTrips)),
+    GET("/api/admin/trips/:tripId", adminAuthenticated(adminTrip)),
     GET("/api/admin/costs", adminAuthenticated(adminCosts)),
     GET("/api/me/profile", authenticated(getProfile)),
     PATCH("/api/me/profile", authenticatedMutation(updateProfile)),
@@ -252,6 +256,32 @@ async function adminConversation(
     limit: boundedInteger(search.get("limit"), 50, 1, 100),
     ...(before ? { before } : {})
   });
+  return detail ? adminJson(detail) : adminError("not_found", 404);
+}
+
+async function adminTrips(request: Request): Promise<Response> {
+  const services = await getCaptainServices();
+  const search = new URL(request.url).searchParams;
+  const limit = boundedInteger(search.get("limit"), 25, 1, 50);
+  const query = search.get("query")?.trim().slice(0, 120) || undefined;
+  const cursor = search.get("cursor")?.trim() || undefined;
+  return adminJson(await services.adminStore.listTrips({
+    limit,
+    ...(query ? { query } : {}),
+    ...(cursor ? { cursor } : {})
+  }));
+}
+
+async function adminTrip(
+  _request: Request,
+  context: RouteContext
+): Promise<Response> {
+  const tripId = context.params.tripId;
+  if (!tripId || !z.uuid().safeParse(tripId).success) {
+    return adminError("not_found", 404);
+  }
+  const services = await getCaptainServices();
+  const detail = await services.adminStore.getTrip({ tripId });
   return detail ? adminJson(detail) : adminError("not_found", 404);
 }
 
@@ -560,7 +590,7 @@ async function getCanonicalFlight(
     tripId: string;
     legId: string;
     routeLabel: string;
-    selected: true;
+    selected: boolean;
   } | null = null;
   if (auth?.credential === "session") {
     const user = await services.platformStore.getUser(auth.userId);
@@ -569,7 +599,23 @@ async function getCanonicalFlight(
       : null;
     if (trip) {
       const graph = await services.platformStore.getTripGraph(auth.userId, trip.id);
-      const leg = graph.legs.find((candidate) => candidate.selectedFlightKey === flightKey);
+      const selectedLeg = graph.legs.find((candidate) => candidate.selectedFlightKey === flightKey);
+      let leg = selectedLeg ?? null;
+      let selected = Boolean(selectedLeg);
+      if (!leg) {
+        for (const candidate of graph.legs) {
+          const snapshot = await services.platformStore.getLatestLegSearchSnapshot(
+            auth.userId,
+            trip.id,
+            candidate.id
+          );
+          if (snapshot?.flights.some((flight) => flight.key === flightKey)) {
+            leg = candidate;
+            selected = false;
+            break;
+          }
+        }
+      }
       const origin = leg
         ? graph.cities.find((city) => city.id === leg.originCityId)
         : null;
@@ -581,7 +627,7 @@ async function getCanonicalFlight(
           tripId: trip.id,
           legId: leg.id,
           routeLabel: `${origin.label} → ${destination.label}`,
-          selected: true
+          selected
         };
       }
     }

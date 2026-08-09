@@ -142,13 +142,23 @@ export function timestampLabel(value: string): string {
 }
 export function activityLabel(eventType: string): string {
   const labels: Record<string, string> = {
-    trip_created: "Trip tracking started",
+    trip_created: "Trip created",
+    trip_tracking_started: "Tracking started",
     trip_brief_updated: "Trip brief updated",
+    trip_title_updated: "Trip title updated",
+    trip_leg_flight_selected: "Flight selected for watching",
+    flight_selected: "Flight added to watch",
+    flight_unselected: "Flight removed from watch",
     trip_pause: "Tracking paused",
     trip_resume: "Tracking resumed",
     trip_refresh: "Manual check requested",
     trip_cancel: "Tracking stopped",
-    trip_complete: "Trip completed"
+    trip_complete: "Trip completed",
+    tracking_completed: "Tracking completed",
+    trip_replaced: "Trip replaced",
+    telegram_notification: "Telegram update sent",
+    telegram_message: "Telegram message sent",
+    captain_update: "Captain update sent"
   };
   return labels[eventType] ?? label(eventType);
 }

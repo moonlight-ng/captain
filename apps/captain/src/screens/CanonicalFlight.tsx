@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { ApiError, getCanonicalFlight, homeHref, tripLegHref } from "../api";
+import { ApiError, getCanonicalFlight, homeHref, selectTripLegFlight, tripLegHref } from "../api";
 import type { CanonicalFlightPayload, FlightOfferSnapshot } from "../domain";
 import { formatMoney } from "../format";
 import { inPageLink } from "../navigation";
@@ -17,11 +17,14 @@ export function CanonicalFlightPage({
   const [payload, setPayload] = useState<CanonicalFlightPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [selecting, setSelecting] = useState(false);
+  const [selectError, setSelectError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError("");
+    setSelectError("");
     void getCanonicalFlight(flightKey)
       .then((next) => {
         if (!cancelled) setPayload(next);
@@ -44,24 +47,50 @@ export function CanonicalFlightPage({
     [payload?.offers]
   );
 
+  function goToLeg() {
+    const context = payload?.context;
+    if (context) {
+      onNavigate(tripLegHref(context.tripId, context.legId));
+      return;
+    }
+    onBack();
+  }
+
+  async function chooseFlight() {
+    const context = payload?.context;
+    if (!context || context.selected || selecting) return;
+    setSelecting(true);
+    setSelectError("");
+    try {
+      await selectTripLegFlight(context.legId, flightKey);
+      setPayload((current) => current?.context
+        ? { ...current, context: { ...current.context, selected: true } }
+        : current);
+    } catch {
+      setSelectError("Couldn’t select that flight. Try again.");
+    } finally {
+      setSelecting(false);
+    }
+  }
+
   if (loading) return <CanonicalState title="Loading flight…" detail="Checking the latest verified details." />;
   if (!payload) return <CanonicalState title="Flight unavailable" detail={error} onBack={onBack} />;
 
   const { flight, context } = payload;
   const first = flight.segments[0]!;
   const last = flight.segments.at(-1)!;
+  const canSelect = Boolean(context && !context.selected && offers.length > 0);
   return (
     <main className="shell canonical-flight-shell">
       <header className="topbar">
         <a className="brand" href={homeHref()} onClick={inPageLink(homeHref(), onNavigate)} aria-label="Captain home">
           <span className="brand-mark">C</span><span>Captain</span>
         </a>
-        <button type="button" className="quiet-link" onClick={onBack}>Back</button>
+        <button type="button" className="quiet-link" onClick={goToLeg}>Back</button>
       </header>
 
       <section className="canonical-flight-page">
         <header className="canonical-flight-heading">
-          <p className="eyebrow">Verified flight</p>
           <h1>{flight.origin} → {flight.destination}</h1>
           <p>{longDate(flight.departureDate)} · {durationLabel(flight.durationMinutes)} · {stopLabel(flight.stops)}</p>
         </header>
@@ -74,8 +103,25 @@ export function CanonicalFlightPage({
           >
             <span>{context.selected ? "Selected for" : "Option for"}</span>
             <strong>{context.routeLabel}</strong>
-            <em>View trip →</em>
+            <em>View leg →</em>
           </a>
+        ) : null}
+
+        {context ? (
+          <div className="canonical-flight-action">
+            <button
+              type="button"
+              className={`primary-action${context.selected ? " selected" : ""}`}
+              disabled={context.selected || selecting || !canSelect}
+              onClick={() => { void chooseFlight(); }}
+            >
+              {context.selected ? "Watching this flight" : selecting ? "Selecting…" : "Select & watch"}
+            </button>
+            {selectError ? <p className="canonical-select-error" role="alert">{selectError}</p> : null}
+            {!context.selected && offers.length === 0
+              ? <p className="canonical-select-hint">A verified price is required before Captain can watch this flight.</p>
+              : null}
+          </div>
         ) : null}
 
         <section className="canonical-schedule" aria-labelledby="flight-schedule-heading">

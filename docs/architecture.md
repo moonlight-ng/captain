@@ -116,6 +116,20 @@ The normalized durable model is:
 worker, older payload fields, and historical price views still consume them.
 Do not treat those tables as read-only while the Track action remains enabled.
 
+## Trip feed audit (`trip_events`)
+
+`captain.trip_events` is the trip-scoped agent feed and audit log. Lifecycle
+writes (create, track, pause, refresh, …), successful Telegram notification
+deliveries as `captain_update` (exact outbound text + `notification_id`), and
+trip-scoped assistant chat replies (`telegram_message` + `source_message_id`)
+all append here. `notifications` remains the delivery outbox; `messages`
+remains the conversation transcript. The web Feed and Trip Settings Activity
+card both read `listTripActivity` and render through `feedPostsFromActivity`,
+which treats spoken deliveries as first-person update posts and suppresses
+lifecycle twins already narrated by a delivered notification. Feed authorship
+defaults to Captain; only explicit traveller mutations (title, pause/resume/
+refresh/cancel/complete, flight select/unselect) render as “You”.
+
 ## One-active-trip replacement
 
 A traveller may keep one active trip. A complete second request is preserved in

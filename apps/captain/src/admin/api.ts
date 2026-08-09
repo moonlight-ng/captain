@@ -5,7 +5,9 @@ import type {
   AdminConversationPage,
   AdminCostRange,
   AdminCostReport,
-  AdminOverview
+  AdminOverview,
+  AdminTripDetail,
+  AdminTripPage
 } from "@agents/flight-domain/admin";
 
 type PublicAdminConfig = {
@@ -80,6 +82,22 @@ export class AdminApi {
     const search = new URLSearchParams({ limit: "50" });
     if (before) search.set("before", before);
     return this.#get(`/api/admin/conversations/${encodeURIComponent(id)}?${search}`);
+  }
+
+  trips(input: {
+    query?: string;
+    cursor?: string;
+    limit?: number;
+  } = {}): Promise<AdminTripPage> {
+    const search = new URLSearchParams();
+    if (input.query) search.set("query", input.query);
+    if (input.cursor) search.set("cursor", input.cursor);
+    if (input.limit) search.set("limit", String(input.limit));
+    return this.#get(`/api/admin/trips?${search}`);
+  }
+
+  trip(id: string): Promise<AdminTripDetail> {
+    return this.#get(`/api/admin/trips/${encodeURIComponent(id)}`);
   }
 
   costs(range: AdminCostRange): Promise<AdminCostReport> {

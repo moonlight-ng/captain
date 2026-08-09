@@ -32,7 +32,6 @@ import {
   type Watch
 } from "./domain";
 import {
-  activityLabel,
   airlineName,
   calendarDayOffset,
   clockLabel,
@@ -57,8 +56,11 @@ import {
 import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./components/icons";
 import { FilterSheet } from "./components/FilterSheet";
 import { PriceChart, TrackedFlightCard } from "./components/TrackedFlight";
+import { feedPostsFromActivity, withFeedUpdateAction } from "./feed-posts";
+import { CaptainFeedPosts } from "./components/CaptainFeedPosts";
+import { AgentScheduleStatus, AgentScheduleChecks } from "./components/AgentScheduleStatus";
 import { inPageLink } from "./navigation";
-import { isWatchSearching, shouldAutoSearchOnOpen } from "./trip-stage";
+import { isWatchSearching, shouldAutoSearchOnOpen, tripStage } from "./trip-stage";
 import {
   TRIP_TAB_LABELS,
   defaultTripTab,
@@ -71,9 +73,10 @@ import { Feedback } from "./screens/Feedback";
 import { TripSettings } from "./screens/TripSettings";
 import { CanonicalFlightPage } from "./screens/CanonicalFlight";
 import {
+  MultiCityFeed,
   MultiCityFlightsOverview,
   MultiCityPlanOverview,
-  MultiCityWatchlist,
+  MultiCityPlanSummary,
   TripLegResults
 } from "./screens/MultiCityTrip";
 
@@ -276,16 +279,35 @@ export function App() {
   }
 
   async function chooseTripLegFlight(leg: TripCityLeg, flightKey: string) {
-    if (!trip) return;
+    if (!trip) return false;
     setLegSearchErrors((current) => ({ ...current, [leg.id]: "" }));
     try {
       const updated = await selectTripLegFlight(leg.id, flightKey);
+      const selectedAt = new Date().toISOString();
       setTripData((current) => current ? {
         ...current,
-        legs: (current.legs ?? []).map((item) => item.id === updated.id ? updated : item)
+        legs: (current.legs ?? []).map((item) => item.id === updated.id ? updated : item),
+        activity: [
+          {
+            id: `local-leg-select-${updated.id}-${selectedAt}`,
+            eventType: "trip_leg_flight_selected",
+            payload: { legId: updated.id, flightKey },
+            createdAt: selectedAt,
+            body: null,
+            channel: "web",
+            notificationId: null,
+            sourceMessageId: null
+          },
+          ...(current.activity ?? []).filter((item) =>
+            !(item.eventType === "trip_leg_flight_selected"
+              && item.payload.legId === updated.id)
+          )
+        ]
       } : current);
+      return true;
     } catch {
       setLegSearchErrors((current) => ({ ...current, [leg.id]: "Couldn’t select that flight. Try again." }));
+      return false;
     }
   }
 
@@ -479,8 +501,13 @@ export function App() {
   }, [page, trip?.id, trip?.status, watch?.status]);
 
   useEffect(() => {
-    if (page !== "trip" || tab !== "flights" || !trip || trip.status === "draft") return;
-    for (const leg of tripData?.legs ?? []) {
+    if (!trip || trip.status === "draft") return;
+    const legs = page === "trip-leg"
+      ? (tripData?.legs ?? []).filter((leg) => leg.id === currentLegId())
+      : page === "trip" && tab === "flights"
+        ? (tripData?.legs ?? [])
+        : [];
+    for (const leg of legs) {
       if (tripData?.latestSearches?.[leg.id] || legSearchProgress[leg.id]) continue;
       if (autoSearchedLegIds.current.has(leg.id)) continue;
       autoSearchedLegIds.current.add(leg.id);
@@ -568,24 +595,50 @@ export function App() {
     onSearch: (leg: TripCityLeg) => { void searchTripLeg(leg); },
     onNavigate: navigate
   } : null;
+  const flightsTabCount = hasTripGraph
+    ? Object.values(tripData?.latestSearches ?? {}).reduce(
+      (total, snapshot) => total + snapshot.analysis.optionsChecked,
+      0
+    )
+    : offers.length;
   if (trip && multiCityShared && page === "trip-leg") {
+    const activeLegId = currentLegId() ?? "";
+    const activeProgress = legSearchProgress[activeLegId];
+    const legRefreshing = Boolean(
+      activeProgress && (activeProgress.status === "queued" || activeProgress.status === "running")
+    );
+    const refreshLabel = activeProgress && legRefreshing
+      ? activeProgress.analysis.datesRequested.length > 0
+        ? `Checking ${activeProgress.analysis.datesCompleted.length}/${activeProgress.analysis.datesRequested.length}`
+        : "Updating…"
+      : null;
     return (
       <main className="shell multi-city-shell">
         <header className="topbar">
-          <a
-            className="brand"
-            href={homeHref()}
-            aria-label="Captain home"
-            onClick={inPageLink(homeHref(), navigate)}
+          <button
+            type="button"
+            className="back-link"
+            onClick={() => {
+              navigate(tripHref(trip.id));
+              setTab("flights");
+            }}
           >
-            <span className="brand-mark">C</span>
-            <span>Captain</span>
-          </a>
+            ← Back
+          </button>
+          <span className={`name${refreshLabel ? " is-updating" : ""}`}>
+            {refreshLabel ?? trip.title}
+          </span>
         </header>
         <TripLegResults
           {...multiCityShared}
-          legId={currentLegId() ?? ""}
-          onSelect={(leg, flightKey) => { void chooseTripLegFlight(leg, flightKey); }}
+          legId={activeLegId}
+          onSelect={(leg, flightKey) => {
+            void chooseTripLegFlight(leg, flightKey).then((ok) => {
+              if (!ok) return;
+              navigate(tripHref(trip.id));
+              setTab("feed");
+            });
+          }}
         />
       </main>
     );
@@ -716,7 +769,7 @@ export function App() {
                     return next;
                   });
                 }
-                setTab("watchlist");
+                setTab("feed");
               } else if (trip) {
                 setWatchedOfferCache((current) => {
                   const next = { ...current };
@@ -774,50 +827,54 @@ export function App() {
                 onClick={() => setTab(trip.status === "draft" && item !== "plan" ? "plan" : item)}
               >
                 {TRIP_TAB_LABELS[item]}
-                {item === "flights" && offers.length > 0 ? <span>{offers.length}</span> : null}
-                {item === "watchlist" && personSelectionKeys.length > 0
-                  ? <span>{personSelectionKeys.length}</span>
-                  : null}
+                {item === "flights" && flightsTabCount > 0 ? <span>{flightsTabCount}</span> : null}
               </button>
             ))}
           </nav>
 
           <section className="workspace">
             {tab === "plan" && (
-              <div className="plan-tab plan-review-card">
-                <header className="plan-review-heading">
-                  <h2 className="eyebrow">Itinerary</h2>
-                  {trip.status === "draft" ? <span>Not confirmed</span> : null}
-                </header>
-                {multiCityShared ? (
-                  <MultiCityPlanOverview
-                    cities={multiCityShared.cities}
-                  />
-                ) : (
-                  <section className="simple-plan" aria-label="Trip itinerary">
-                    <strong>{routeLabel(trip)}</strong>
-                    <time dateTime={trip.brief.departureWindow.start}>
-                      {dateLabel(trip.brief.departureWindow.start)}
-                    </time>
-                  </section>
-                )}
-                <div className="plan-actions">
-                  <a
-                    href={tripHref(trip.id, "settings")}
-                    onClick={inPageLink(tripHref(trip.id, "settings"), navigate)}
-                  >
-                    {trip.status === "draft" ? "Review" : "Edit plan"}
-                  </a>
-                  {trip.status === "draft" ? (
-                    <button className="primary" disabled={searchBusy} onClick={() => void trackPrices()}>
-                      {searchBusy ? "Now checking flights…" : "Confirm"}
-                    </button>
-                  ) : null}
+              <div className="plan-tab">
+                <div className="plan-review-card">
+                  {multiCityShared ? (
+                    <>
+                      <MultiCityPlanSummary
+                        cities={multiCityShared.cities}
+                        legs={multiCityShared.legs}
+                      />
+                      <MultiCityPlanOverview
+                        cities={multiCityShared.cities}
+                      />
+                    </>
+                  ) : (
+                    <section className="simple-plan" aria-label="Trip itinerary">
+                      <strong>{routeLabel(trip)}</strong>
+                      <time dateTime={trip.brief.departureWindow.start}>
+                        {dateLabel(trip.brief.departureWindow.start)}
+                      </time>
+                    </section>
+                  )}
+                  <div className="plan-actions">
+                    <a
+                      href={tripHref(trip.id, "settings")}
+                      onClick={inPageLink(tripHref(trip.id, "settings"), navigate)}
+                    >
+                      {trip.status === "draft" ? "Review" : "Edit plan"}
+                    </a>
+                    {trip.status === "draft" ? (
+                      <button className="primary" disabled={searchBusy} onClick={() => void trackPrices()}>
+                        {searchBusy ? "Now checking flights…" : "Confirm"}
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             )}
             {tab === "flights" && (multiCityShared ? (
-              <MultiCityFlightsOverview {...multiCityShared} />
+              <MultiCityFlightsOverview
+                {...multiCityShared}
+                onSelect={(leg, flightKey) => { void chooseTripLegFlight(leg, flightKey); }}
+              />
             ) : (
               <BrowseTab
                 offers={offers}
@@ -842,14 +899,23 @@ export function App() {
                 onOpen={(offer) => openFlight(offer)}
               />
             ))}
-            {tab === "watchlist" && (multiCityShared ? (
-              <MultiCityWatchlist {...multiCityShared} />
+            {tab === "feed" && (multiCityShared ? (
+              <MultiCityFeed
+                {...multiCityShared}
+                activity={tripData?.activity ?? []}
+                recommendation={tripData?.recommendation ?? null}
+                watch={tripData?.watch ?? null}
+              />
             ) : (
-              <WatchlistTab
+              <FeedTab
+                trip={trip}
                 offers={watchedOffers}
                 trackedHistory={trackedHistory}
                 liveOffers={offers}
                 watchedOfferCache={watchedOfferCache}
+                recommendation={tripData?.recommendation ?? null}
+                activity={tripData?.activity ?? []}
+                watch={tripData?.watch ?? null}
                 onOpen={openFlight}
                 onFindFlights={() => setTab("flights")}
               />
@@ -920,6 +986,7 @@ function WatchlistDetail({
 
   const outbound = outboundSegments(offer.snapshot.segments ?? []);
   const comparison = peerPriceComparison(offer, offers);
+  const recentPosts = feedPostsFromActivity(activity).slice(0, 8);
 
   async function toggleWatchlist() {
     setBusy(true);
@@ -1060,19 +1127,19 @@ function WatchlistDetail({
             <dd>{watch?.nextCheckAt ? scheduleTime(watch.nextCheckAt) : "Unscheduled"}</dd>
           </div>
         </dl>
-        {activity.length > 0 ? (
+        {recentPosts.length > 0 ? (
           <details className="activity-disclosure">
             <summary>
               <span>Recent activity</span>
-              <em>{Math.min(activity.length, 8)}</em>
+              <em>{recentPosts.length}</em>
             </summary>
             <div className="activity-list">
-              {activity.slice(0, 8).map((item) => (
+              {recentPosts.map((item) => (
                 <article key={item.id}>
                   <i />
                   <span>
-                    <strong>{activityLabel(item.eventType)}</strong>
-                    <small>{timestampLabel(item.createdAt)}</small>
+                    <strong>{item.body}</strong>
+                    <small>{item.createdAt ? timestampLabel(item.createdAt) : ""}</small>
                   </span>
                 </article>
               ))}
@@ -1266,18 +1333,26 @@ function PeerPricePlot({
   );
 }
 
-function WatchlistTab({
+function FeedTab({
+  trip,
   offers,
   trackedHistory,
   liveOffers,
   watchedOfferCache,
+  recommendation,
+  activity,
+  watch,
   onOpen,
   onFindFlights
 }: {
+  trip: TripPayload["trip"];
   offers: VerifiedOffer[];
   trackedHistory: TrackedPriceHistory | null;
   liveOffers: VerifiedOffer[];
   watchedOfferCache: Record<string, VerifiedOffer>;
+  recommendation: TripPayload["recommendation"];
+  activity: TripPayload["activity"];
+  watch: Watch | null;
   onOpen: (offer: VerifiedOffer) => void;
   onFindFlights: () => void;
 }) {
@@ -1287,18 +1362,47 @@ function WatchlistTab({
       ?? null
     : null;
   const remaining = offers.filter((offer) => offer.itineraryKey !== trackedHistory?.itineraryKey);
-  if (!trackedHistory && remaining.length === 0) {
+  const recommendationOffer = recommendation
+    ? liveOffers.find((item) => item.itineraryKey === recommendation.itineraryKey)
+      ?? watchedOfferCache[recommendation.itineraryKey]
+      ?? offers.find((item) => item.itineraryKey === recommendation.itineraryKey)
+      ?? null
+    : null;
+  const posts = withFeedUpdateAction(
+    feedPostsFromActivity(activity),
+    recommendationOffer
+      ? { label: "Open flight", onClick: () => onOpen(recommendationOffer) }
+      : undefined
+  );
+  const stage = tripStage({ trip, watch });
+  const empty = !trackedHistory
+    && remaining.length === 0
+    && !recommendation
+    && posts.length === 0;
+
+  if (empty) {
     return (
       <div className="results-empty compact">
         <span>⌁</span>
-        <h2>No watched flights yet</h2>
-        <p>Open Flights and save the options you want to compare.</p>
+        <h2>No activity yet</h2>
+        <p>Open Flights and watch an option. Captain’s actions and recommendations land here.</p>
         <button type="button" onClick={onFindFlights}>Find flights</button>
       </div>
     );
   }
+
   return (
-    <div className="watchlist-tab">
+    <div className="feed-tab">
+      {watch && watch.status !== "completed" ? (
+        <div className="feed-checks watchlist-panel">
+          <div className="card-top">
+            <h2>Agent schedule</h2>
+            <AgentScheduleStatus stage={stage} watch={watch} />
+          </div>
+          <AgentScheduleChecks stage={stage} watch={watch} />
+        </div>
+      ) : null}
+      <CaptainFeedPosts posts={posts} />
       {trackedHistory ? (
         <TrackedFlightCard
           history={trackedHistory}

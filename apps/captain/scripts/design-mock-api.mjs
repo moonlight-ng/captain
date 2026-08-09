@@ -225,7 +225,20 @@ const tripPayload = {
     id: "act_1",
     eventType: "trip_created",
     payload: {},
-    createdAt: NOW
+    createdAt: NOW,
+    body: null,
+    channel: "system",
+    notificationId: null,
+    sourceMessageId: null
+  }, {
+    id: "act_2",
+    eventType: "captain_update",
+    payload: { kind: "tracking_started" },
+    createdAt: NOW,
+    body: "Plan confirmed. Now checking flights…",
+    channel: "telegram",
+    notificationId: "notif_1",
+    sourceMessageId: null
   }],
   priceHistory: mockPriceHistory()
 };

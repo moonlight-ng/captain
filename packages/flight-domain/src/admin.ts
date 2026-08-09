@@ -133,3 +133,53 @@ export type AdminCostReport = {
   byOperation: AdminCostBreakdown[];
   topConversations: AdminConversationSummary[];
 };
+
+export type AdminTripActivityChannel = "system" | "telegram" | "web";
+
+/** Trip-scoped agent audit item — mirrors extended `trip_events` / TripActivity. */
+export type AdminTripActivity = {
+  id: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  body: string | null;
+  channel: AdminTripActivityChannel;
+  notificationId: string | null;
+  sourceMessageId: string | null;
+};
+
+export type AdminTripFlight = {
+  id: string;
+  legLabel: string;
+  airlineCode: string | null;
+  routeLabel: string;
+  departureDate: string | null;
+  priceAmount: string | null;
+  currency: string | null;
+  selectedBy: "agent" | "person" | null;
+  flightKey: string | null;
+};
+
+export type AdminTripSummary = {
+  tripId: string;
+  userId: string;
+  conversationId: string | null;
+  title: string;
+  status: string;
+  routeLabel: string;
+  updatedAt: string;
+  identities: AdminChannelIdentity[];
+  flightCount: number;
+  latestActivityLabel: string | null;
+};
+
+export type AdminTripPage = {
+  trips: AdminTripSummary[];
+  nextCursor: string | null;
+};
+
+export type AdminTripDetail = {
+  trip: AdminTripSummary;
+  activity: AdminTripActivity[];
+  flights: AdminTripFlight[];
+};

@@ -10,24 +10,24 @@ describe("trip navigation", () => {
   it("opens an incomplete draft on Plan and puts Plan first", () => {
     const trip = { status: "draft" as const };
     expect(defaultTripTab(trip)).toBe("plan");
-    expect(orderedTripTabs(trip)).toEqual(["plan", "flights", "watchlist"]);
+    expect(orderedTripTabs(trip)).toEqual(["plan", "flights", "feed"]);
     expect(orderedTripTabs(trip).map((tab) => TRIP_TAB_LABELS[tab])).toEqual([
       "Plan",
       "Flights",
-      "Watchlist"
+      "Feed"
     ]);
   });
 
   it.each(["tracking", "recommended", "paused"] as const)(
-    "opens a complete %s trip on Watchlist and puts Watchlist first",
+    "opens a complete %s trip on Feed and puts Feed first",
     (status) => {
       const trip = { status };
-      expect(defaultTripTab(trip)).toBe("watchlist");
-      expect(orderedTripTabs(trip)).toEqual(["watchlist", "flights", "plan"]);
+      expect(defaultTripTab(trip)).toBe("feed");
+      expect(orderedTripTabs(trip)).toEqual(["feed", "flights", "plan"]);
     }
   );
 
-  it("uses Watchlist when there is no incomplete trip", () => {
-    expect(defaultTripTab(null)).toBe("watchlist");
+  it("uses Feed when there is no incomplete trip", () => {
+    expect(defaultTripTab(null)).toBe("feed");
   });
 });

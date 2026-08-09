@@ -207,12 +207,13 @@ export class FlightWorker {
   async #deliver(notification: CaptainNotification, now: Date): Promise<boolean> {
     try {
       const replyMarkup = this.#notificationReplyMarkup(notification);
+      const text = notificationText(notification);
       const response = await fetch(`https://api.telegram.org/bot${this.#telegramBotToken}/sendMessage`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           chat_id: notification.telegramChatId,
-          text: notificationText(notification),
+          text,
           disable_web_page_preview: true,
           reply_markup: replyMarkup
         }),
@@ -222,7 +223,7 @@ export class FlightWorker {
       const body = await response.json() as { ok?: boolean; result?: { message_id?: number } };
       const messageId = body.result?.message_id;
       if (!Number.isSafeInteger(messageId)) throw new Error("Telegram did not return a message ID");
-      await this.#store.markNotificationSent(notification.id, messageId!, now);
+      await this.#store.markNotificationSent(notification.id, messageId!, text, now);
       return true;
     } catch (error) {
       await this.#store.markNotificationFailed(
@@ -337,6 +338,11 @@ function firstUpdateText(
     ?? (count === 1
       ? `I found 1 fare for ${trip} at ${formatAmount(low, currency)}.`
       : `I found ${count} fares for ${trip}, starting at ${formatAmount(low, currency)}.`);
+  const dateSummary = recordField(notification.payload, "dateSummary");
+  const isMultiCity = arrayField(dateSummary ?? {}, "searchWindows").length > 1;
+  if (isMultiCity) {
+    return `${finding}\n\nOpen your trip to compare the best flights for each leg.`;
+  }
   const followUp = trackingStartsAt
     ? `Daily price checks start ${formatDate(trackingStartsAt)}.`
     : "I’ll check prices daily and only message you when something changes.";
@@ -380,13 +386,26 @@ function comparativeDateFinding(
     }
     return `${route} is ${range} one-way${across}. Cheapest is ${formatDate(cheapestDates[0]!)} at about ${formatAmount(cheapest, currency)}.`;
   }
-  const itinerary = cheapestDates.map((date, index) =>
-    index === 0 ? `leave ${formatDate(date)}` : `then ${formatDate(date)}`
-  ).join(", ");
+  const stops = route.split(/\s*→\s*/u).filter(Boolean);
+  const legs = searchWindows.map((window, index) => {
+    const start = stringField(window, "start");
+    const end = stringField(window, "end");
+    const legRoute = stops[index] && stops[index + 1]
+      ? `${stops[index]} → ${stops[index + 1]}`
+      : `Leg ${index + 1}`;
+    const dates = start && end
+      ? (start === end ? formatDate(start) : formatDateWindow(start, end))
+      : "Dates unavailable";
+    return `${legRoute}\n${dates}`;
+  }).join("\n\n");
+  const range = high > cheapest
+    ? `${formatAmount(cheapest, currency)}–${formatAmount(high, currency)}`
+    : `about ${formatAmount(cheapest, currency)}`;
   const checked = searched > 0
-    ? ` after checking ${searched} date combination${searched === 1 ? "" : "s"}`
+    ? `\n\nI checked ${searched} date combination${searched === 1 ? "" : "s"} around your dates.`
     : "";
-  return `Best fit for ${route}: ${itinerary}. Combined from ${formatAmount(cheapest, currency)}${checked}.`;
+  return `I’ve checked your dates and found options for every leg.\n\n${legs}`
+    + `\n\nAltogether, the trip is coming in at ${range}.${checked}`;
 }
 
 function duffelOfferId(url: string | undefined): string | null {

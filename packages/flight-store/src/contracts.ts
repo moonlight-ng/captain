@@ -118,11 +118,18 @@ export type TripFlightSelection = {
   selectedAt: string;
 };
 
+export type TripActivityChannel = "system" | "telegram" | "web";
+
 export type TripActivity = {
   id: string;
   eventType: string;
   payload: Record<string, unknown>;
   createdAt: string;
+  /** Rendered text when Captain spoke (Telegram or in-app). */
+  body: string | null;
+  channel: TripActivityChannel;
+  notificationId: string | null;
+  sourceMessageId: string | null;
 };
 
 export type CaptainNotification = {
@@ -194,6 +201,16 @@ export interface CaptainPlatformStore {
   claimTelegramUpdate(updateKey: string, userId: string, now: Date): Promise<boolean>;
   getConversation(userId: string, limit?: number): Promise<ConversationContext>;
   appendMessage(userId: string, role: "user" | "assistant", content: string, now: Date): Promise<string>;
+  /**
+   * Marks a notification delivered and appends the exact Telegram text to the
+   * trip feed so outbound alerts are auditable beside lifecycle events.
+   */
+  markNotificationSent(
+    notificationId: string,
+    telegramMessageId: number,
+    body: string,
+    now: Date
+  ): Promise<void>;
   setActiveTrip(userId: string, tripId: string | null, now: Date): Promise<void>;
   listTrips(userId: string): Promise<Trip[]>;
   getActiveTrip(userId: string): Promise<Trip | null>;
@@ -276,7 +293,6 @@ export interface CaptainPlatformStore {
   evaluateTripsForSearchSpec(searchSpecId: string, now: Date): Promise<number>;
   enqueueInventoryGapForSearchSpec(searchSpecId: string, now: Date): Promise<number>;
   listPendingNotifications(now: Date, limit: number): Promise<CaptainNotification[]>;
-  markNotificationSent(notificationId: string, telegramMessageId: number, now: Date): Promise<void>;
   markNotificationFailed(notificationId: string, error: string, now: Date): Promise<void>;
   getNotificationByTelegramMessage(
     userId: string,

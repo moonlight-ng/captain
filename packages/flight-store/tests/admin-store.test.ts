@@ -73,6 +73,12 @@ describe("Captain administrator usage storage", () => {
     expect(await store.listPendingModelUsage()).toEqual([]);
     expect((await store.getCosts("all", new Date(now.getTime() + 1_000))).summary.unresolvedCostCount).toBe(1);
   });
+
+  it("exposes empty trip list and detail stubs in memory mode", async () => {
+    const store = new MemoryCaptainAdminStore();
+    expect(await store.listTrips({ limit: 25 })).toEqual({ trips: [], nextCursor: null });
+    expect(await store.getTrip({ tripId: "22222222-2222-4222-8222-222222222222" })).toBeNull();
+  });
 });
 
 function sessionInput(occurredAt: Date, status: "active" | "waiting") {

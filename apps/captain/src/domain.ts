@@ -273,11 +273,17 @@ export type CanonicalFlightPayload = {
   } | null;
 };
 
+export type TripActivityChannel = "system" | "telegram" | "web";
+
 export type TripActivity = {
   id: string;
   eventType: string;
   payload: Record<string, unknown>;
   createdAt: string;
+  body: string | null;
+  channel: TripActivityChannel;
+  notificationId: string | null;
+  sourceMessageId: string | null;
 };
 
 export type BrowseSort = "recommended" | "price" | "duration" | "departure";

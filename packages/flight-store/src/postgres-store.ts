@@ -482,13 +482,32 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
 
   async appendMessage(userId: string, role: "user" | "assistant", content: string, now: Date): Promise<string> {
     const id = randomUUID();
-    const rows = await this.#sql<Array<{ id: string }>>`
-      insert into captain.messages (id, conversation_id, user_id, role, content, created_at)
-      select ${id}, conversation.id, ${userId}, ${role}, ${content.trim()}, ${now}
-      from captain.conversations conversation where conversation.user_id = ${userId}
-      returning id
+    const trimmed = content.trim();
+    const rows = await this.#sql<Array<{ id: string; active_trip_id: string | null }>>`
+      with inserted as (
+        insert into captain.messages (id, conversation_id, user_id, role, content, created_at)
+        select ${id}, conversation.id, ${userId}, ${role}, ${trimmed}, ${now}
+        from captain.conversations conversation where conversation.user_id = ${userId}
+        returning id, conversation_id
+      )
+      select inserted.id, conversation.active_trip_id
+      from inserted
+      join captain.conversations conversation on conversation.id = inserted.conversation_id
     `;
     if (!rows[0]) throw new Error("Conversation not found");
+    const activeTripId = rows[0].active_trip_id;
+    if (role === "assistant" && activeTripId && trimmed) {
+      await this.#sql`
+        insert into captain.trip_events (
+          id, trip_id, user_id, event_type, payload, body, channel, source_message_id, created_at
+        )
+        select
+          ${randomUUID()}, trip.id, trip.user_id, 'telegram_message', '{}'::jsonb,
+          ${trimmed}, 'telegram', ${id}, ${now}
+        from captain.trips trip
+        where trip.id = ${activeTripId} and trip.user_id = ${userId}
+      `;
+    }
     return id;
   }
 
@@ -1235,8 +1254,20 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       event_type: string;
       payload: Record<string, unknown>;
       created_at: Date;
+      body: string | null;
+      channel: TripActivity["channel"];
+      notification_id: string | null;
+      source_message_id: string | null;
     }>>`
-      select event.id, event.event_type, event.payload, event.created_at
+      select
+        event.id,
+        event.event_type,
+        event.payload,
+        event.created_at,
+        event.body,
+        event.channel,
+        event.notification_id,
+        event.source_message_id
       from captain.trip_events event
       join captain.trips trip on trip.id = event.trip_id
       where event.trip_id = ${tripId} and trip.user_id = ${userId}
@@ -1247,7 +1278,11 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       id: row.id,
       eventType: row.event_type,
       payload: row.payload,
-      createdAt: iso(row.created_at)
+      createdAt: iso(row.created_at),
+      body: row.body,
+      channel: row.channel,
+      notificationId: row.notification_id,
+      sourceMessageId: row.source_message_id
     }));
   }
 
@@ -2165,12 +2200,31 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     });
   }
 
-  async markNotificationSent(notificationId: string, telegramMessageId: number, now: Date): Promise<void> {
-    await this.#sql`
-      update captain.notifications set status = 'sent', delivered_at = ${now},
-        telegram_message_id = ${telegramMessageId}, error = null, updated_at = ${now}
-      where id = ${notificationId} and status = 'sending'
-    `;
+  async markNotificationSent(
+    notificationId: string,
+    telegramMessageId: number,
+    body: string,
+    now: Date
+  ): Promise<void> {
+    const trimmed = body.trim();
+    await this.#sql.begin(async (tx) => {
+      const rows = await tx<Array<{ trip_id: string; user_id: string; kind: string }>>`
+        update captain.notifications set status = 'sent', delivered_at = ${now},
+          telegram_message_id = ${telegramMessageId}, error = null, updated_at = ${now}
+        where id = ${notificationId} and status = 'sending'
+        returning trip_id, user_id, kind
+      `;
+      const row = rows[0];
+      if (!row || !trimmed) return;
+      await tx`
+        insert into captain.trip_events (
+          id, trip_id, user_id, event_type, payload, body, channel, notification_id, created_at
+        ) values (
+          ${randomUUID()}, ${row.trip_id}, ${row.user_id}, 'captain_update',
+          ${tx.json({ kind: row.kind })}, ${trimmed}, 'telegram', ${notificationId}, ${now}
+        )
+      `;
+    });
   }
 
   async markNotificationFailed(notificationId: string, error: string, now: Date): Promise<void> {

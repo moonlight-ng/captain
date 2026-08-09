@@ -104,6 +104,54 @@ describe("Captain administrator API", () => {
     expect(getConversation).toHaveBeenCalledWith({ conversationId: id, before: "older", limit: 20 });
     expect((await response.json() as typeof detail).messages.map((message) => message.id)).toEqual(["old", "new"]);
   });
+
+  it("forwards trip search pagination and returns trip detail with agent activity", async () => {
+    const listTrips = vi.fn(async () => ({ trips: [], nextCursor: null }));
+    const detail = {
+      trip: {
+        tripId: "22222222-2222-4222-8222-222222222222",
+        title: "Lagos week",
+        routeLabel: "LOS → LHR"
+      },
+      activity: [{
+        id: "event-1",
+        eventType: "telegram_notification",
+        payload: { kind: "tracking_started" },
+        createdAt: "2026-08-09T10:00:00.000Z",
+        body: "Tracking is live for Lagos → London.",
+        channel: "telegram",
+        notificationId: "33333333-3333-4333-8333-333333333333",
+        sourceMessageId: null
+      }],
+      flights: []
+    };
+    const getTrip = vi.fn(async () => detail);
+    (state.services as { adminStore: { listTrips: unknown; getTrip: unknown } }).adminStore.listTrips = listTrips;
+    (state.services as { adminStore: { listTrips: unknown; getTrip: unknown } }).adminStore.getTrip = getTrip;
+
+    const list = await invoke(
+      "/api/admin/trips",
+      authenticated("?query=lagos&limit=999&cursor=next")
+    );
+    expect(list.status).toBe(200);
+    expect(listTrips).toHaveBeenCalledWith({
+      query: "lagos",
+      cursor: "next",
+      limit: 50
+    });
+
+    const id = "22222222-2222-4222-8222-222222222222";
+    const response = await invoke(
+      "/api/admin/trips/:tripId",
+      authenticated(),
+      { tripId: id }
+    );
+    expect(response.status).toBe(200);
+    expect(getTrip).toHaveBeenCalledWith({ tripId: id });
+    const body = await response.json() as typeof detail;
+    expect(body.activity[0]?.body).toBe("Tracking is live for Lagos → London.");
+    expect(body.activity[0]?.channel).toBe("telegram");
+  });
 });
 
 function servicesFixture() {
@@ -146,6 +194,8 @@ function servicesFixture() {
       }),
       listConversations: async () => ({ conversations: [], nextCursor: null }),
       getConversation: async () => null,
+      listTrips: async () => ({ trips: [], nextCursor: null }),
+      getTrip: async () => null,
       getCosts: async () => ({})
     }
   };

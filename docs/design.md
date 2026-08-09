@@ -328,9 +328,19 @@ Stages: `stopped` | `paused` | `stale` | `searching` | `tracking`. `stageLabel()
 #### Activity disclosure / list
 - **Classes:** `.activity-disclosure`, `.activity-list`
 - **Status:** `live`
-- **Job:** Collapsible activity under watchlist; also reused inside Trip Settings activity card.
-- **Inputs:** Activity events with label + timestamp.
+- **Job:** Compact list under watchlist detail and Trip Settings; body text comes from `feedPostsFromActivity` (same filtered stream as Feed).
+- **Inputs:** Trip activity posts with body + timestamp.
 - **Compose with:** WatchlistDetail, TripSettings Activity disclosure.
+- **Do not use when:** The Feed tab stream — that is `.feed-posts`.
+
+#### Captain feed posts
+- **Classes / components:** `.feed-posts`, `.feed-post` (+ `.is-update`), `.feed-post-dot`, `.feed-post-body`, `.feed-post-header`, `CaptainFeedPosts`, `feedPostsFromActivity`, `withFeedUpdateAction`
+- **Status:** `live`
+- **Job:** Profile-style stream. **Updates** are first-person `captain_update` / Telegram message events — the exact text delivered to the traveller. **Events** are quieter lifecycle rows. Author defaults to **Captain**; only explicit traveller mutations (rename, pause/resume/refresh/cancel/complete, select/unselect flight) show **You**. Optional quiet action on the newest update.
+- **Inputs:** `TripActivity[]` via `GET /api/me/trip`; spoken `body` required for update posts; lifecycle twins shadowed by delivered notifications are filtered out.
+- **Compose with:** Watching cards, Agent schedule on Feed.
+- **Do not use when:** Settings / watchlist need a compact disclosure — use `.activity-list` with `feedPostsFromActivity` (same stream).
+- **Do not use when:** Inventing dashboard briefing copy — that is not a feed post; only delivered Captain updates.
 
 #### Flight details heading
 - **Classes:** `.flight-details-heading`, `.stop-count`

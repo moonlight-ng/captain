@@ -8,9 +8,12 @@ describe("Captain administrator routing", () => {
     ["/admin/", { page: "overview" }],
     ["/admin/conversations", { page: "conversations" }],
     ["/admin/conversations/", { page: "conversations" }],
+    ["/admin/trips", { page: "trips" }],
+    ["/admin/trips/", { page: "trips" }],
     ["/admin/costs", { page: "costs" }],
     ["/admin/settings", { page: "settings" }],
-    ["/admin/conversations/user%20conversation", { page: "conversation", id: "user conversation" }]
+    ["/admin/conversations/user%20conversation", { page: "conversation", id: "user conversation" }],
+    ["/admin/trips/11111111-1111-4111-8111-111111111111", { page: "trip", id: "11111111-1111-4111-8111-111111111111" }]
   ])("maps %s into the isolated administrator application", (pathname, expected) => {
     expect(parseAdminRoute(pathname as string)).toEqual(expected);
   });

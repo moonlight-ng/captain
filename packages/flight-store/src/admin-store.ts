@@ -5,6 +5,11 @@ import type {
   AdminCostBreakdown,
   AdminCostRange,
   AdminCostReport,
+  AdminTripActivity,
+  AdminTripDetail,
+  AdminTripFlight,
+  AdminTripPage,
+  AdminTripSummary,
   AgentSession,
   AgentSessionStatus,
   ModelUsageLookupStatus
@@ -92,6 +97,12 @@ export interface CaptainAdminStore {
     before?: string;
     limit: number;
   }): Promise<AdminConversationDetail | null>;
+  listTrips(input: {
+    query?: string;
+    cursor?: string;
+    limit: number;
+  }): Promise<AdminTripPage>;
+  getTrip(input: { tripId: string }): Promise<AdminTripDetail | null>;
   getCosts(range: AdminCostRange, now: Date): Promise<AdminCostReport>;
 }
 
@@ -188,11 +199,31 @@ export class MemoryCaptainAdminStore implements CaptainAdminStore {
     };
   }
 
-  async listConversations(): Promise<AdminConversationPage> {
+  async listConversations(_input: {
+    query?: string;
+    cursor?: string;
+    limit: number;
+  }): Promise<AdminConversationPage> {
     return { conversations: [], nextCursor: null };
   }
 
-  async getConversation(): Promise<AdminConversationDetail | null> {
+  async getConversation(_input: {
+    conversationId: string;
+    before?: string;
+    limit: number;
+  }): Promise<AdminConversationDetail | null> {
+    return null;
+  }
+
+  async listTrips(_input: {
+    query?: string;
+    cursor?: string;
+    limit: number;
+  }): Promise<AdminTripPage> {
+    return { trips: [], nextCursor: null };
+  }
+
+  async getTrip(_input: { tripId: string }): Promise<AdminTripDetail | null> {
     return null;
   }
 
@@ -253,6 +284,23 @@ type SessionRow = {
   failure_code: string | null;
 };
 
+type TripRow = {
+  trip_id: string;
+  user_id: string;
+  conversation_id: string | null;
+  title: string;
+  status: string;
+  brief: Record<string, unknown>;
+  updated_at: Date;
+  telegram_user_id: string | null;
+  username: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  flight_count: string;
+  latest_event_type: string | null;
+  latest_event_body: string | null;
+};
+
 const CONVERSATION_SELECT = `
   select
     conversation.id as conversation_id,
@@ -308,6 +356,59 @@ const CONVERSATION_SELECT = `
   ))
   and ($2::uuid is null or conversation.id = $2::uuid)
   order by coalesce(latest.created_at, conversation.created_at) desc, conversation.id desc
+`;
+
+const TRIP_SELECT = `
+  select
+    trip.id as trip_id,
+    trip.user_id,
+    conversation.id as conversation_id,
+    trip.title,
+    trip.status,
+    trip.brief,
+    trip.updated_at,
+    telegram.telegram_user_id::text,
+    telegram.username,
+    telegram.first_name,
+    telegram.last_name,
+    coalesce(flight_stats.flight_count, 0)::text as flight_count,
+    latest_activity.event_type as latest_event_type,
+    latest_activity.body as latest_event_body
+  from captain.trips trip
+  join captain.users captain_user on captain_user.id = trip.user_id
+  left join captain.conversations conversation on conversation.user_id = trip.user_id
+  left join captain.telegram_accounts telegram on telegram.user_id = captain_user.id
+  left join lateral (
+    select
+      (
+        select count(*)::int
+        from captain.trip_legs leg
+        where leg.trip_id = trip.id and leg.selected_flight_key is not null
+      )
+      + (
+        select count(*)::int
+        from captain.trip_flight_selections selection
+        where selection.trip_id = trip.id
+      ) as flight_count
+  ) flight_stats on true
+  left join lateral (
+    select event.event_type, event.body
+    from captain.trip_events event
+    where event.trip_id = trip.id
+    order by event.created_at desc, event.id desc
+    limit 1
+  ) latest_activity on true
+  where ($1::text is null or (
+    trip.id::text ilike $1
+    or trip.title ilike $1
+    or trip.status ilike $1
+    or captain_user.id::text ilike $1
+    or coalesce(telegram.username, '') ilike $1
+    or coalesce(telegram.first_name, '') ilike $1
+    or coalesce(telegram.last_name, '') ilike $1
+  ))
+  and ($2::uuid is null or trip.id = $2::uuid)
+  order by trip.updated_at desc, trip.id desc
 `;
 
 export class PostgresCaptainAdminStore implements CaptainAdminStore {
@@ -561,6 +662,78 @@ export class PostgresCaptainAdminStore implements CaptainAdminStore {
     };
   }
 
+  async listTrips(input: {
+    query?: string;
+    cursor?: string;
+    limit: number;
+  }): Promise<AdminTripPage> {
+    const query = input.query?.trim().slice(0, 120);
+    const rows = await this.#tripRows(query ? `%${query}%` : null, null);
+    const cursor = decodeCursor(input.cursor);
+    const afterCursor = cursor
+      ? rows.filter((row) => tripAfterCursor(row, cursor))
+      : rows;
+    const limit = Math.max(1, Math.min(input.limit, 50));
+    const selected = afterCursor.slice(0, limit + 1);
+    const hasMore = selected.length > limit;
+    const pageRows = selected.slice(0, limit);
+    const trips = pageRows.map(toTripSummary);
+    const last = pageRows.at(-1);
+    return {
+      trips,
+      nextCursor: hasMore && last
+        ? encodeCursor({ at: last.updated_at.toISOString(), id: last.trip_id })
+        : null
+    };
+  }
+
+  async getTrip(input: { tripId: string }): Promise<AdminTripDetail | null> {
+    const rows = await this.#tripRows(null, input.tripId);
+    const row = rows[0];
+    if (!row) return null;
+    const [activityRows, flights] = await Promise.all([
+      this.#sql<Array<{
+        id: string;
+        event_type: string;
+        payload: Record<string, unknown>;
+        created_at: Date;
+        body: string | null;
+        channel: AdminTripActivity["channel"];
+        notification_id: string | null;
+        source_message_id: string | null;
+      }>>`
+        select
+          event.id,
+          event.event_type,
+          event.payload,
+          event.created_at,
+          event.body,
+          event.channel,
+          event.notification_id,
+          event.source_message_id
+        from captain.trip_events event
+        where event.trip_id = ${input.tripId}
+        order by event.created_at desc, event.id desc
+        limit 50
+      `,
+      this.#tripFlights(input.tripId)
+    ]);
+    return {
+      trip: toTripSummary(row),
+      activity: activityRows.map((event) => ({
+        id: event.id,
+        eventType: event.event_type,
+        payload: event.payload ?? {},
+        createdAt: event.created_at.toISOString(),
+        body: event.body,
+        channel: event.channel ?? "system",
+        notificationId: event.notification_id,
+        sourceMessageId: event.source_message_id
+      })),
+      flights
+    };
+  }
+
   async getCosts(range: AdminCostRange, now: Date): Promise<AdminCostReport> {
     const metaRows = await this.#sql<Array<{ usage_tracking_started_at: Date }>>`
       select usage_tracking_started_at from captain.project_meta where singleton = true
@@ -648,6 +821,112 @@ export class PostgresCaptainAdminStore implements CaptainAdminStore {
   #conversationRows(search: string | null, conversationId: string | null): Promise<ConversationRow[]> {
     return this.#sql.unsafe(CONVERSATION_SELECT, [search, conversationId]);
   }
+
+  #tripRows(search: string | null, tripId: string | null): Promise<TripRow[]> {
+    return this.#sql.unsafe(TRIP_SELECT, [search, tripId]);
+  }
+
+  async #tripFlights(tripId: string): Promise<AdminTripFlight[]> {
+    const legRows = await this.#sql<Array<{
+      leg_id: string;
+      position: number;
+      origin_label: string;
+      destination_label: string;
+      origin_airports: string[];
+      destination_airports: string[];
+      selected_flight_key: string;
+      departure_start: string;
+      flight: {
+        key?: string;
+        origin?: string;
+        destination?: string;
+        departureDate?: string;
+        primaryAirlineCode?: string;
+      } | null;
+      offer: {
+        priceAmount?: string;
+        currency?: string;
+      } | null;
+    }>>`
+      select
+        leg.id as leg_id,
+        leg.position,
+        origin.label as origin_label,
+        destination.label as destination_label,
+        origin.airport_codes as origin_airports,
+        destination.airport_codes as destination_airports,
+        leg.selected_flight_key,
+        leg.departure_start::text as departure_start,
+        (
+          select flight
+          from captain.leg_search_snapshots snapshot,
+            jsonb_array_elements(snapshot.flights) flight
+          where snapshot.id = leg.latest_search_id
+            and flight ->> 'key' = leg.selected_flight_key
+          limit 1
+        ) as flight,
+        (
+          select offer
+          from captain.leg_search_snapshots snapshot,
+            jsonb_array_elements(snapshot.offers) offer
+          where snapshot.id = leg.latest_search_id
+            and offer ->> 'flightKey' = leg.selected_flight_key
+          order by (offer ->> 'observedAt') desc nulls last
+          limit 1
+        ) as offer
+      from captain.trip_legs leg
+      join captain.trip_cities origin on origin.id = leg.origin_city_id
+      join captain.trip_cities destination on destination.id = leg.destination_city_id
+      where leg.trip_id = ${tripId}
+        and leg.selected_flight_key is not null
+      order by leg.position asc, leg.id asc
+    `;
+
+    const selectionRows = await this.#sql<Array<{
+      itinerary_key: string;
+      selected_by: "agent" | "person";
+      selected_at: Date;
+    }>>`
+      select selection.itinerary_key, selection.selected_by, selection.selected_at
+      from captain.trip_flight_selections selection
+      where selection.trip_id = ${tripId}
+      order by selection.selected_at desc, selection.itinerary_key
+    `;
+
+    const fromLegs: AdminTripFlight[] = legRows.map((row) => {
+      const originCode = row.flight?.origin
+        ?? row.origin_airports?.[0]
+        ?? row.origin_label;
+      const destinationCode = row.flight?.destination
+        ?? row.destination_airports?.[0]
+        ?? row.destination_label;
+      return {
+        id: row.leg_id,
+        legLabel: `Leg ${row.position + 1}`,
+        airlineCode: row.flight?.primaryAirlineCode ?? null,
+        routeLabel: `${originCode} → ${destinationCode}`,
+        departureDate: row.flight?.departureDate ?? row.departure_start ?? null,
+        priceAmount: row.offer?.priceAmount ?? null,
+        currency: row.offer?.currency ?? null,
+        selectedBy: null,
+        flightKey: row.selected_flight_key
+      };
+    });
+
+    const fromSelections: AdminTripFlight[] = selectionRows.map((row) => ({
+      id: `${row.itinerary_key}:${row.selected_by}`,
+      legLabel: "Watch",
+      airlineCode: null,
+      routeLabel: row.itinerary_key,
+      departureDate: null,
+      priceAmount: null,
+      currency: null,
+      selectedBy: row.selected_by,
+      flightKey: row.itinerary_key
+    }));
+
+    return [...fromLegs, ...fromSelections];
+  }
 }
 
 type Cursor = { at: string; id: string };
@@ -679,6 +958,56 @@ function conversationActivity(row: ConversationRow): Date {
 function conversationAfterCursor(row: ConversationRow, cursor: Cursor): boolean {
   const at = conversationActivity(row).toISOString();
   return at < cursor.at || (at === cursor.at && row.conversation_id < cursor.id);
+}
+
+function tripAfterCursor(row: TripRow, cursor: Cursor): boolean {
+  const at = row.updated_at.toISOString();
+  return at < cursor.at || (at === cursor.at && row.trip_id < cursor.id);
+}
+
+function toTripSummary(row: TripRow): AdminTripSummary {
+  const displayName = [row.first_name, row.last_name].filter(Boolean).join(" ").trim()
+    || (row.username ? `@${row.username}` : "")
+    || row.user_id;
+  return {
+    tripId: row.trip_id,
+    userId: row.user_id,
+    conversationId: row.conversation_id,
+    title: row.title,
+    status: row.status,
+    routeLabel: routeLabelFromBrief(row.brief),
+    updatedAt: row.updated_at.toISOString(),
+    identities: row.telegram_user_id ? [{
+      channel: "telegram",
+      displayName,
+      username: row.username
+    }] : [],
+    flightCount: integer(row.flight_count),
+    latestActivityLabel: row.latest_event_body?.trim()
+      || (row.latest_event_type ? humanize(row.latest_event_type) : null)
+  };
+}
+
+function routeLabelFromBrief(brief: Record<string, unknown>): string {
+  const tripType = typeof brief.tripType === "string" ? brief.tripType : null;
+  const legs = Array.isArray(brief.legs) ? brief.legs : [];
+  if (tripType === "multi_city" && legs.length > 0) {
+    const first = legs[0] as { originAirports?: unknown; destinationAirports?: unknown };
+    const origin = joinAirports(first?.originAirports);
+    const destinations = legs.map((leg) =>
+      joinAirports((leg as { destinationAirports?: unknown }).destinationAirports)
+    );
+    if (origin && destinations.every(Boolean)) return [origin, ...destinations].join(" → ");
+  }
+  const origin = joinAirports(brief.originAirports);
+  const destination = joinAirports(brief.destinationAirports);
+  if (origin && destination) return `${origin} → ${destination}`;
+  return "Route unavailable";
+}
+
+function joinAirports(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0).join("/");
 }
 
 function toConversationSummary(row: ConversationRow): AdminConversationSummary {

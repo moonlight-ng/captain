@@ -445,7 +445,18 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const conversation = this.#conversations.get(userId);
     if (!conversation) throw new Error("Conversation not found");
     const id = randomUUID();
-    conversation.recentMessages.push({ id, role, content: content.trim(), createdAt: now.toISOString() });
+    const trimmed = content.trim();
+    conversation.recentMessages.push({ id, role, content: trimmed, createdAt: now.toISOString() });
+    if (role === "assistant" && conversation.activeTripId) {
+      const trip = this.#trips.get(conversation.activeTripId);
+      if (trip?.userId === userId && trimmed) {
+        this.#recordTripActivity(trip.id, "telegram_message", {}, now, {
+          body: trimmed,
+          channel: "telegram",
+          sourceMessageId: id
+        });
+      }
+    }
     return id;
   }
 
@@ -1598,14 +1609,29 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       .map(clone);
   }
 
-  async markNotificationSent(notificationId: string, telegramMessageId: number, now: Date): Promise<void> {
+  async markNotificationSent(
+    notificationId: string,
+    telegramMessageId: number,
+    body: string,
+    now: Date
+  ): Promise<void> {
     const notification = this.#notifications.get(notificationId);
-    if (notification) this.#notifications.set(notificationId, {
+    if (!notification) return;
+    this.#notifications.set(notificationId, {
       ...notification,
       status: "sent",
       telegramMessageId
     });
-    void now;
+    const trimmed = body.trim();
+    if (trimmed) {
+      this.#recordTripActivity(notification.tripId, "captain_update", {
+        kind: notification.kind
+      }, now, {
+        body: trimmed,
+        channel: "telegram",
+        notificationId
+      });
+    }
   }
 
   async markNotificationFailed(notificationId: string, error: string, now: Date): Promise<void> {
@@ -1695,14 +1721,24 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     tripId: string,
     eventType: string,
     payload: Record<string, unknown>,
-    now: Date
+    now: Date,
+    extras?: {
+      body?: string | null;
+      channel?: TripActivity["channel"];
+      notificationId?: string | null;
+      sourceMessageId?: string | null;
+    }
   ): void {
     const activity = this.#tripActivity.get(tripId) ?? [];
     activity.unshift({
       id: randomUUID(),
       eventType,
       payload,
-      createdAt: now.toISOString()
+      createdAt: now.toISOString(),
+      body: extras?.body ?? null,
+      channel: extras?.channel ?? "system",
+      notificationId: extras?.notificationId ?? null,
+      sourceMessageId: extras?.sourceMessageId ?? null
     });
     this.#tripActivity.set(tripId, activity.slice(0, 50));
   }

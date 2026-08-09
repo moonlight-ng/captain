@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Trip, Watch } from "../src/domain.js";
-import { shouldAutoSearchOnOpen, stageLabel, tripStage } from "../src/trip-stage.js";
+import { formatElapsedClock, searchStartedAt, shouldAutoSearchOnOpen, stageLabel, tripStage } from "../src/trip-stage.js";
 
 describe("trip stage", () => {
   it("reports a stopped trip before anything else", () => {
@@ -70,6 +70,22 @@ describe("trip stage", () => {
     expect(stageLabel("stopped")).toBe("");
     expect(stageLabel("tracking", watch())).toMatch(/^Checked /u);
     expect(stageLabel("tracking", null)).toBe("Tracking");
+  });
+
+  it("pins the live search clock to the pending refresh or activation", () => {
+    expect(searchStartedAt(watch({ lastCheckAt: null, activatedAt: "2026-08-04T08:00:00.000Z" })))
+      .toBe("2026-08-04T08:00:00.000Z");
+    expect(searchStartedAt(watch({
+      lastCheckAt: "2026-08-04T08:00:00.000Z",
+      lastManualRefreshAt: "2026-08-04T09:00:00.000Z"
+    }))).toBe("2026-08-04T09:00:00.000Z");
+    expect(searchStartedAt(watch())).toBeNull();
+  });
+
+  it("formats the running-time clock as mm:ss", () => {
+    expect(formatElapsedClock(5)).toBe("0:05");
+    expect(formatElapsedClock(75)).toBe("1:15");
+    expect(formatElapsedClock(3661)).toBe("1:01:01");
   });
 });
 
