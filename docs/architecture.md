@@ -173,6 +173,10 @@ airlines, and expiry constraints agree with the Trip. The worker stores slice
 departure dates in each compact offer. Retention reserves the cheapest offer for
 every date combination before filling the remaining 60 slots with airline-diverse
 representatives.
+The database compaction trigger uses the same snapshot allowlist, including
+`departureDates`; migration 020 brings existing installations onto that
+contract. Older rows are intentionally left untouched and are replaced by the
+next verified search rather than being assigned inferred dates.
 
 Initial Telegram results are composed from deterministic date summaries:
 
