@@ -893,7 +893,8 @@ async function transcribeVoice(
   const audio = new Uint8Array(await response.arrayBuffer());
   if (audio.byteLength === 0 || audio.byteLength > MAX_VOICE_BYTES) throw new Error("Voice note has an invalid size");
   try {
-    const model = process.env.TRANSCRIPTION_MODEL?.trim() || "openai/gpt-4o-mini-transcribe";
+    const services = await getCaptainServices();
+    const model = services.env.transcriptionModel;
     const result = await transcribe({
       model,
       audio,
@@ -907,7 +908,6 @@ async function transcribeVoice(
         }
       }
     });
-    const services = await getCaptainServices();
     await services.usage.recordGatewayGeneration({
       userId,
       operation: "voice_transcription",

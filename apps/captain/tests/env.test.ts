@@ -53,6 +53,14 @@ describe("Captain public environment", () => {
     expect(loadEnv().tripInterpreterModel).toBe("openai/custom-extractor");
   });
 
+  it("uses the transcription model configured for voice notes", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("TRANSCRIPTION_MODEL", "");
+    expect(loadEnv().transcriptionModel).toBe("openai/gpt-4o-mini-transcribe");
+    vi.stubEnv("TRANSCRIPTION_MODEL", "openai/custom-transcriber");
+    expect(loadEnv().transcriptionModel).toBe("openai/custom-transcriber");
+  });
+
   it("falls back to the in-memory store when no database is configured", () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("DATABASE_URL", "");

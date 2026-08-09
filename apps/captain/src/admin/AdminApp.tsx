@@ -6,13 +6,30 @@ import type {
   AdminConversationSummary,
   AdminCostRange,
   AdminCostReport,
+  AdminOverview,
 } from "@agents/flight-domain/admin";
 
+import { ChevronRightIcon, ConversationsIcon, CostsIcon, OverviewIcon } from "../components/icons";
 import { AdminApi, AdminApiError } from "./api";
 import { parseAdminRoute, type AdminRoute } from "./routing";
 import "./admin.css";
 
 type Identity = { id: string; email: string };
+const adminDataCache = new Map<string, unknown>();
+
+function readAdminCache<T>(key: string): T | null {
+  return (adminDataCache.get(key) as T | undefined) ?? null;
+}
+
+function writeAdminCache<T>(key: string, value: T): T {
+  adminDataCache.set(key, value);
+  return value;
+}
+
+function clearAdminDataCache() {
+  adminDataCache.clear();
+}
+
 export function AdminApp() {
   const [api, setApi] = useState<AdminApi | null>(null);
   const [identity, setIdentity] = useState<Identity | null>(null);
@@ -44,6 +61,7 @@ export function AdminApp() {
     if (!api) return;
     const { data } = api.supabase.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_OUT" || !session) {
+        clearAdminDataCache();
         setIdentity(null);
         setState("signed-out");
         return;
@@ -73,17 +91,18 @@ export function AdminApp() {
   }
   if (state === "forbidden") {
     return <AdminGate title="This account isn’t allowed" body="Your identity is valid, but it is not on Captain’s administrator allowlist.">
-      <button className="admin-button" onClick={() => void api?.signOut()}>Use another account</button>
+      <button className="admin-button" onClick={() => { clearAdminDataCache(); void api?.signOut(); }}>Use another account</button>
     </AdminGate>;
   }
   if (state === "signed-out" || !api || !identity) return <AdminLogin api={api} />;
 
   return (
-    <AdminShell identity={identity} route={route} navigate={navigate} signOut={() => void api.signOut()}>
+    <AdminShell identity={identity} route={route} navigate={navigate}>
       {route.page === "overview" && <OverviewPage api={api} navigate={navigate} />}
       {route.page === "conversations" && <ConversationsPage api={api} navigate={navigate} />}
       {route.page === "conversation" && <ConversationPage api={api} id={route.id} navigate={navigate} />}
       {route.page === "costs" && <CostsPage api={api} navigate={navigate} />}
+      {route.page === "settings" && <SettingsPage api={api} identity={identity} signOut={() => { clearAdminDataCache(); void api.signOut(); }} />}
     </AdminShell>
   );
 }
@@ -129,13 +148,12 @@ function AdminLogin({ api }: { api: AdminApi | null }) {
     <main className="admin-gate">
       <section className="admin-login-card" aria-labelledby="admin-login-title">
         <Brand />
-        <p className="admin-kicker">Private operations</p>
-        <h1 id="admin-login-title">Captain admin</h1>
-        <p className="admin-login-copy">Monitor the production agent, review conversations, and reconcile AI spend.</p>
+        <h1 id="admin-login-title">Sign in</h1>
+        <p className="admin-login-copy">Review Captain’s conversations and AI spend.</p>
         {sent ? (
           <div className="admin-success" role="status">
             <strong>Check your inbox</strong>
-            <span>If the address is authorized, its secure sign-in link will open this dashboard.</span>
+            <span>If this address is authorized, a secure sign-in link is on its way.</span>
             <button className="admin-text-button" onClick={() => setSent(false)}>Send another link</button>
           </div>
         ) : (
@@ -146,7 +164,7 @@ function AdminLogin({ api }: { api: AdminApi | null }) {
             <button className="admin-button admin-button-primary" disabled={!api || busy}>{busy ? "Sending…" : "Email me a sign-in link"}</button>
           </form>
         )}
-        <p className="admin-fine-print">No public signup. Access is controlled by Captain’s server allowlist.</p>
+        <p className="admin-fine-print">Private access · no public signup</p>
       </section>
     </main>
   );
@@ -156,25 +174,36 @@ function AdminGate({ title, body, children }: { title: string; body?: string; ch
   return <main className="admin-gate"><section className="admin-login-card"><Brand /><h1>{title}</h1>{body && <p className="admin-login-copy">{body}</p>}{children}</section></main>;
 }
 
-function AdminShell({ identity, route, navigate, signOut, children }: {
+function AdminShell({ identity, route, navigate, children }: {
   identity: Identity;
   route: AdminRoute;
   navigate: (path: string) => void;
-  signOut: () => void;
   children: ReactNode;
 }) {
+  const [collapsed, setCollapsed] = useState(() => window.localStorage.getItem("captain-admin-sidebar") === "collapsed");
+  const toggleSidebar = () => {
+    setCollapsed((current) => {
+      const next = !current;
+      window.localStorage.setItem("captain-admin-sidebar", next ? "collapsed" : "expanded");
+      return next;
+    });
+  };
   return (
-    <div className="admin-shell">
+    <div className={`admin-shell${collapsed ? " sidebar-collapsed" : ""}`}>
       <aside className="admin-sidebar">
-        <Brand />
+        <div className="admin-sidebar-header">
+          <Brand />
+          <button className={`admin-sidebar-toggle${collapsed ? "" : " expanded"}`} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} title={collapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={toggleSidebar}><ChevronRightIcon /></button>
+        </div>
         <nav aria-label="Admin navigation">
-          <NavButton active={route.page === "overview"} onClick={() => navigate("/admin")} label="Overview" mark="O" />
-          <NavButton active={route.page === "conversations" || route.page === "conversation"} onClick={() => navigate("/admin/conversations")} label="Conversations" mark="C" />
-          <NavButton active={route.page === "costs"} onClick={() => navigate("/admin/costs")} label="Costs" mark="$" />
+          <NavButton active={route.page === "overview"} onClick={() => navigate("/admin")} label="Overview" icon={<OverviewIcon />} />
+          <NavButton active={route.page === "conversations" || route.page === "conversation"} onClick={() => navigate("/admin/conversations")} label="Conversations" icon={<ConversationsIcon />} />
+          <NavButton active={route.page === "costs"} onClick={() => navigate("/admin/costs")} label="Costs" icon={<CostsIcon />} />
         </nav>
         <div className="admin-sidebar-footer">
-          <div className="admin-profile"><span>{identity.email.slice(0, 1).toUpperCase()}</span><div><strong>{identity.email}</strong><small>Administrator</small></div></div>
-          <button className="admin-signout" onClick={signOut}>Sign out</button>
+          <button className={`admin-profile admin-profile-link${route.page === "settings" ? " active" : ""}`} aria-current={route.page === "settings" ? "page" : undefined} title="Account settings" onClick={() => navigate("/admin/settings")}>
+            <span>{identity.email.slice(0, 1).toUpperCase()}</span><div><strong>{identity.email}</strong><small>Administrator</small></div>
+          </button>
         </div>
       </aside>
       <header className="admin-mobile-nav">
@@ -184,7 +213,7 @@ function AdminShell({ identity, route, navigate, signOut, children }: {
           <button aria-current={route.page === "conversations" || route.page === "conversation" ? "page" : undefined} onClick={() => navigate("/admin/conversations")}>Chats</button>
           <button aria-current={route.page === "costs" ? "page" : undefined} onClick={() => navigate("/admin/costs")}>Costs</button>
         </nav>
-        <button className="admin-mobile-signout" onClick={signOut}>Sign out</button>
+        <button className={`admin-mobile-profile${route.page === "settings" ? " active" : ""}`} aria-label="Account settings" aria-current={route.page === "settings" ? "page" : undefined} onClick={() => navigate("/admin/settings")}>{identity.email.slice(0, 1).toUpperCase()}</button>
       </header>
       <main className="admin-main">{children}</main>
     </div>
@@ -192,22 +221,22 @@ function AdminShell({ identity, route, navigate, signOut, children }: {
 }
 
 function Brand() {
-  return <div className="admin-brand"><span className="admin-brand-mark">C</span><span>Captain <small>Admin</small></span></div>;
+  return <div className="admin-brand"><img className="admin-brand-avatar" src="/captain-avatar.jpg" alt="" /><span className="admin-brand-label">Captain</span></div>;
 }
 
-function NavButton({ active, onClick, label, mark }: { active: boolean; onClick: () => void; label: string; mark: string }) {
-  return <button className={active ? "active" : ""} aria-current={active ? "page" : undefined} onClick={onClick}><span>{mark}</span>{label}</button>;
+function NavButton({ active, onClick, label, icon }: { active: boolean; onClick: () => void; label: string; icon: ReactNode }) {
+  return <button className={active ? "active" : ""} aria-current={active ? "page" : undefined} title={label} onClick={onClick}><span>{icon}</span><span className="admin-nav-label">{label}</span></button>;
 }
 
 function OverviewPage({ api, navigate }: { api: AdminApi; navigate: (path: string) => void }) {
-  const { data, error, loading, reload } = useRefreshing(() => api.overview(), []);
+  const { data, error, reload } = useRefreshing<AdminOverview>("overview", () => api.overview(), []);
   return (
-    <Page title="Overview" subtitle="Production Captain at a glance" action={<RefreshButton onClick={reload} />}>
-      {loading && !data ? <Loading /> : error || !data ? <ErrorState onRetry={reload} /> : <>
+    <Page title="Overview" subtitle="Production Captain" action={<RefreshButton onClick={reload} />}>
+      {!data ? error ? <ErrorState onRetry={reload} /> : <Loading /> : <>
         <section className="admin-agent-card">
-          <div className="admin-agent-identity"><span className="admin-agent-orb">C</span><div><div className="admin-status-line"><span className="admin-status-dot" /> Operational</div><h2>Captain</h2><p>Single production agent · {data.agent.model}</p></div></div>
+          <div className="admin-agent-identity"><div><h2>Captain</h2><p>Production · {data.agent.model}</p></div><div className="admin-status-line"><span className="admin-status-dot" /> Operational</div></div>
           <div className="admin-agent-facts"><Fact label="Environment" value="Production" /><Fact label="Active work" value={`${data.agent.activeTurns} turn${data.agent.activeTurns === 1 ? "" : "s"}`} /><Fact label="Last activity" value={data.agent.lastActivityAt ? relativeTime(data.agent.lastActivityAt) : "No tracked activity"} /><Fact label="Database" value={data.health.database === "available" ? "Connected" : "Local memory"} /></div>
-          <div className="admin-coverage"><span>Tracking coverage</span><strong>Since {formatDateTime(data.trackingStartedAt)}</strong><small>Earlier conversations are available; spend is recorded from this point forward.</small></div>
+          <div className="admin-coverage"><span>Spend tracked</span><strong>Since {formatDateTime(data.trackingStartedAt)}</strong><small>Earlier spend is not included.</small></div>
         </section>
         <section className="admin-metrics" aria-label="Key metrics">
           <Metric label="Conversations" value={formatNumber(data.metrics.conversations)} note={`${formatNumber(data.metrics.users)} users`} />
@@ -215,7 +244,7 @@ function OverviewPage({ api, navigate }: { api: AdminApi; navigate: (path: strin
           <Metric label="Model calls" value={formatNumber(data.metrics.modelCalls30d)} note="Last 30 days" />
           <Metric label="AI spend" value={formatUsd(data.metrics.costUsd30d)} note={data.metrics.unresolvedCostCount ? `${data.metrics.unresolvedCostCount} pending` : "Exact · 30 days"} />
         </section>
-        <SectionHeader title="Recent conversations" detail="Latest user activity" action={<button className="admin-text-button" onClick={() => navigate("/admin/conversations")}>View all</button>} />
+        <SectionHeader title="Recent conversations" action={<button className="admin-text-button" onClick={() => navigate("/admin/conversations")}>View all</button>} />
         <ConversationTable conversations={data.recentConversations} navigate={navigate} empty="No conversations yet." />
       </>}
     </Page>
@@ -225,27 +254,38 @@ function OverviewPage({ api, navigate }: { api: AdminApi; navigate: (path: strin
 function ConversationsPage({ api, navigate }: { api: AdminApi; navigate: (path: string) => void }) {
   const [queryInput, setQueryInput] = useState("");
   const [query, setQuery] = useState("");
-  const [page, setPage] = useState<AdminConversationPage | null>(null);
+  const [page, setPage] = useState<AdminConversationPage | null>(() => readAdminCache("conversations:"));
   const [error, setError] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !readAdminCache("conversations:"));
   const load = useCallback(async (cursor?: string, append = false) => {
-    setLoading(true); setError(false);
+    const cacheKey = `conversations:${query}`;
+    if (!cursor && !append) {
+      const cached = readAdminCache<AdminConversationPage>(cacheKey);
+      setPage(cached);
+      setLoading(!cached);
+    } else setLoading(true);
+    setError(false);
     try {
       const next = await api.conversations({
         limit: 25,
         ...(query ? { query } : {}),
         ...(cursor ? { cursor } : {})
       });
-      setPage((current) => append && current ? { conversations: [...current.conversations, ...next.conversations], nextCursor: next.nextCursor } : next);
+      setPage((current) => {
+        const merged = append && current
+          ? { conversations: [...current.conversations, ...next.conversations], nextCursor: next.nextCursor }
+          : next;
+        return writeAdminCache(cacheKey, merged);
+      });
     } catch { setError(true); }
     finally { setLoading(false); }
   }, [api, query]);
   useEffect(() => { void load(); }, [load]);
   const search = (event: FormEvent) => { event.preventDefault(); setQuery(queryInput.trim()); };
   return (
-    <Page title="Conversations" subtitle="Search production transcripts by user, identity, or message text" action={<RefreshButton onClick={() => void load()} />}>
+    <Page title="Conversations" subtitle="Search users, usernames, or message text" action={<RefreshButton onClick={() => void load()} />}>
       <form className="admin-search" onSubmit={search} role="search"><label htmlFor="conversation-search" className="sr-only">Search conversations</label><input id="conversation-search" value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="Search user ID, @username, name, or message…" /><button className="admin-button">Search</button>{query && <button type="button" className="admin-text-button" onClick={() => { setQueryInput(""); setQuery(""); }}>Clear</button>}</form>
-      {error ? <ErrorState onRetry={() => void load()} /> : loading && !page ? <Loading /> : <>
+      {error && !page ? <ErrorState onRetry={() => void load()} /> : loading && !page ? <Loading /> : <>
         {query && <p className="admin-result-note">Results for “{query}”</p>}
         <ConversationTable conversations={page?.conversations ?? []} navigate={navigate} empty={query ? "No matching conversations." : "No conversations yet."} />
         {page?.nextCursor && <div className="admin-load-more"><button className="admin-button" disabled={loading} onClick={() => void load(page.nextCursor!, true)}>{loading ? "Loading…" : "Load more"}</button></div>}
@@ -255,22 +295,33 @@ function ConversationsPage({ api, navigate }: { api: AdminApi; navigate: (path: 
 }
 
 function ConversationPage({ api, id, navigate }: { api: AdminApi; id: string; navigate: (path: string) => void }) {
-  const [detail, setDetail] = useState<AdminConversationDetail | null>(null);
+  const cacheKey = `conversation:${id}`;
+  const [detail, setDetail] = useState<AdminConversationDetail | null>(() => readAdminCache(cacheKey));
   const [error, setError] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !readAdminCache(cacheKey));
   const load = useCallback(async (before?: string) => {
-    setLoading(true); setError(false);
+    if (!before) {
+      const cached = readAdminCache<AdminConversationDetail>(cacheKey);
+      setDetail(cached);
+      setLoading(!cached);
+    } else setLoading(true);
+    setError(false);
     try {
       const next = await api.conversation(id, before);
-      setDetail((current) => before && current ? { ...current, messages: [...next.messages, ...current.messages], olderCursor: next.olderCursor } : next);
+      setDetail((current) => {
+        const merged = before && current
+          ? { ...current, messages: [...next.messages, ...current.messages], olderCursor: next.olderCursor }
+          : next;
+        return writeAdminCache(cacheKey, merged);
+      });
     } catch { setError(true); }
     finally { setLoading(false); }
-  }, [api, id]);
-  useEffect(() => { setDetail(null); void load(); }, [load]);
+  }, [api, cacheKey, id]);
+  useEffect(() => { setDetail(readAdminCache(cacheKey)); void load(); }, [cacheKey, load]);
   const identity = detail ? conversationName(detail.conversation) : "Conversation";
   return (
-    <Page title={identity} subtitle={detail ? detail.conversation.userId : "Loading transcript"} action={<button className="admin-text-button" onClick={() => navigate("/admin/conversations")}>Back to conversations</button>}>
-      {error ? <ErrorState onRetry={() => void load()} /> : loading && !detail ? <Loading /> : detail && <div className="admin-detail-layout">
+    <Page title={identity} subtitle={detail ? detail.conversation.userId : "Loading transcript"} action={<button className="admin-text-button" onClick={() => navigate("/admin/conversations")}>Back</button>}>
+      {error && !detail ? <ErrorState onRetry={() => void load()} /> : loading && !detail ? <Loading /> : detail && <div className="admin-detail-layout">
         <section className="admin-transcript" aria-label="Conversation transcript">
           <div className="admin-transcript-heading"><div><span>{detail.conversation.messageCount} messages</span><span>{formatUsd(detail.conversation.costUsd)} tracked spend</span></div><button className="admin-text-button" onClick={() => void load()} disabled={loading}>Reload</button></div>
           {detail.olderCursor && <div className="admin-load-older"><button className="admin-button" disabled={loading} onClick={() => void load(detail.olderCursor!)}>{loading ? "Loading…" : "Load older messages"}</button></div>}
@@ -288,24 +339,47 @@ function ConversationPage({ api, id, navigate }: { api: AdminApi; id: string; na
 
 function CostsPage({ api, navigate }: { api: AdminApi; navigate: (path: string) => void }) {
   const [range, setRange] = useState<AdminCostRange>("30d");
-  const { data, error, loading, reload } = useRefreshing(() => api.costs(range), [range]);
+  const { data, error, reload } = useRefreshing<AdminCostReport>(`costs:${range}`, () => api.costs(range), [range]);
   return (
-    <Page title="Costs" subtitle="Exact AI usage reported by the Gateway" action={<RefreshButton onClick={reload} />}>
+    <Page title="Costs" subtitle="Exact Gateway-reported AI usage" action={<RefreshButton onClick={reload} />}>
       <div className="admin-range" role="group" aria-label="Cost reporting range">{(["7d", "30d", "all"] as AdminCostRange[]).map((value) => <button key={value} className={range === value ? "active" : ""} aria-pressed={range === value} onClick={() => setRange(value)}>{value === "all" ? "All tracked" : value.replace("d", " days")}</button>)}</div>
-      {loading && !data ? <Loading /> : error || !data ? <ErrorState onRetry={reload} /> : <>
-        {data.summary.unresolvedCostCount > 0 && <div className="admin-cost-notice" role="status"><strong>{data.summary.unresolvedCostCount} cost {data.summary.unresolvedCostCount === 1 ? "lookup is" : "lookups are"} pending or unavailable.</strong><span>Totals include only reconciled Gateway charges; Captain never estimates missing amounts.</span></div>}
+      {!data ? error ? <ErrorState onRetry={reload} /> : <Loading /> : <>
+        {data.summary.unresolvedCostCount > 0 && <div className="admin-cost-notice" role="status"><strong>{data.summary.unresolvedCostCount} cost {data.summary.unresolvedCostCount === 1 ? "lookup is" : "lookups are"} pending.</strong><span>Exact totals exclude unresolved charges.</span></div>}
         <section className="admin-metrics admin-cost-metrics"><Metric label="AI spend" value={formatUsd(data.summary.costUsd)} note={`Tracked since ${formatDate(data.trackingStartedAt)}`} /><Metric label="Model calls" value={formatNumber(data.summary.calls)} note={rangeLabel(data.range)} /><Metric label="Input tokens" value={formatCompact(data.summary.inputTokens)} note={`${formatCompact(data.summary.cacheReadTokens)} cache read`} /><Metric label="Output tokens" value={formatCompact(data.summary.outputTokens)} note={`${formatCompact(data.summary.cacheWriteTokens)} cache write`} /></section>
-        <section className="admin-chart-card"><SectionHeader title="Daily spend" detail="UTC accounting days" /><DailyChart report={data} /></section>
-        <div className="admin-breakdown-grid"><Breakdown title="By model" items={data.byModel} total={data.summary.costUsd} /><Breakdown title="By operation" items={data.byOperation} total={data.summary.costUsd} /></div>
-        <SectionHeader title="Highest-cost conversations" detail="Exact tracked usage" />
-        <ConversationTable conversations={data.topConversations} navigate={navigate} empty="No conversation costs in this range." />
+        {data.summary.calls === 0 ? <EmptyState text="No usage in this range." /> : <>
+          <section className="admin-chart-card"><SectionHeader title="Daily spend" detail="UTC accounting days" /><DailyChart report={data} /></section>
+          <div className="admin-breakdown-grid"><Breakdown title="By model" items={data.byModel} total={data.summary.costUsd} /><Breakdown title="By operation" items={data.byOperation} total={data.summary.costUsd} /></div>
+          <SectionHeader title="Highest-cost conversations" />
+          <ConversationTable conversations={data.topConversations} navigate={navigate} empty="No conversation costs in this range." />
+        </>}
       </>}
     </Page>
   );
 }
 
+function SettingsPage({ api, identity, signOut }: { api: AdminApi; identity: Identity; signOut: () => void }) {
+  const { data, error, reload } = useRefreshing<AdminOverview>("overview", () => api.overview(), []);
+  return (
+    <Page title="Settings" subtitle="Admin account">
+      <div className="admin-settings-stack">
+        <section className="admin-settings-card">
+          <div className="admin-settings-profile"><span>{identity.email.slice(0, 1).toUpperCase()}</span><div><strong>{identity.email}</strong><small>Administrator</small></div></div>
+          <button className="admin-button admin-signout-button" onClick={signOut}>Sign out</button>
+        </section>
+        <section>
+          <SectionHeader title="Models" />
+          {data?.models?.length ? <div className="admin-model-list">{data.models.map((item) => <div className="admin-model-row" key={item.key}><span>{item.label}</span><strong>{item.model}</strong></div>)}</div>
+            : data ? <div className="admin-inline-empty">Model details are unavailable.</div>
+            : error ? <div className="admin-inline-error"><span>Models couldn’t be loaded.</span><button className="admin-text-button" onClick={reload}>Try again</button></div>
+              : <div className="admin-loading admin-settings-loading" role="status"><span />Loading models…</div>}
+        </section>
+      </div>
+    </Page>
+  );
+}
+
 function Page({ title, subtitle, action, children }: { title: string; subtitle: string; action?: ReactNode; children: ReactNode }) {
-  return <><header className="admin-page-header"><div><p className="admin-kicker">Operations</p><h1>{title}</h1><p>{subtitle}</p></div>{action}</header><div className="admin-page-body">{children}</div></>;
+  return <><header className="admin-page-header"><div><h1>{title}</h1><p>{subtitle}</p></div>{action}</header><div className="admin-page-body">{children}</div></>;
 }
 
 function SectionHeader({ title, detail, action }: { title: string; detail?: string; action?: ReactNode }) {
@@ -341,25 +415,28 @@ function Breakdown({ title, items, total }: { title: string; items: Array<{ key:
 
 function RefreshButton({ onClick }: { onClick: () => void }) { return <button className="admin-button" onClick={onClick}>Refresh</button>; }
 function Loading() { return <div className="admin-loading" role="status"><span />Loading production data…</div>; }
-function ErrorState({ onRetry }: { onRetry: () => void }) { return <div className="admin-empty" role="alert"><strong>Production data couldn’t be loaded.</strong><p>Your session may have expired, or the service is temporarily unavailable.</p><button className="admin-button" onClick={onRetry}>Try again</button></div>; }
-function EmptyState({ text }: { text: string }) { return <div className="admin-empty"><strong>{text}</strong><p>New activity will appear here automatically.</p></div>; }
+function ErrorState({ onRetry }: { onRetry: () => void }) { return <div className="admin-empty" role="alert"><strong>Production data couldn’t be loaded.</strong><p>Your session may have expired.</p><button className="admin-button" onClick={onRetry}>Try again</button></div>; }
+function EmptyState({ text }: { text: string }) { return <div className="admin-empty"><strong>{text}</strong><p>New activity appears here.</p></div>; }
 
-function useRefreshing<T>(loader: () => Promise<T>, dependencies: unknown[]) {
-  const [data, setData] = useState<T | null>(null);
+function useRefreshing<T>(cacheKey: string, loader: () => Promise<T>, dependencies: unknown[]) {
+  const [data, setData] = useState<T | null>(() => readAdminCache(cacheKey));
   const [error, setError] = useState(false);
-  const [loading, setLoading] = useState(true);
   const reload = useCallback(() => {
-    setLoading(true); setError(false);
-    void loader().then(setData).catch(() => setError(true)).finally(() => setLoading(false));
-  // The caller supplies the data dependencies that should replace the polling closure.
+    const cached = readAdminCache<T>(cacheKey);
+    setData(cached);
+    setError(false);
+    void loader()
+      .then((value) => setData(writeAdminCache(cacheKey, value)))
+      .catch(() => setError(true));
+  // The caller supplies the request dependencies that should replace this polling closure.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, dependencies);
+  }, [cacheKey, ...dependencies]);
   useEffect(() => {
     reload();
     const interval = window.setInterval(() => { if (document.visibilityState === "visible") reload(); }, 30_000);
     return () => window.clearInterval(interval);
   }, [reload]);
-  return { data, error, loading, reload };
+  return { data, error, reload };
 }
 
 function readRoute(): AdminRoute {

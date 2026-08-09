@@ -49,6 +49,17 @@ describe("Captain administrator API", () => {
     });
   });
 
+  it("reports the configured model for each production AI path", async () => {
+    const response = await invoke("/api/admin/overview", authenticated());
+    expect(response.status).toBe(200);
+    expect((await response.json() as { models: unknown }).models).toEqual([
+      { key: "owner_chat", label: "Owner chat", model: "openai/gpt-5.6-terra" },
+      { key: "trip_interpretation", label: "Trip interpretation", model: "openai/gpt-5.6-luna" },
+      { key: "trip_update", label: "Trip updates", model: "openai/gpt-5.6-luna" },
+      { key: "voice_transcription", label: "Voice transcription", model: "openai/gpt-4o-mini-transcribe" }
+    ]);
+  });
+
   it("forwards bounded search pagination and rejects invalid cost ranges", async () => {
     const listConversations = vi.fn(async () => ({ conversations: [], nextCursor: null }));
     (state.services as { adminStore: { listConversations: unknown } }).adminStore.listConversations = listConversations;
@@ -97,7 +108,12 @@ describe("Captain administrator API", () => {
 
 function servicesFixture() {
   return {
-    env: { databaseUrl: "postgresql://captain.invalid/db", aiModel: "openai/gpt-5.6-terra" },
+    env: {
+      databaseUrl: "postgresql://captain.invalid/db",
+      aiModel: "openai/gpt-5.6-terra",
+      tripInterpreterModel: "openai/gpt-5.6-luna",
+      transcriptionModel: "openai/gpt-4o-mini-transcribe"
+    },
     adminAuth: {
       publicConfig: () => ({
         supabaseUrl: "https://captain.supabase.co",

@@ -9,7 +9,7 @@ additional_redirect_urls = [
 enable_signup = false
 
 [auth.email]
-enable_signup = false
+enable_signup = true
 enable_confirmations = true
 max_frequency = "1m"
 otp_length = 8

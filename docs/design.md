@@ -51,7 +51,15 @@ Hardcoded companions (not tokenized): canvas `#000000`; soft white washes; coral
 
 ### Typography
 
-Inter 400/600/700. Titles and `.price` use `--type-title` + medium weight + tight tracking. Body everywhere else. Eyebrows: bold, uppercase, `.17em` tracking, ~42% white. Captions for badges/chips. Tabular nums on times, prices, peer-plot labels. Avoid a fourth type size.
+Inter 400/600/700. Default to 13px for headings, controls, labels, values, and copy. Reserve 22px for true page titles, prices, or primary totals; reserve 10px for compact metadata and badges. Eyebrows: bold, uppercase, `.17em` tracking, ~42% white. Tabular nums on times, prices, peer-plot labels. The allowed scale is 22px / 13px / 10px; do not introduce a fourth size or an intermediate weight.
+
+### Spacing and restraint
+
+Use a 4px base grid. Preferred steps are 4, 8, 12, 16, 20, 24, 32, 40, 48, and 56px; choose the nearest step instead of adding one-off gaps. Reduce copy until every remaining line carries new information. Headings should not be restated by subtitles or helper text.
+
+Use fewer visual lines too. One containing card with intentional row dividers is preferable to several nested outlined cards. Keep borders for structure and interactive boundaries, not decoration.
+
+The canvas is black and the standard surface is `--panel`. Stay on the canvas unless a container needs grouping or an interaction needs a hit area. Do not stack several near-black background colors to manufacture hierarchy; use spacing, weight, and opacity first.
 
 ### Color semantics
 
@@ -92,6 +100,7 @@ Stages: `stopped` | `paused` | `stale` | `searching` | `tracking`. `stageLabel()
 - **Job:** Brand or back affordance + quiet context (profile name, “Trip settings”).
 - **Inputs:** Home link / back handler; optional display name.
 - **Compose with:** `.quiet-link` / `.back-link`.
+- **Admin chrome:** Use Captain’s circular cloud avatar with the single label “Captain”; do not append mode labels such as “Admin” to the brand. The desktop sidebar may collapse to icons and should remember that UI preference. Treat the signed-in name and role as one link to account settings. Sign-out belongs on that settings screen, not as persistent sidebar chrome. Settings lists the protected runtime model map read-only until editing is intentionally introduced.
 
 #### Quiet / back links
 - **Classes:** `.quiet-link`, `.back-link` (+ `.inactive`)

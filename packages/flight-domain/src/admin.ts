@@ -88,6 +88,11 @@ export type AdminOverview = {
     lastActivityAt: string | null;
     activeTurns: number;
   };
+  models: Array<{
+    key: "owner_chat" | "trip_interpretation" | "trip_update" | "voice_transcription";
+    label: string;
+    model: string;
+  }>;
   metrics: {
     users: number;
     conversations: number;

@@ -211,6 +211,12 @@ async function adminOverview(): Promise<Response> {
       lastActivityAt: overview.lastActivityAt,
       activeTurns: overview.activeTurns
     },
+    models: [
+      { key: "owner_chat", label: "Owner chat", model: services.env.aiModel },
+      { key: "trip_interpretation", label: "Trip interpretation", model: services.env.tripInterpreterModel },
+      { key: "trip_update", label: "Trip updates", model: services.env.tripInterpreterModel },
+      { key: "voice_transcription", label: "Voice transcription", model: services.env.transcriptionModel }
+    ],
     metrics: overview.metrics,
     trackingStartedAt: overview.trackingStartedAt,
     recentConversations: overview.recentConversations
