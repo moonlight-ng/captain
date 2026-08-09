@@ -31,8 +31,8 @@ export function loadErrorCopy(error: unknown): { title: string; body: string } {
     }
     if (error.status === 404) {
       return {
-        title: "Trips isn’t available on this Captain yet.",
-        body: "The admin Trips API isn’t deployed on the server your Vite proxy targets. Run a local Captain agent, or deploy these changes."
+        title: "That production record isn’t available.",
+        body: "It may have been removed, or this Captain server may not have the requested API yet."
       };
     }
     return {

@@ -30,6 +30,10 @@ describe("administrator load errors", () => {
       title: "Production data couldn’t be loaded.",
       body: "The server returned 500 (database_error)."
     });
+    expect(loadErrorCopy(new AdminApiError(404, "not_found"))).toEqual({
+      title: "That production record isn’t available.",
+      body: "It may have been removed, or this Captain server may not have the requested API yet."
+    });
     expect(loadErrorCopy(new TypeError("fetch failed"))).toEqual({
       title: "Production data couldn’t be loaded.",
       body: "Captain couldn’t reach the production API. Check the connection and try again."
