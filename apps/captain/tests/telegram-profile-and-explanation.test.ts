@@ -30,24 +30,18 @@ import {
 describe("Telegram profile onboarding", () => {
   it("starts every new traveller with the fixed two-message introduction", () => {
     expect(CAPTAIN_NEW_USER_GREETING).toBe(
-      "Hi, I’m Captain. I plan multi-city trips and compare real-time flight options across your possible dates.\n\n"
-      + "I’m still in early testing, so I can only keep one trip at a time. "
-      + "You’re set up for USD fares and a balance of price and travel time. You can change these anytime. "
-      + "Can't book or pay yet"
+      "Hi, I’m Captain. I can plan multi-city trips and compare real-time flight options across your possible dates."
     );
     expect(CAPTAIN_READY_PROMPT).toBe(
       "Share your travel plans via text or voice note and I'll help you explore the options."
     );
   });
 
-  it("sets expectations before asking for anything", () => {
-    // The interview is gone: onboarding asks no questions, so the first
-    // message has to carry the demo framing and the one-trip limit itself.
-    expect(CAPTAIN_NEW_USER_GREETING).toContain("early testing");
-    expect(CAPTAIN_NEW_USER_GREETING).toContain("one trip at a time");
-    expect(CAPTAIN_NEW_USER_GREETING).toContain("USD fares");
-    expect(CAPTAIN_NEW_USER_GREETING).toContain("balance of price and travel time");
-    expect(CAPTAIN_NEW_USER_GREETING).toMatch(/Can't book or pay yet$/u);
+  it("keeps the introduction focused on Captain’s core capability", () => {
+    expect(CAPTAIN_NEW_USER_GREETING).not.toContain("early testing");
+    expect(CAPTAIN_NEW_USER_GREETING).not.toContain("one trip at a time");
+    expect(CAPTAIN_NEW_USER_GREETING).not.toContain("USD fares");
+    expect(CAPTAIN_NEW_USER_GREETING).not.toContain("book or pay");
     expect(CAPTAIN_READY_PROMPT).toContain("voice note");
     expect(CAPTAIN_READY_PROMPT).toContain("explore the options");
     expect(CAPTAIN_NEW_USER_GREETING).toContain("real-time flight options");

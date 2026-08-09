@@ -102,15 +102,10 @@ export const CAPTAIN_PLANNING_STATUS = [
 ] as const;
 const CAPTAIN_PLANNING_STAGE_MS = 3_000;
 const PROCESSING_FAILURE_TEXT = "That one didn’t go through on my end. Your trip is untouched — try me again.";
-// Onboarding is two messages and no questions. Everything the old interview
-// asked for is seeded by DEFAULT_PROFILE and editable on /profile, so a new
-// traveller learns what Captain is and can start planning without answering
-// anything first.
+// Onboarding is two messages and no questions: a concise capability statement,
+// followed by the prompt that lets a new traveller start planning immediately.
 export const CAPTAIN_NEW_USER_GREETING =
-  "Hi, I’m Captain. I plan multi-city trips and compare real-time flight options across your possible dates.\n\n"
-  + "I’m still in early testing, so I can only keep one trip at a time. "
-  + "You’re set up for USD fares and a balance of price and travel time. You can change these anytime. "
-  + "Can't book or pay yet";
+  "Hi, I’m Captain. I can plan multi-city trips and compare real-time flight options across your possible dates.";
 export const CAPTAIN_READY_PROMPT =
   "Share your travel plans via text or voice note and I'll help you explore the options.";
 // Captain introduces itself once, at the welcome step. A traveller who has
