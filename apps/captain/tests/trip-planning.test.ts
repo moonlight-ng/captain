@@ -6,7 +6,8 @@ import {
   isCaptainGreeting,
   isDuplicateTripConfirmationReply,
   parseTripPlanCallback,
-  tripPlanConfirmationReplyMarkup
+  tripPlanConfirmationReplyMarkup,
+  tripPlanReviewReplyMarkup
 } from "../agent/channels/telegram.js";
 import { TripPlanningService } from "../services/trip-planning/service.js";
 import {
@@ -84,7 +85,7 @@ describe("Captain trip planning", () => {
     const saved = await planning.handleOpenDraftText(user.id, "The Sunday before", null);
     expect(saved?.status).toBe("started");
     if (!saved || saved.status !== "started") throw new Error("Expected a saved draft trip");
-    expect(saved.message).toContain("Your trip is saved");
+    expect(saved.message).toContain("Ok, here's what I have. Review or confirm to start exploring flights.");
     expect(saved.message).toContain("Leg 1: LOS → NBO · Sunday, 1 Nov 2026");
     expect(saved.message).toContain("Open trip: https://captain.example/t#test-");
     expect(saved.receipt.status).toBe("draft");
@@ -131,6 +132,29 @@ describe("Captain trip planning", () => {
       revision: 3
     });
     expect(parseTripPlanCallback(`captain-trip:start:${id}:0`)).toBeNull();
+  });
+
+  it("binds Review and Confirm to the saved trip version", () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    expect(tripPlanReviewReplyMarkup({
+      tripId: id,
+      version: 4,
+      status: "draft",
+      dashboardUrl: "https://captain.example/trip"
+    })).toEqual({
+      inline_keyboard: [[{
+        text: "Review",
+        url: "https://captain.example/trip"
+      }, {
+        text: "Confirm",
+        callback_data: `captain-trip:confirm:${id}:4`
+      }]]
+    });
+    expect(parseTripPlanCallback(`captain-trip:confirm:${id}:4`)).toEqual({
+      type: "confirm",
+      tripId: id,
+      version: 4
+    });
   });
 
   it("distinguishes a delivered confirmation from an older button message", () => {
@@ -436,10 +460,10 @@ describe("Captain trip planning", () => {
     // printed as internal planning language in the traveller-facing receipt.
     expect(started.receipt.goal)
       .toBe("Get you LOS → NYC and back on 17 Aug for the best balance of fare and "
-        + "journey time, using verified fares when you search.");
+        + "journey time, using verified fares as prices change.");
     expect(started.message).not.toContain("Goal:");
     expect(started.message).not.toContain(started.receipt.goal);
-    expect(started.message).toContain("ready to search each flight leg with live fares");
+    expect(started.message).toContain("Review or confirm to start exploring flights");
     expect(started.message).toContain(`Open trip: https://captain.example/t#test-${started.receipt.tripId}`);
     expect(started.message).not.toContain("Trip reference");
     const renderedReceipt = telegramDashboardMessage(started.message);

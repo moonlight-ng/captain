@@ -7,8 +7,10 @@ import {
   TripNotFoundError,
   TripVersionConflictError,
   formatTripGoal,
+  tripGoalState,
   tripActionSchema,
   updateTripBriefSchema,
+  updateTripTitleSchema,
   updateTravellerProfileSchema
 } from "@agents/flight-domain";
 import { ZodError, z } from "zod";
@@ -330,6 +332,7 @@ async function getTrip(
       activity,
       priceHistory,
       goal: formatTripGoal({ brief: trip.brief, rankingMode: profile.rankingMode }),
+      goalState: tripGoalState(trip.status),
       ...(services.env.simplifiedMultiCityEnabled
         ? { cities: graph.cities, legs: graph.legs, latestSearches }
         : {})
@@ -479,8 +482,10 @@ async function updateTrip(
   if (!trip || ["cancelled", "completed", "archived"].includes(trip.status)) {
     throw new TripNotFoundError();
   }
-  const update = updateTripBriefSchema.parse(await requestJson(request));
-  const updated = await services.trips.update(userId, trip.id, update);
+  const body = await requestJson(request);
+  const updated = body && typeof body === "object" && "title" in body
+    ? await services.trips.rename(userId, trip.id, updateTripTitleSchema.parse(body))
+    : await services.trips.update(userId, trip.id, updateTripBriefSchema.parse(body));
   return Response.json({ trip: updated }, { headers: noStore() });
 }
 

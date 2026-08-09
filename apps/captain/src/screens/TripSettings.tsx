@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 
-import { tripAction } from "../api";
+import { ApiError, tripAction, updateTripTitle } from "../api";
+import { TripPlanEditor } from "../components/TripPlanEditor";
 import type { TripPayload } from "../domain";
 import {
   activityLabel,
@@ -46,10 +47,12 @@ export function TripSettings({
     <main className="settings-shell">
       <SettingsTopbar onBack={onBack} />
       <section className="settings-intro">
-        <h1>{routeLabel(trip)}</h1>
+        <h1>{trip.title}</h1>
         <p>{dateRangeLabel(trip.brief.departureWindow.start, trip.brief.departureWindow.end)}</p>
       </section>
 
+      <TripTitleEditor trip={trip} onSaved={onTripChanged} />
+      <TripPlanEditor key={`${trip.id}:${trip.version}`} trip={trip} onSaved={onTripChanged} />
       <TrackingCard
         data={tripData}
         stage={stage}
@@ -80,6 +83,63 @@ export function TripSettings({
         </div>
       </details>
     </main>
+  );
+}
+
+function TripTitleEditor({
+  trip,
+  onSaved
+}: {
+  trip: NonNullable<TripPayload["trip"]>;
+  onSaved: () => Promise<void>;
+}) {
+  const [title, setTitle] = useState(trip.title);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setSaved(false);
+    setError("");
+    try {
+      await updateTripTitle(trip.id, trip.version, title);
+      setSaved(true);
+      await onSaved();
+    } catch (cause) {
+      setError(cause instanceof ApiError && cause.status === 409
+        ? "This trip changed elsewhere. Reload it and try again."
+        : "Captain couldn’t update the trip name. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="settings-card trip-name-settings" id="trip-name">
+      <p className="eyebrow">Trip name</p>
+      <h2>Give this trip a readable name</h2>
+      <p>This is the name shown on your trip and home screens.</p>
+      <form onSubmit={(event) => void save(event)}>
+        <label>
+          Name
+          <input
+            value={title}
+            maxLength={120}
+            required
+            onChange={(event) => {
+              setTitle(event.target.value);
+              setSaved(false);
+            }}
+          />
+        </label>
+        {error ? <p className="form-error" role="alert">{error}</p> : null}
+        <button className="save-button" disabled={busy || title.trim() === trip.title}>
+          {busy ? "Saving…" : saved ? "Name updated" : "Update name"}
+        </button>
+      </form>
+    </section>
   );
 }
 
@@ -128,7 +188,9 @@ function TrackingCard({
           </div>
           <div><dt>Flights</dt><dd>{data.offers.length}</dd></div>
         </dl>
-        <p>Checked once a day, until the day you fly.</p>
+        <p>{stage === "planning"
+          ? "Confirm this plan before Captain starts analysing fares."
+          : "Checked once a day, until the day you fly."}</p>
         {error && <p className="form-error" role="alert">{error}</p>}
         <TripControls
           data={data}
@@ -188,6 +250,14 @@ function TripControls({
     return (
       <div className="trip-controls">
         <button className="primary" disabled={busy} onClick={() => void act("track")}>Track</button>
+        {stop}
+      </div>
+    );
+  }
+  if (stage === "planning") {
+    return (
+      <div className="trip-controls">
+        <button className="primary" disabled={busy} onClick={() => void act("track")}>Confirm plan</button>
         {stop}
       </div>
     );

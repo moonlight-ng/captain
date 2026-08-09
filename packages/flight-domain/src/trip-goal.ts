@@ -9,7 +9,7 @@
  * aligned without printing this internal sentence to the traveller.
  */
 import type { RankingMode } from "./profile.js";
-import type { TripBrief } from "./trip.js";
+import type { TripBrief, TripStatus } from "./trip.js";
 
 export type TripGoalInput = {
   brief: Pick<
@@ -24,6 +24,25 @@ export type TripGoalInput = {
   >;
   rankingMode: RankingMode;
 };
+
+export function tripGoalState(status: TripStatus): {
+  planConfirmation: "pending" | "achieved";
+  phase: "plan_review" | "fare_pattern_analysis";
+  currentGoal: string;
+} {
+  const confirmed = status !== "draft";
+  return confirmed
+    ? {
+        planConfirmation: "achieved",
+        phase: "fare_pattern_analysis",
+        currentGoal: "Analyse verified flight and fare patterns, then update the traveller when the cost picture is useful."
+      }
+    : {
+        planConfirmation: "pending",
+        phase: "plan_review",
+        currentGoal: "Get the traveller to review or confirm the saved itinerary before analysing fares."
+      };
+}
 
 /** What Captain is ranking for, in the traveller's terms. */
 const rankingGoals: Record<RankingMode, string> = {
@@ -42,7 +61,7 @@ export function formatTripGoal(input: TripGoalInput): string {
     ? `under ${formatCeiling(input.brief.maximumPrice, input.brief.currency)}`
     : rankingGoals[input.rankingMode];
   return `Get you ${route} on ${goalDate(input.brief.departureWindow)} for ${target}, `
-    + "using verified fares when you search.";
+    + "using verified fares as prices change.";
 }
 
 /**

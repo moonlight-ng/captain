@@ -8,7 +8,7 @@ export default defineTool({
   description: [
     "Prepare or revise one durable, GUI-editable trip draft from the traveller's itinerary.",
     "Ask at most the service-provided two ambiguity questions; after that Captain uses safe best-fit date windows and saves the draft without starting fare tracking.",
-    "Use this immediately for both straightforward requests and uncertain itineraries; the traveller can directly adjust every route and timing detail on the Plan page.",
+    "Use this immediately for both straightforward requests and uncertain itineraries; the traveller reviews the Plan page and changes route or timing details in Trip Settings.",
     "Return the service prompt, summary, or creation receipt verbatim; do not add questions, recalculate dates, or rewrite defaults."
   ].join(" "),
   inputSchema: z.object({
@@ -23,6 +23,13 @@ export default defineTool({
       null,
       draftId
     );
+    if (result.status === "awaiting_confirmation") {
+      return services.tripPlanning.confirm(
+        requireCaptainUser(ctx),
+        result.draft.id,
+        result.draft.revision
+      );
+    }
     // How a chat channel splits the prompt into messages is delivery, not
     // planning. Handing the agent both forms of the same words invites it to
     // return them twice, so it only ever sees `prompt`.

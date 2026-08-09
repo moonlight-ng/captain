@@ -177,6 +177,17 @@ export async function updateTripBrief(
   });
 }
 
+export async function updateTripTitle(
+  tripId: string,
+  expectedVersion: number,
+  title: string
+): Promise<void> {
+  await api(`/api/me/trip?${new URLSearchParams({ trip: tripId }).toString()}`, {
+    method: "PATCH",
+    body: JSON.stringify({ expectedVersion, title })
+  });
+}
+
 export async function setTripFlightSelection(
   tripId: string,
   itineraryKey: string,

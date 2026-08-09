@@ -18,6 +18,7 @@ import type {
   TripPlanDraft,
   TripPlanDraftRevision,
   UpdateTripBrief,
+  UpdateTripTitle,
   Watch
 } from "@agents/flight-domain";
 
@@ -233,7 +234,15 @@ export interface CaptainPlatformStore {
   ): Promise<TripCityLeg>;
   getWatch(userId: string, tripId: string): Promise<Watch | null>;
   createTrip(userId: string, input: CreateTripInput, specs: SearchSpec[], now: Date): Promise<TripCreationResult>;
+  startTripTracking(
+    userId: string,
+    tripId: string,
+    expectedVersion: number,
+    specs: SearchSpec[],
+    now: Date
+  ): Promise<{ trip: Trip; watch: Watch }>;
   updateTripBrief(userId: string, tripId: string, input: UpdateTripBrief, specs: SearchSpec[], now: Date): Promise<Trip>;
+  updateTripTitle(userId: string, tripId: string, input: UpdateTripTitle, now: Date): Promise<Trip>;
   archiveTripForReplacement(userId: string, tripId: string, now: Date): Promise<Trip>;
   applyTripAction(userId: string, tripId: string, action: TripAction, now: Date): Promise<Trip>;
   listTripActivity(userId: string, tripId: string): Promise<TripActivity[]>;

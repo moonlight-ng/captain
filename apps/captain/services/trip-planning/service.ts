@@ -62,6 +62,7 @@ const EXPLORATORY_DATE_PLANNING_PATTERNS = [
   /\bhelp\s+(?:me|us)\s+plan\b[\s\S]{0,80}\b(?:itinerar(?:y|ies)|dates?|when)\b/iu
 ] as const;
 const CREATION_SUCCESS_PATTERNS = [
+  /^Ok, here's (?:what I have|the trip I already have)\. Review or confirm to start exploring flights\./iu,
   /\b(?:your|the|that)\b[\s\S]{0,100}\btrip\b[\s\S]{0,200}\b(?:has\s+been|was|is\s+now)\s+(?:successfully\s+)?(?:created|saved|set\s+up|started)\b/iu,
   /\b(?:your|the|that)\b[\s\S]{0,100}\btrip\b\s+is\s+(?:successfully\s+)?(?:created|saved|set\s+up)\b/iu,
   /\b(?:i(?:'ve|\s+have)|we(?:'ve|\s+have))\s+(?:successfully\s+)?(?:created|saved|set\s+up|started)\b[\s\S]{0,180}\btrip\b/iu,
@@ -324,9 +325,10 @@ export class TripPlanningService {
         missingFields
       };
     }
-    // A clarification answer is consent to save a draft, not to start a fare
-    // search. Remove the redundant Create turn and hand the traveller the GUI
-    // immediately; fully specified requests keep the existing review step.
+    // A clarification answer is enough consent to save the reviewable draft;
+    // a fully specified one-turn request still exposes the confirmation
+    // snapshot to non-chat callers. Telegram turns that snapshot into the same
+    // saved Review / Confirm checkpoint before it posts anything.
     if (state.questionsAsked > 0) {
       const started = await this.confirm(userId, revised.id, revised.revision);
       if (started.status !== "started" || !reduced.issue) return started;
@@ -1060,6 +1062,7 @@ function buildReceiptFromTrip(
 ): TripCreationReceipt {
   return {
     tripId: trip.id,
+    version: trip.version,
     created,
     status: trip.status,
     title: trip.title,

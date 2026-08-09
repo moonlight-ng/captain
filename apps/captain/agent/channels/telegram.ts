@@ -28,6 +28,8 @@ import {
   reviewCaptainMessage,
   TripLimitError,
   type OfferSnapshot,
+  type Trip,
+  type TripCreationReceipt,
   type TripPlanDraft,
   type TripPlanResult
 } from "@agents/flight-domain";
@@ -461,6 +463,25 @@ export default telegramChannel({
         await postTripPlanResult(ctx, user.id, result);
         return;
       }
+      if (action.type === "confirm") {
+        await ctx.telegram.answerCallbackQuery({
+          callbackQueryId: query.id,
+          text: "Starting flight analysis…"
+        });
+        const trip = await services.trips.get(user.id, action.tripId);
+        if (!trip) throw new Error("Trip not found");
+        await services.trips.action(user.id, action.tripId, {
+          type: "track",
+          // Review may have renamed or edited the draft. Confirm the latest
+          // reviewed version; the store still makes this transition atomic.
+          expectedVersion: trip.status === "draft" ? trip.version : action.version
+        });
+        await clearCallbackButtons(ctx, query);
+        const message = "Plan confirmed. I’m analysing flight patterns now. I’ll send an update when I have a useful sense of the cost.";
+        await services.platformStore.appendMessage(user.id, "assistant", message, new Date());
+        await ctx.telegram.post(message);
+        return;
+      }
       if (action.type === "edit") {
         await services.tripPlanning.reopen(user.id, action.draftId, action.revision);
         await ctx.telegram.answerCallbackQuery({
@@ -602,6 +623,7 @@ export default telegramChannel({
       await clearAgentProgress(ctx.session.id);
       const userId = authUserId(ctx.session.auth.current?.attributes.captain_user_id);
       let message = data.message;
+      let reviewTrip: Trip | null = null;
       if (userId) {
         const services = await getCaptainServices();
         const draft = await services.tripPlanning.findOpen(userId);
@@ -624,7 +646,30 @@ export default telegramChannel({
         }
         const grounded = await services.tripPlanning.groundAssistantMessage(userId, message);
         message = reviewCaptainMessage(grounded.message);
+        const activeTrip = await services.platformStore.getActiveTrip(userId);
+        if (
+          activeTrip?.status === "draft"
+          && message.includes("Review or confirm to start exploring flights")
+        ) {
+          reviewTrip = activeTrip;
+        }
         await services.platformStore.appendMessage(userId, "assistant", message, new Date());
+      }
+      if (reviewTrip) {
+        const rendered = telegramDashboardMessage(message);
+        const dashboardUrl = rendered.links[0]?.url;
+        if (dashboardUrl) {
+          await channel.telegram.post({
+            text: rendered.text,
+            reply_markup: tripPlanReviewReplyMarkup({
+              tripId: reviewTrip.id,
+              version: reviewTrip.version,
+              status: reviewTrip.status,
+              dashboardUrl
+            })
+          });
+          return;
+        }
       }
       await channel.telegram.post(message);
     },
@@ -888,13 +933,24 @@ async function postTripPlanResult(
   }
   parts = parts.map(reviewCaptainMessage);
   if (result.status === "awaiting_confirmation") {
-    await postTripConfirmationOnce(ctx.telegram, userId, result.draft, parts[0]!);
+    const saved = await services.tripPlanning.confirm(
+      userId,
+      result.draft.id,
+      result.draft.revision
+    );
+    await postTripPlanResult(ctx, userId, saved, options);
     return;
   }
   for (const part of parts) {
     await services.platformStore.appendMessage(userId, "assistant", part, new Date());
     if (result.status === "started") {
-      await postTelegramDashboardMessage(ctx, part);
+      const rendered = telegramDashboardMessage(part);
+      await ctx.telegram.post({
+        text: rendered.text,
+        reply_markup: result.receipt.status === "draft"
+          ? tripPlanReviewReplyMarkup(result.receipt)
+          : { inline_keyboard: rendered.links.map((link) => [{ text: link.text, url: link.url }]) }
+      });
       continue;
     }
     await ctx.telegram.post(part);
@@ -914,12 +970,14 @@ async function recoverUndeliveredTripConfirmation(
   const services = await getCaptainServices();
   const draft = await services.tripPlanning.findOpen(userId);
   if (draft?.status !== "awaiting_confirmation") return;
-  await postTripConfirmationOnce(
-    telegram,
-    userId,
-    draft,
-    formatTripPlanConfirmation(draft)
-  );
+  const saved = await services.tripPlanning.confirm(userId, draft.id, draft.revision);
+  if (saved.status !== "started") return;
+  const rendered = telegramDashboardMessage(saved.message);
+  await telegram.post({
+    text: rendered.text,
+    reply_markup: tripPlanReviewReplyMarkup(saved.receipt)
+  });
+  await services.platformStore.appendMessage(userId, "assistant", saved.message, new Date());
 }
 
 async function postTripConfirmationOnce(
@@ -955,6 +1013,20 @@ export function tripPlanConfirmationReplyMarkup(
     }, {
       text: "Cancel",
       callback_data: `captain-trip:cancel:${draft.id}:${draft.revision}`
+    }]]
+  };
+}
+
+export function tripPlanReviewReplyMarkup(
+  receipt: Pick<TripCreationReceipt, "tripId" | "dashboardUrl" | "status" | "version">
+) {
+  return {
+    inline_keyboard: [[{
+      text: "Review",
+      url: receipt.dashboardUrl
+    }, {
+      text: "Confirm",
+      callback_data: `captain-trip:confirm:${receipt.tripId}:${receipt.version}`
     }]]
   };
 }
@@ -1118,7 +1190,18 @@ export function parseTripPlanCallback(data: string | undefined): {
   type: "start" | "edit" | "cancel";
   draftId: string;
   revision: number;
+} | {
+  type: "confirm";
+  tripId: string;
+  version: number;
 } | null {
+  const confirm = /^captain-trip:confirm:([0-9a-f-]{36}):(\d+)$/u.exec(data ?? "");
+  if (confirm) {
+    const version = Number(confirm[2]);
+    return Number.isSafeInteger(version) && version > 0
+      ? { type: "confirm", tripId: confirm[1]!, version }
+      : null;
+  }
   const match = /^captain-trip:(start|edit|cancel):([0-9a-f-]{36}):(\d+)$/u.exec(data ?? "");
   if (!match) return null;
   const revision = Number(match[3]);

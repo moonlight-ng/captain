@@ -8,6 +8,7 @@ import { relativeTime, scheduleTime } from "./format.js";
 export type TripStage =
   | "stopped"
   | "paused"
+  | "planning"
   | "stale"
   | "searching"
   | "tracking";
@@ -22,6 +23,7 @@ export function tripStage({
   searchBusy?: boolean;
 }): TripStage {
   if (!trip) return "stopped";
+  if (trip.status === "draft") return "planning";
   if (trip.status === "paused" || watch?.status === "paused") return "paused";
   if (watch?.status === "completed") return "stale";
   if (searchBusy || isWatchSearching(watch, trip)) return "searching";
@@ -35,6 +37,7 @@ export function stageLabel(
 ): string {
   if (stage === "stopped") return "";
   if (stage === "paused") return "Paused";
+  if (stage === "planning") return "Not confirmed";
   if (stage === "stale") return "Prices stale";
   if (stage === "searching") return "Searching";
   if (watch?.lastCheckAt) return `Checked ${relativeTime(watch.lastCheckAt)}`;

@@ -113,6 +113,7 @@ export type TripPlanDraft = z.infer<typeof tripPlanDraftSchema>;
 
 export const tripCreationReceiptSchema = z.object({
   tripId: z.uuid(),
+  version: z.number().int().positive(),
   created: z.boolean(),
   status: tripStatusSchema,
   title: z.string().trim().min(1).max(120),

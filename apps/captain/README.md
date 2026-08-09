@@ -1,11 +1,10 @@
 # Captain
 
-Captain is a Telegram-first multi-city trip planner and manual real-time flight
-search product. You can send a trip by text or voice note. Captain extracts the
-ordered cities and the timing constraints that determine when each flight can
-leave, then searches an individual city pair when the traveller asks. It does
-not book, take payments, collect traveller identity, or recheck prices in the
-background.
+Captain is a Telegram-first multi-city trip planner and tracked flight-search
+product. You can send a trip by text or voice note. Captain extracts the ordered
+cities and timing constraints, saves the itinerary for review, and starts fare
+analysis only when the traveller confirms. It does not book, take payments, or
+collect traveller identity.
 
 ## Product contract
 
@@ -21,12 +20,12 @@ background.
   currency stays fixed; Duffel and Flysoar USD/GBP results are normalized into it.
 - A trip is an ordered list of city occurrences. Every adjacent pair is one
   independently searchable flight leg; the same city may occur more than once.
-- A manual leg search fans a date window of at most seven days into one exact
+- Each leg search fans a date window of at most seven days into one exact
   provider request per date with bounded concurrency. Partial failures preserve
   successful dates and prevent exhaustive “cheapest in the range” wording.
 - Search snapshots deterministically calculate cheapest, fastest, balanced,
   and cheapest-per-date results. A traveller may select one canonical Flight
-  per leg without starting tracking.
+  per leg; confirming the overall plan starts tracking.
 - Event language such as weddings or birthdays is transient evidence for city
   arrival/departure timing. It is not stored as a product entity or shown in the UI.
 - `/profile` is notification and flight-ranking preferences, and nothing else.
@@ -47,8 +46,8 @@ background.
 ## Architecture
 
 `apps/captain` owns Telegram onboarding, trip setup, authenticated profile and
-trip APIs, manual multi-day search, and the dashboard. `apps/flight-worker`
-retains legacy history behavior but receives no scheduled work from new trips.
+trip APIs, multi-day leg search, and the dashboard. `apps/flight-worker` runs
+the initial and scheduled checks for confirmed plans and sends their updates.
 
 `TripCity` and `TripLeg` form the durable route graph. `LegSearchSnapshot`
 records date coverage, failures, canonical flights, verified seller offers,
@@ -71,10 +70,11 @@ merged piecemeal. Terra remains the general Captain agent model. This follows Op
 [tier-aware model guidance](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6)
 and [Structured Outputs guidance](https://developers.openai.com/api/docs/guides/structured-outputs).
 
-Manual searches use the provider-neutral `FlightSearchProvider` contract. Each
+Leg searches use the provider-neutral `FlightSearchProvider` contract. Each
 date is independent, and successful results are committed progressively so the
-web UI can show exact coverage while a request is running. New trips create no
-Watch, SearchSpec schedule, notification, or worker wake-up.
+web UI can show exact coverage while a request is running. A saved draft has no
+Watch; confirmation atomically creates its Watch and SearchSpec and wakes the
+worker.
 
 Captain and Pilot remain independent flight and agent products. The only
 cross-product connection is the notification-only feedback ingress described
@@ -135,9 +135,10 @@ structure can be verified before the simplified view is enabled.
 
 - Maximum 25 travellers.
 - One active trip and one adult in USD or GBP.
-- Up to seven departure dates per manual leg search.
+- Up to seven departure dates per leg search.
 - Independent city-pair searches; bundled multi-city fares are not compared.
-- No watches, automatic alerts, scheduled refreshes, cards, or booking state.
+- Automatic fare watches and material-change alerts after plan confirmation;
+  no cards or booking state.
 
 Public launch remains gated by the live evaluation corpus against Duffel. It
 must demonstrate representative airline coverage and three or more usable

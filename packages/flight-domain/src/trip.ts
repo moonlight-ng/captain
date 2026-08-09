@@ -119,6 +119,12 @@ export const updateTripBriefSchema = z.object({
 }).strict();
 export type UpdateTripBrief = z.infer<typeof updateTripBriefSchema>;
 
+export const updateTripTitleSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  title: z.string().trim().min(1).max(120)
+}).strict();
+export type UpdateTripTitle = z.infer<typeof updateTripTitleSchema>;
+
 export type Trip = {
   id: string;
   userId: string;

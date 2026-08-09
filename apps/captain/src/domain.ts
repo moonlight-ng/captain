@@ -249,6 +249,11 @@ export type TripPayload = {
   priceHistory: TrackedPriceHistory | null;
   /** One sentence naming what Captain is trying to do for this trip. */
   goal: string | null;
+  goalState?: {
+    planConfirmation: "pending" | "achieved";
+    phase: "plan_review" | "fare_pattern_analysis";
+    currentGoal: string;
+  } | null;
   /** Ordered cities and flight legs for the simplified multi-city experience. */
   cities?: TripCity[];
   legs?: TripCityLeg[];

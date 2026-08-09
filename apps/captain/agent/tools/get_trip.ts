@@ -1,4 +1,4 @@
-import { formatTripGoal, summarizePriceHistory } from "@agents/flight-domain";
+import { formatTripGoal, summarizePriceHistory, tripGoalState } from "@agents/flight-domain";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
@@ -29,6 +29,7 @@ export default defineTool({
       trip,
       // What this trip is for. Every answer is measured against it.
       goal: formatTripGoal({ brief: trip.brief, rankingMode: profile.rankingMode }),
+      goalState: tripGoalState(trip.status),
       offers,
       // The whole point of the trip: what the watched fare has done, and
       // whether now is the moment. Null until the traveller picks a flight.

@@ -68,8 +68,8 @@ function formatDateWindow(window: { start: string; end: string }): string {
 export function formatTripCreationReceipt(receipt: TripCreationReceipt): string {
   return [
     receipt.created
-      ? "Your trip is saved. Open it when you’re ready to search each flight leg with live fares."
-      : "That trip was already saved; I’m using the existing one.",
+      ? "Ok, here's what I have. Review or confirm to start exploring flights."
+      : "Ok, here's the trip I already have. Review or confirm to start exploring flights.",
     "",
     ...formatTripSummaryLines(receipt),
     "",
