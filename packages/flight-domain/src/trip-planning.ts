@@ -62,8 +62,8 @@ export type TripDraftRouteLeg = z.infer<typeof tripDraftRouteLegSchema>;
 
 export const tripDraftStateSchema = z.object({
   version: z.literal(3),
-  /** Ambiguity questions Captain has asked while composing this draft. */
-  questionsAsked: z.number().int().min(0).max(2).default(0),
+  /** Clarification questions asked; used only as a loop-safety ceiling. */
+  questionsAsked: z.number().int().min(0).max(5).default(0),
   tripType: z.enum(["one_way", "round_trip", "multi_city"]).nullable(),
   legs: z.array(tripDraftRouteLegSchema).max(6),
   travellers: z.object({

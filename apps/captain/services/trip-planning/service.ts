@@ -33,6 +33,10 @@ import {
 import { suggestedMaxStops, suggestedTripCurrency } from "./currency.js";
 import { airportMarket, orderedAirportCodesFromText } from "./airport-catalog.js";
 import {
+  createTripDraftReadinessAssessor,
+  type TripDraftReadinessAssessor
+} from "./draft-readiness.js";
+import {
   createTripTurnInterpreter,
   type TripPlannerQuestion,
   type TripTurnInterpreter
@@ -71,7 +75,13 @@ const CREATION_SUCCESS_PATTERNS = [
 ] as const;
 const UUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/iu;
 const UNGROUNDED_CREATION_MESSAGE = "I couldn’t verify a trip-creation receipt. Send /trip to check your trip.";
-const MAX_AMBIGUITY_QUESTIONS = 2;
+const MAX_CLARIFICATION_QUESTIONS = 5;
+const ASSUMABLE_DATE_FIELDS = new Set([
+  "dates",
+  "departureDate",
+  "returnDate",
+  "itineraryLegs"
+]);
 
 export function isTripConfirmationText(text: string): boolean {
   return CONFIRM_PATTERN.test(text.trim());
@@ -82,6 +92,7 @@ export class TripPlanningService {
   readonly #trips: TripService;
   readonly #interpret: TripTurnInterpreter;
   readonly #interpretItineraryConstraints: ItineraryConstraintInterpreter;
+  readonly #assessReadiness: TripDraftReadinessAssessor;
   readonly #now: () => Date;
   readonly #dashboardUrlForTrip: (userId: string, tripId: string) => string | Promise<string>;
 
@@ -90,6 +101,7 @@ export class TripPlanningService {
     trips: TripService;
     interpret?: TripTurnInterpreter;
     interpretItineraryConstraints?: ItineraryConstraintInterpreter;
+    assessReadiness?: TripDraftReadinessAssessor;
     model?: string;
     apiKey?: string | null;
     recordUsage?: (input: GatewayGenerationUsageInput) => Promise<void>;
@@ -105,6 +117,12 @@ export class TripPlanningService {
     });
     this.#interpretItineraryConstraints = options.interpretItineraryConstraints
       ?? createItineraryConstraintInterpreter({
+        apiKey: options.apiKey ?? null,
+        model: options.model ?? "openai/gpt-5.6-luna",
+        ...(options.recordUsage ? { recordUsage: options.recordUsage } : {})
+      });
+    this.#assessReadiness = options.assessReadiness
+      ?? createTripDraftReadinessAssessor({
         apiKey: options.apiKey ?? null,
         model: options.model ?? "openai/gpt-5.6-luna",
         ...(options.recordUsage ? { recordUsage: options.recordUsage } : {})
@@ -208,10 +226,29 @@ export class TripPlanningService {
           now,
           timeZone
         });
-    // Once Captain has used its two-question allowance, dates stop being a
-    // conversational gate. Fill only the values the GUI can safely expose and
-    // leave every choice editable on the saved, non-tracking trip.
-    let state = reduced.state.questionsAsked >= MAX_AMBIGUITY_QUESTIONS
+    const unresolvedFields = missingTripFields(reduced.state, null);
+    const canReviewWithDateAssumptions = unresolvedFields.length > 0
+      && unresolvedFields.every((field) => ASSUMABLE_DATE_FIELDS.has(field));
+    const clarificationCeilingReached =
+      reduced.state.questionsAsked >= MAX_CLARIFICATION_QUESTIONS;
+    const readinessApproved = canReviewWithDateAssumptions
+      && (
+        clarificationCeilingReached
+        || (
+          !reduced.issue
+          && !compiledConstraints
+          && await this.#assessReadiness({
+            userId,
+            request,
+            conversation,
+            state: reduced.state,
+            missingFields: unresolvedFields
+          })
+        )
+      );
+    // Readiness is the primary gate. The question count remains only as a
+    // safety ceiling so a traveller cannot get trapped in clarification.
+    let state = readinessApproved
       ? fillDateAssumptions(reduced.state, now, timeZone)
       : reduced.state;
     const unsupportedParty = Boolean(
@@ -228,7 +265,7 @@ export class TripPlanningService {
     const unsupportedCurrency = Boolean(
       effectiveCurrency && !isSupportedTripCurrency(effectiveCurrency)
     );
-    const missingFields = missingTripFields(state, null);
+    const missingFields = missingTripFields(state, null, readinessApproved);
     if (unsupportedParty && !missingFields.includes("travellers")) {
       missingFields.push("travellers");
     }
@@ -261,7 +298,7 @@ export class TripPlanningService {
       && !unsupportedCurrency
     );
     const questionLimitReached = needsTripClarification
-      && state.questionsAsked >= MAX_AMBIGUITY_QUESTIONS;
+      && state.questionsAsked >= MAX_CLARIFICATION_QUESTIONS;
     const basePromptParts = !confirmationSnapshot || tripLimitReached
       ? tripLimitReached
         ? replacementPrompt(activeTrips[0]!, confirmationSnapshot!)
@@ -277,9 +314,9 @@ export class TripPlanningService {
       state = {
         ...state,
         questionsAsked: Math.min(
-          MAX_AMBIGUITY_QUESTIONS,
+          MAX_CLARIFICATION_QUESTIONS,
           state.questionsAsked + 1
-        ) as 0 | 1 | 2
+        )
       };
     }
     const revised = await this.#store.reviseTripPlanDraft(
@@ -307,6 +344,8 @@ export class TripPlanningService {
       revision: revised.revision,
       status: revised.status,
       missing_fields: missingFields,
+      readiness_approved: readinessApproved,
+      clarification_ceiling_reached: clarificationCeilingReached,
       date_conflict: Boolean(reduced.issue),
       turn_intent: compiledConstraints
         ? "compile_constraints"
@@ -696,7 +735,11 @@ function applyNarrativeOptions(state: TripDraftState, request: string): TripDraf
   };
 }
 
-function missingTripFields(state: TripDraftState, dateIssue: string | null): string[] {
+function missingTripFields(
+  state: TripDraftState,
+  dateIssue: string | null,
+  allowProposedDates = false
+): string[] {
   const first = state.legs[0];
   const tripType = effectiveTripType(state);
   let missing: string[];
@@ -707,7 +750,7 @@ function missingTripFields(state: TripDraftState, dateIssue: string | null): str
         ? ["destinationAirports"]
         : []),
       // Later wide gaps can use best-fit windows, but the first flight is a
-      // high-value ambiguity worth one of Captain's two questions.
+      // high-value ambiguity worth a direct clarification before review.
       ...(state.legs.length < 2 || state.legs.some((leg, index) =>
         leg.originAirports.length === 0
         || leg.destinationAirports.length === 0
@@ -716,7 +759,7 @@ function missingTripFields(state: TripDraftState, dateIssue: string | null): str
           index === 0
           && leg.departure === null
           && Boolean(leg.proposedDeparture)
-          && state.questionsAsked < MAX_AMBIGUITY_QUESTIONS
+          && !allowProposedDates
         )
       )
         ? ["itineraryLegs"]
@@ -733,7 +776,7 @@ function missingTripFields(state: TripDraftState, dateIssue: string | null): str
             : []
           : !first?.departure
             && !(
-              state.questionsAsked >= MAX_AMBIGUITY_QUESTIONS
+              allowProposedDates
               && first?.proposedDeparture
             )
             ? ["departureDate"]
@@ -846,7 +889,7 @@ function clarificationPrompt(missingFields: string[], state: TripDraftState): st
       !leg.departure
       && (
         !leg.proposedDeparture
-        || (index === 0 && state.questionsAsked < MAX_AMBIGUITY_QUESTIONS)
+        || index === 0
       )
     );
     if (unresolved) {
@@ -880,7 +923,7 @@ function ambiguityLimitPrompt(missingFields: string[]): string {
   return "I couldn’t make a usable draft from those details. Send the route in one line and I’ll fill the remaining dates for you to edit.";
 }
 
-/** Fill date-only gaps after the second ambiguity question. */
+/** Fill date-only gaps once the draft is useful enough to review. */
 function fillDateAssumptions(
   input: TripDraftState,
   now: Date,
