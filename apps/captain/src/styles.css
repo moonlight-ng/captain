@@ -2041,7 +2041,6 @@ legend { margin-bottom: 11px; color: var(--quiet); font-size: var(--type-body); 
   .settings-card { margin-top: 28px; }}
 
 @media (min-width: 860px) {
-  .shell.multi-city-shell { width: 720px; }
   .multi-city-page { padding-right: 42px; padding-left: 42px; }
 }
 
