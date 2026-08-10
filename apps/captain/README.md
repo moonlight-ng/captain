@@ -50,7 +50,8 @@ traveller identity.
 ## Architecture
 
 `apps/captain` owns Telegram onboarding, trip setup, authenticated profile and
-trip APIs, multi-day leg search, and the dashboard. `apps/flight-worker` runs
+trip APIs, and multi-day leg search. `apps/web` is the React UI Captain
+serves. `apps/flight-worker` runs
 the initial and scheduled checks for confirmed plans and sends their updates.
 
 `TripCity` and `TripLeg` form the durable route graph. `LegSearchSnapshot`
@@ -106,13 +107,21 @@ migrations automatically via Fly `release_command` on deploy.
 tables and deletes any card token still queued for deletion without sending it
 to Duffel. Drain that queue before deploying it.
 
-Build the web dashboard separately with:
+Build the web UI (`apps/web`) into `apps/captain/dist` with:
 
 ```sh
 pnpm --filter @agents/captain build:web
 ```
 
-### Private administrator dashboard
+For local UI work against a mock API:
+
+```sh
+pnpm --filter @agents/captain dev:design-api
+pnpm --filter @agents/web dev
+# open http://127.0.0.1:4178/trip#access=design
+```
+
+### Private administrator UI
 
 `/admin` is a read-only production view of Captain health, user-centric
 conversations, and AI spend. Supabase supplies administrator identity only;

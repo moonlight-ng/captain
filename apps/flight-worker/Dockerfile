@@ -6,7 +6,6 @@ RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/flight-worker/package.json ./apps/flight-worker/package.json
-COPY patches ./patches
 COPY packages/flight-domain/package.json ./packages/flight-domain/package.json
 COPY packages/flight-store/package.json ./packages/flight-store/package.json
 COPY packages/observability/package.json ./packages/observability/package.json

@@ -1,7 +1,7 @@
 # Captain design catalog
 
-Source of truth for **existing** web UI: `apps/captain/src/styles.css` and
-mounted screens/components under `apps/captain/src/`.
+Source of truth for **existing** web UI: `apps/web/src/styles.css` and
+mounted screens/components under `apps/web/src/`.
 
 This file is a **utility catalog**. Assemble new screens from live entries. Do not invent parallel cards or offer layouts.
 

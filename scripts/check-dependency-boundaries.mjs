@@ -1,7 +1,10 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-const apps = ["captain", "flight-worker"];
+/** Deployed Fly apps — must not depend on each other. */
+const deployedApps = ["captain", "flight-worker"];
+/** Frontend package Captain builds and serves; not a separate Fly app. */
+const webApp = "web";
 const failures = [];
 const captainLegacyRules = [
   /\bFlightAgent(?:Env|Services)\b/u,
@@ -12,11 +15,11 @@ const captainLegacyRules = [
   /(?:service|agent_id):\s*["']flight-agent["']/u
 ];
 
-for (const app of apps) {
+for (const app of deployedApps) {
   const root = join("apps", app);
   const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const dockerfile = await readFile(join(root, "Dockerfile"), "utf8");
-  for (const sibling of apps.filter((candidate) => candidate !== app)) {
+  for (const sibling of deployedApps.filter((candidate) => candidate !== app)) {
     if (
       manifest.dependencies?.[`@agents/${sibling}`] ||
       manifest.devDependencies?.[`@agents/${sibling}`]
@@ -38,7 +41,26 @@ for (const app of apps) {
           failures.push(`${file} violates the Captain runtime identity boundary (${rule})`);
         }
       }
+      if (
+        content.includes(`apps/${webApp}/src`)
+        || content.includes(`../../${webApp}/src`)
+        || content.includes(`../${webApp}/src`)
+      ) {
+        failures.push(`${file} imports ${webApp} source; keep captain↔web coupled only via build output`);
+      }
     }
+  }
+}
+
+for (const file of await sourceFiles(join("apps", webApp))) {
+  const content = await readFile(file, "utf8");
+  if (
+    content.includes("apps/captain/services")
+    || content.includes("apps/captain/agent")
+    || content.includes("../../captain/services")
+    || content.includes("../../captain/agent")
+  ) {
+    failures.push(`${file} imports captain server code; web talks to Captain over HTTP only`);
   }
 }
 

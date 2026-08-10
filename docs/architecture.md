@@ -34,8 +34,10 @@ reporter attribution.
 
 ## Runtime components
 
-- `apps/captain` owns Telegram, the Eve agent, HTTP API, React web app,
-  conversational planning, authentication, and manual leg searches.
+- `apps/captain` owns Telegram, the Eve agent, HTTP API, conversational
+  planning, authentication, and manual leg searches.
+- `apps/web` is the React UI Captain serves (traveller trip workspace and
+  private `/admin`).
 - PostgreSQL is the durable source of truth in production. The memory store is a
   behaviorally compatible test/local implementation, not a second product model.
 - `apps/flight-worker` leases plan-wide search runs, calls inventory providers,

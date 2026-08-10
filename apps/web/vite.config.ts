@@ -1,15 +1,24 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+const webRoot = dirname(fileURLToPath(import.meta.url));
 const apiProxyTarget = process.env.CAPTAIN_API_PROXY_TARGET?.trim()
   || "http://127.0.0.1:8080";
 
 export default defineConfig({
+  root: webRoot,
   plugins: [react()],
   // Surfaced to the client so mock-mode can avoid forcing `#access=design`
   // when this Vite process is proxying `/api` at a remote Captain.
   define: {
     "import.meta.env.VITE_CAPTAIN_API_PROXY_TARGET": JSON.stringify(apiProxyTarget)
+  },
+  // Captain serves static assets from apps/captain/dist at runtime.
+  build: {
+    outDir: resolve(webRoot, "../captain/dist"),
+    emptyOutDir: true
   },
   server: {
     host: "127.0.0.1",
@@ -19,9 +28,7 @@ export default defineConfig({
       // Native FSEvents can miss edits in this environment; polling keeps HMR alive.
       usePolling: true,
       interval: 300,
-      // Eve writes nested repo snapshots under .eve; watching them floods Vite with
-      // full reloads and clears the TS cache mid-edit.
-      ignored: ["**/.eve/**", "**/node_modules/**"]
+      ignored: ["**/node_modules/**"]
     },
     proxy: {
       // /auth/link exchanges one-time login tokens for the session cookie.

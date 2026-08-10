@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Local design API: seeds one mock trip with offers so Vite can render /trip and /profile.
- * Run: node --env-file-if-exists=.env scripts/design-mock-api.mjs
+ * Run: pnpm --filter @agents/captain dev:design-api
+ * In another terminal: pnpm --filter @agents/web dev
  * Open: http://127.0.0.1:4178/trip#access=design
  */
 import { createServer } from "node:http";

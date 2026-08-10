@@ -101,11 +101,10 @@ export function MultiCityPlanSummary({
 }: Pick<SharedTripProps, "cities" | "legs">) {
   const cities = sort(unsortedCities);
   const legs = sort(unsortedLegs);
-  const span = tripDateSpan(cities, legs);
 
   return (
     <header className="plan-summary">
-      {span ? <p>{span}</p> : null}
+      <p>Confirm date</p>
       <p>
         {cities.length} {cities.length === 1 ? "city" : "cities"}
         {" · "}

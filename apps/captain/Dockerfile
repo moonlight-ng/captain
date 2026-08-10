@@ -5,8 +5,8 @@ ENV CI=true
 RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY apps/web/package.json ./apps/web/package.json
 COPY apps/captain/package.json ./apps/captain/package.json
-COPY patches ./patches
 COPY packages/flight-domain/package.json ./packages/flight-domain/package.json
 COPY packages/flight-store/package.json ./packages/flight-store/package.json
 COPY packages/observability/package.json ./packages/observability/package.json
@@ -14,6 +14,7 @@ COPY packages/provider-duffel/package.json ./packages/provider-duffel/package.js
 COPY packages/telegram-core/package.json ./packages/telegram-core/package.json
 RUN pnpm install --frozen-lockfile
 
+COPY apps/web ./apps/web
 COPY apps/captain ./apps/captain
 COPY packages ./packages
 WORKDIR /app/apps/captain

@@ -9,20 +9,21 @@
   "packageManager": "pnpm@11.6.0",
   "scripts": {
     "build": "pnpm build:web && eve build",
-    "build:web": "tsc -b && vite build",
+    "build:web": "pnpm --filter @agents/web build",
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "db:manifest": "node --env-file-if-exists=.env --import tsx scripts/migrate-durable-data.ts manifest",
     "db:copy": "node --env-file-if-exists=.env --import tsx scripts/migrate-durable-data.ts copy",
     "db:verify": "node --env-file-if-exists=.env --import tsx scripts/migrate-durable-data.ts verify",
-    "dev": "vite --host 127.0.0.1",
+    "dev": "pnpm --filter @agents/web dev",
     "dev:agent": "eve dev --no-ui",
+    "dev:design-api": "node --env-file-if-exists=.env scripts/design-mock-api.mjs",
     "eval": "eve eval",
     "eve:info": "eve info",
-    "preview": "vite preview --host 127.0.0.1",
+    "preview": "pnpm --filter @agents/web preview",
     "start": "eve start --host 0.0.0.0 --port 8080",
     "telegram:webhook": "node --env-file-if-exists=.env --experimental-strip-types scripts/configure-telegram-webhook.ts",
     "test": "vitest run --config vitest.config.ts",
-    "typecheck": "tsc -b --pretty false && tsc -p tsconfig.service.json --noEmit --pretty false",
+    "typecheck": "tsc -p tsconfig.service.json --noEmit --pretty false",
     "db:clear-trips": "node --env-file-if-exists=.env --import tsx scripts/clear-trips.ts"
   },
   "dependencies": {
@@ -31,26 +32,18 @@
     "@agents/observability": "workspace:*",
     "@agents/provider-duffel": "workspace:*",
     "@agents/telegram-core": "workspace:*",
-    "@duffel/components": "^3.17.0",
     "@supabase/supabase-js": "2.112.2",
     "@workflow/world-postgres": "5.0.0-beta.24",
     "ai": "7.0.4",
     "eve": "0.23.0",
-    "liveline": "0.0.7",
     "postgres": "3.4.7",
-    "react": "19.2.7",
-    "react-dom": "19.2.7",
     "tsx": "4.22.4",
     "zod": "4.3.6"
   },
   "devDependencies": {
     "@types/node": "26.1.1",
-    "@types/react": "19.2.17",
-    "@types/react-dom": "19.2.3",
-    "@vitejs/plugin-react": "6.0.3",
     "just-bash": "^3.2.0",
     "typescript": "6.0.3",
-    "vite": "8.1.5",
     "vitest": "4.1.9"
   }
 }

@@ -8,8 +8,8 @@ city pair into a flight leg and checks every date in its window against live
 inventory after the traveller confirms the plan. Captain then rechecks fares
 and reports a useful initial cost picture or a material change.
 
-- `apps/captain` owns onboarding, trip planning, authenticated APIs, and the
-  traveller dashboard.
+- `apps/captain` owns onboarding, trip planning, and authenticated APIs.
+- `apps/web` is the React UI Captain serves (traveller trip workspace and private `/admin`).
 - `apps/flight-worker` runs initial and scheduled fare checks for confirmed plans.
 - `packages` contains the flight domain, persistence, provider adapters,
   observability, and Telegram helpers shared by those two deployments.
