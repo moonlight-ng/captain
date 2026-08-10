@@ -554,7 +554,7 @@ function originQuestion(
     resolved.filter((item) => item.airportCode === first).map((item) => item.start)
   );
   const route = visits.map(cityLabel).join(" → ");
-  return `I’ve got the city order as ${route}${arrival ? `, with ${cityLabel(first)} by ${shortDate(arrival)}` : ""}. Where will you be flying from to ${cityLabel(first)}?`;
+  return `Okay. So that’s ${route}${arrival ? `, with ${cityLabel(first)} by ${shortDate(arrival)}` : ""}. Where will you be flying from to ${cityLabel(first)}?`;
 }
 
 function shortDate(value: string): string {
