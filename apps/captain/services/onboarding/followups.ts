@@ -5,7 +5,7 @@ import type {
 } from "@agents/flight-store";
 
 export const CAPTAIN_NEW_USER_GREETING =
-  "Hi, I’m Captain. Nice to meet you! What are you thinking about for your next trip?";
+  "Hi, I'm Captain. Tell me about your trip.";
 export const CAPTAIN_ONBOARDING_CAPABILITIES =
   "I can help you figure out where to go, plan a multi-city trip, compare flight options across different dates, or watch for fare changes once your trip is set.";
 export const CAPTAIN_ONBOARDING_WORKSPACE =

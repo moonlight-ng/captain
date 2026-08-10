@@ -34,7 +34,7 @@ import {
 describe("Telegram profile onboarding", () => {
   it("starts every new traveller with a conversational introduction", () => {
     expect(CAPTAIN_NEW_USER_GREETING).toBe(
-      "Hi, I’m Captain. Nice to meet you! What are you thinking about for your next trip?"
+      "Hi, I'm Captain. Tell me about your trip."
     );
     expect(CAPTAIN_ONBOARDING_CAPABILITIES).toBe(
       "I can help you figure out where to go, plan a multi-city trip, compare flight options across different dates, or watch for fare changes once your trip is set."
