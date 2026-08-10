@@ -1,9 +1,8 @@
-import { useMemo, useState, type ReactNode, type UIEvent } from "react";
+import { useEffect, useMemo, useState, type ReactNode, type UIEvent } from "react";
 
 import { canonicalFlightHref, tripLegHref } from "../api";
 import { CaptainFeedPosts } from "../components/CaptainFeedPosts";
-import { AgentScheduleStatus, AgentScheduleChecks } from "../components/AgentScheduleStatus";
-import { ChevronRightIcon, FilterIcon } from "../components/icons";
+import { ChevronRightIcon, FilterIcon, RefreshIcon } from "../components/icons";
 import {
   EMPTY_BROWSE_PREFERENCES,
   departurePeriod,
@@ -15,8 +14,7 @@ import {
   type Trip,
   type TripActivity,
   type TripCity,
-  type TripCityLeg,
-  type Watch
+  type TripCityLeg
 } from "../domain";
 import { activityFeedLine, feedPostsFromActivity, withFeedUpdateAction } from "../feed-posts";
 import {
@@ -32,7 +30,6 @@ import {
   planTimelineItems,
   tripDateSpan
 } from "../multi-city-view";
-import { tripStage } from "../trip-stage";
 
 type SearchProgress = Record<string, LegSearchSnapshot>;
 
@@ -50,7 +47,6 @@ type SharedTripProps = {
 type FeedTripProps = SharedTripProps & {
   activity: TripActivity[];
   recommendation: Recommendation | null;
-  watch: Watch | null;
 };
 
 export function MultiCityTripOverview(props: SharedTripProps) {
@@ -109,12 +105,12 @@ export function MultiCityPlanSummary({
 
   return (
     <header className="plan-summary">
+      {span ? <p>{span}</p> : null}
       <p>
         {cities.length} {cities.length === 1 ? "city" : "cities"}
         {" · "}
         {legs.length} {legs.length === 1 ? "flight" : "flights"}
       </p>
-      {span ? <p>{span}</p> : null}
     </header>
   );
 }
@@ -160,9 +156,7 @@ export function MultiCityPlanOverview({
 }
 
 export function MultiCityFlightsOverview(
-  props: SharedTripProps & {
-    onSelect: (leg: TripCityLeg, flightKey: string) => void;
-  }
+  props: SharedTripProps
 ) {
   const cities = sort(props.cities);
   const legs = sort(props.legs);
@@ -175,7 +169,6 @@ export function MultiCityFlightsOverview(
         {...props}
         legId={onlyLeg.id}
         embedded
-        onSelect={props.onSelect}
       />
     );
   }
@@ -236,7 +229,6 @@ export function MultiCityFeed(props: FeedTripProps) {
       }
       : undefined
   );
-  const stage = tripStage({ trip: props.trip, watch: props.watch });
   const empty = watching.length === 0
     && posts.length === 0
     && !props.recommendation;
@@ -256,16 +248,6 @@ export function MultiCityFeed(props: FeedTripProps) {
               items={watching}
               onOpen={(flightKey) => props.onNavigate(canonicalFlightHref(flightKey))}
             />
-          ) : null}
-
-          {props.watch && props.watch.status !== "completed" ? (
-            <details className="feed-checks watchlist-panel">
-              <summary className="card-top">
-                <h2>Agent schedule</h2>
-                <AgentScheduleStatus stage={stage} watch={props.watch} />
-              </summary>
-              <AgentScheduleChecks stage={stage} watch={props.watch} />
-            </details>
           ) : null}
 
           <CaptainFeedPosts posts={posts} />
@@ -458,17 +440,16 @@ function LegCard({
 
 export function TripLegResults({
   legId,
-  onSelect,
   embedded = false,
   ...props
 }: SharedTripProps & {
   legId: string;
-  onSelect: (leg: TripCityLeg, flightKey: string) => void;
   embedded?: boolean;
 }) {
   const [preferences, setPreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
   const [draftPreferences, setDraftPreferences] = useState<BrowsePreferences>(EMPTY_BROWSE_PREFERENCES);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [pendingRefresh, setPendingRefresh] = useState(false);
   const leg = props.legs.find((item) => item.id === legId);
   const origin = leg && props.cities.find((city) => city.id === leg.originCityId);
   const destination = leg && props.cities.find((city) => city.id === leg.destinationCityId);
@@ -480,6 +461,12 @@ export function TripLegResults({
     [displaySnapshot, preferences]
   );
   const activeFilters = countFilters(preferences);
+  const active = progress ? isSearching(progress) : false;
+  const searchError = leg ? props.searchErrors[leg.id] : undefined;
+
+  useEffect(() => {
+    if (active || searchError) setPendingRefresh(false);
+  }, [active, searchError]);
 
   if (!leg || !origin || !destination) {
     return (
@@ -506,43 +493,40 @@ export function TripLegResults({
     );
   }
 
-  const active = progress ? isSearching(progress) : false;
   const partial = Boolean(displaySnapshot && !displaySnapshot.analysis.complete);
   const expired = displaySnapshot?.offers.some(
     (offer) => offer.expiresAt !== null && Date.parse(offer.expiresAt) <= Date.now()
   ) ?? false;
-  const refresh = () => props.onSearch(leg);
+  const refreshing = active || pendingRefresh;
+  const refreshLabel = active && progress && progress.analysis.datesRequested.length > 0
+    ? `Checking ${progress.analysis.datesCompleted.length}/${progress.analysis.datesRequested.length}`
+    : refreshing
+      ? "Updating…"
+      : "Some seller prices have expired.";
+  const refresh = () => {
+    setPendingRefresh(true);
+    props.onSearch(leg);
+  };
 
   return (
     <section className={`multi-city-page leg-results-page${embedded ? " is-embedded" : ""}`}>
-      <header className="leg-results-heading">
-        {!embedded || active ? (
-          <div className="leg-results-heading-top">
-            {!embedded ? <p className="eyebrow">Flight {leg.position + 1} of {props.legs.length}</p> : <span />}
-            {embedded && active ? (
-              <p className="leg-results-status" role="status">
-                {progress && progress.analysis.datesRequested.length > 0
-                  ? `Checking ${progress.analysis.datesCompleted.length}/${progress.analysis.datesRequested.length}`
-                  : "Updating…"}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-        <div className="leg-results-title-row">
-          <h1>{origin.label} → {destination.label}</h1>
-          {displaySnapshot ? (
-            <span>{flights.length} option{flights.length === 1 ? "" : "s"}</span>
-          ) : null}
-        </div>
-        <p>{dateRangeLabel(leg.departureWindow.start, leg.departureWindow.end)}</p>
-      </header>
-
       {partial && displaySnapshot ? (
         <div className="leg-notice">
           <strong>Partial results.</strong> {displaySnapshot.analysis.datesCompleted.length} of {displaySnapshot.analysis.datesRequested.length} dates completed, so this is the lowest fare found—not necessarily the lowest in the full range.
         </div>
       ) : null}
-      {expired ? <div className="leg-notice">Some seller prices have expired. Search again before choosing.</div> : null}
+      {expired || refreshing ? (
+        <button
+          type="button"
+          className={`leg-notice leg-notice-action${refreshing ? " is-refreshing" : ""}`}
+          disabled={refreshing}
+          onClick={refresh}
+          aria-live="polite"
+        >
+          <span>{refreshLabel}</span>
+          <RefreshIcon />
+        </button>
+      ) : null}
       {props.searchErrors[leg.id] ? <div className="notice">{props.searchErrors[leg.id]}</div> : null}
 
       {displaySnapshot ? (
@@ -596,7 +580,6 @@ export function TripLegResults({
                   snapshot={displaySnapshot}
                   selected={leg.selectedFlightKey === flight.key}
                   onOpen={() => props.onNavigate(canonicalFlightHref(flight.key))}
-                  onSelect={() => onSelect(leg, flight.key)}
                 />
               ))}
             </div>
@@ -766,15 +749,13 @@ function LegFlightCard({
   offer,
   snapshot,
   selected,
-  onOpen,
-  onSelect
+  onOpen
 }: {
   flight: CanonicalFlight;
   offer: FlightOfferSnapshot | null;
   snapshot: LegSearchSnapshot;
   selected: boolean;
   onOpen: () => void;
-  onSelect: () => void;
 }) {
   const tags = [
     snapshot.analysis.cheapest?.flightKey === flight.key ? "Lowest" : null,
@@ -782,22 +763,22 @@ function LegFlightCard({
     snapshot.analysis.balanced?.flightKey === flight.key ? "Captain’s pick" : null
   ].filter((tag): tag is string => Boolean(tag));
   return (
-    <article className={`leg-flight-card${selected ? " selected" : ""}`}>
-      <button type="button" className="leg-flight-main" onClick={onOpen}>
-        <div className="flight-card-topline">
-          <span>{flight.segments[0]?.marketingAirline ?? flight.primaryAirlineCode}</span>
-          <strong>{offer ? formatMoney(Number(offer.priceAmount), offer.currency) : "Fare unavailable"}</strong>
-        </div>
-        <div className="flight-card-schedule">
-          <strong>{flightSchedule(flight)}</strong>
-          <span>{durationLabel(flight.durationMinutes)} · {stopLabel(flight.stops)}</span>
-        </div>
-        {tags.length > 0 ? <div className="flight-tags">{tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
-      </button>
-      <button type="button" className="select-flight" disabled={selected || !offer} onClick={onSelect}>
-        {selected ? "Watching" : "Select & watch"}
-      </button>
-    </article>
+    <button
+      type="button"
+      className={`leg-flight-card${selected ? " selected" : ""}`}
+      onClick={onOpen}
+      aria-pressed={selected}
+    >
+      <div className="flight-card-topline">
+        <span>{flight.segments[0]?.marketingAirline ?? flight.primaryAirlineCode}</span>
+        <strong>{offer ? formatMoney(Number(offer.priceAmount), offer.currency) : "Fare unavailable"}</strong>
+      </div>
+      <div className="flight-card-schedule">
+        <strong>{flightSchedule(flight)}</strong>
+        <span>{durationLabel(flight.durationMinutes)} · {stopLabel(flight.stops)}</span>
+      </div>
+      {tags.length > 0 ? <div className="flight-tags">{tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
+    </button>
   );
 }
 

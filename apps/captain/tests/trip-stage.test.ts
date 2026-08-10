@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Trip, Watch } from "../src/domain.js";
-import { formatElapsedClock, searchStartedAt, shouldAutoSearchOnOpen, stageLabel, tripStage } from "../src/trip-stage.js";
+import { formatElapsedClock, formatWorkedDuration, agentStartedAt, searchStartedAt, shouldAutoSearchOnOpen, stageLabel, tripStage } from "../src/trip-stage.js";
 
 describe("trip stage", () => {
   it("reports a stopped trip before anything else", () => {
@@ -86,6 +86,20 @@ describe("trip stage", () => {
     expect(formatElapsedClock(5)).toBe("0:05");
     expect(formatElapsedClock(75)).toBe("1:15");
     expect(formatElapsedClock(3661)).toBe("1:01:01");
+  });
+
+  it("formats worked duration with a day lead once a run stretches", () => {
+    expect(formatWorkedDuration(75)).toBe("1:15");
+    expect(formatWorkedDuration(3661)).toBe("1:01:01");
+    expect(formatWorkedDuration(86_400 + 65)).toBe("1d 1:05");
+  });
+
+  it("pins agent start to activation, else run start", () => {
+    expect(agentStartedAt(watch({ activatedAt: "2026-08-04T08:00:00.000Z" })))
+      .toBe("2026-08-04T08:00:00.000Z");
+    expect(agentStartedAt(watch({ activatedAt: null, runStartedAt: "2026-08-04T07:00:00.000Z" })))
+      .toBe("2026-08-04T07:00:00.000Z");
+    expect(agentStartedAt(null)).toBeNull();
   });
 });
 

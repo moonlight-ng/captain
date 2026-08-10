@@ -11,7 +11,6 @@ import {
   bookHref,
   homeHref,
   initializeAccessToken,
-  selectTripLegFlight,
   setTripFlightSelection,
   startTripLegSearch,
   tripAction,
@@ -58,9 +57,8 @@ import { FilterSheet } from "./components/FilterSheet";
 import { PriceChart, TrackedFlightCard } from "./components/TrackedFlight";
 import { feedPostsFromActivity, withFeedUpdateAction } from "./feed-posts";
 import { CaptainFeedPosts } from "./components/CaptainFeedPosts";
-import { AgentScheduleStatus, AgentScheduleChecks } from "./components/AgentScheduleStatus";
 import { inPageLink } from "./navigation";
-import { isWatchSearching, shouldAutoSearchOnOpen, tripStage } from "./trip-stage";
+import { isWatchSearching, shouldAutoSearchOnOpen } from "./trip-stage";
 import {
   TRIP_TAB_LABELS,
   defaultTripTab,
@@ -275,39 +273,6 @@ export function App() {
           ? "That date range is too wide. Ask Captain in Telegram to narrow it to seven days."
           : "That search didn’t start. Try again."
       }));
-    }
-  }
-
-  async function chooseTripLegFlight(leg: TripCityLeg, flightKey: string) {
-    if (!trip) return false;
-    setLegSearchErrors((current) => ({ ...current, [leg.id]: "" }));
-    try {
-      const updated = await selectTripLegFlight(leg.id, flightKey);
-      const selectedAt = new Date().toISOString();
-      setTripData((current) => current ? {
-        ...current,
-        legs: (current.legs ?? []).map((item) => item.id === updated.id ? updated : item),
-        activity: [
-          {
-            id: `local-leg-select-${updated.id}-${selectedAt}`,
-            eventType: "trip_leg_flight_selected",
-            payload: { legId: updated.id, flightKey },
-            createdAt: selectedAt,
-            body: null,
-            channel: "web",
-            notificationId: null,
-            sourceMessageId: null
-          },
-          ...(current.activity ?? []).filter((item) =>
-            !(item.eventType === "trip_leg_flight_selected"
-              && item.payload.legId === updated.id)
-          )
-        ]
-      } : current);
-      return true;
-    } catch {
-      setLegSearchErrors((current) => ({ ...current, [leg.id]: "Couldn’t select that flight. Try again." }));
-      return false;
     }
   }
 
@@ -613,7 +578,7 @@ export function App() {
         : "Updating…"
       : null;
     return (
-      <main className="shell multi-city-shell">
+      <main className="shell">
         <header className="topbar">
           <button
             type="button"
@@ -632,13 +597,6 @@ export function App() {
         <TripLegResults
           {...multiCityShared}
           legId={activeLegId}
-          onSelect={(leg, flightKey) => {
-            void chooseTripLegFlight(leg, flightKey).then((ok) => {
-              if (!ok) return;
-              navigate(tripHref(trip.id));
-              setTab("feed");
-            });
-          }}
         />
       </main>
     );
@@ -686,7 +644,7 @@ export function App() {
   );
 
   return (
-    <main className={`shell${multiCityShared ? " multi-city-shell" : ""}`}>
+    <main className="shell">
       {!watchlistFocus && (
         <header className="topbar">
           <a
@@ -873,7 +831,6 @@ export function App() {
             {tab === "flights" && (multiCityShared ? (
               <MultiCityFlightsOverview
                 {...multiCityShared}
-                onSelect={(leg, flightKey) => { void chooseTripLegFlight(leg, flightKey); }}
               />
             ) : (
               <BrowseTab
@@ -904,18 +861,15 @@ export function App() {
                 {...multiCityShared}
                 activity={tripData?.activity ?? []}
                 recommendation={tripData?.recommendation ?? null}
-                watch={tripData?.watch ?? null}
               />
             ) : (
               <FeedTab
-                trip={trip}
                 offers={watchedOffers}
                 trackedHistory={trackedHistory}
                 liveOffers={offers}
                 watchedOfferCache={watchedOfferCache}
                 recommendation={tripData?.recommendation ?? null}
                 activity={tripData?.activity ?? []}
-                watch={tripData?.watch ?? null}
                 onOpen={openFlight}
                 onFindFlights={() => setTab("flights")}
               />
@@ -1334,25 +1288,21 @@ function PeerPricePlot({
 }
 
 function FeedTab({
-  trip,
   offers,
   trackedHistory,
   liveOffers,
   watchedOfferCache,
   recommendation,
   activity,
-  watch,
   onOpen,
   onFindFlights
 }: {
-  trip: TripPayload["trip"];
   offers: VerifiedOffer[];
   trackedHistory: TrackedPriceHistory | null;
   liveOffers: VerifiedOffer[];
   watchedOfferCache: Record<string, VerifiedOffer>;
   recommendation: TripPayload["recommendation"];
   activity: TripPayload["activity"];
-  watch: Watch | null;
   onOpen: (offer: VerifiedOffer) => void;
   onFindFlights: () => void;
 }) {
@@ -1374,7 +1324,6 @@ function FeedTab({
       ? { label: "Open flight", onClick: () => onOpen(recommendationOffer) }
       : undefined
   );
-  const stage = tripStage({ trip, watch });
   const empty = !trackedHistory
     && remaining.length === 0
     && !recommendation
@@ -1393,15 +1342,6 @@ function FeedTab({
 
   return (
     <div className="feed-tab">
-      {watch && watch.status !== "completed" ? (
-        <details className="feed-checks watchlist-panel">
-          <summary className="card-top">
-            <h2>Agent schedule</h2>
-            <AgentScheduleStatus stage={stage} watch={watch} />
-          </summary>
-          <AgentScheduleChecks stage={stage} watch={watch} />
-        </details>
-      ) : null}
       <CaptainFeedPosts posts={posts} />
       {trackedHistory ? (
         <TrackedFlightCard

@@ -5,6 +5,25 @@ function authorLabel(author: FeedPost["author"]): string {
   return author === "traveller" ? "You" : "Captain";
 }
 
+function FeedAvatar({ author }: { author: FeedPost["author"] }) {
+  if (author === "captain") {
+    return (
+      <img
+        className="feed-post-avatar"
+        src="/captain-avatar.jpg"
+        alt=""
+        aria-hidden="true"
+      />
+    );
+  }
+
+  return (
+    <span className="feed-post-avatar is-traveller" aria-hidden="true">
+      Y
+    </span>
+  );
+}
+
 export function CaptainFeedPosts({ posts }: { posts: FeedPost[] }) {
   if (posts.length === 0) return null;
 
@@ -15,7 +34,7 @@ export function CaptainFeedPosts({ posts }: { posts: FeedPost[] }) {
           className={`feed-post${post.kind === "update" ? " is-update" : ""}`}
           key={post.id}
         >
-          <i className="feed-post-dot" aria-hidden="true" />
+          <FeedAvatar author={post.author} />
           <div className="feed-post-body">
             <header className="feed-post-header">
               <strong>{authorLabel(post.author)}</strong>

@@ -115,3 +115,23 @@ export function formatElapsedClock(totalSeconds: number): string {
   }
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
+
+/**
+ * How long the agent has been on the job. Same ticking clock under a day;
+ * once a run stretches longer, days lead so the face stays readable.
+ */
+export function formatWorkedDuration(totalSeconds: number): string {
+  const total = Math.max(0, Math.floor(totalSeconds));
+  const days = Math.floor(total / 86_400);
+  if (days <= 0) return formatElapsedClock(total);
+  const remainder = total % 86_400;
+  return `${days}d ${formatElapsedClock(remainder)}`;
+}
+
+/** When the agent started working this run — activation, else run start. */
+export function agentStartedAt(
+  watch: TripPayload["watch"] | null | undefined
+): string | null {
+  if (!watch) return null;
+  return watch.activatedAt ?? watch.runStartedAt ?? null;
+}
