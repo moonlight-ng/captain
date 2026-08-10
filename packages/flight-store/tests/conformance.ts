@@ -359,6 +359,92 @@ export function describeCaptainPlatformStore(
       await expect(store.claimOnboardingWelcome(ada.id, now)).resolves.toBe(false);
     });
 
+    it("leases the staggered onboarding follow-ups only when each stage is due", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const startedAt = new Date("2026-08-01T10:00:00Z");
+      await store.updateProfile(ada.id, { quietHoursEnabled: false }, startedAt);
+      await expect(store.claimOnboardingWelcome(ada.id, startedAt)).resolves.toBe(true);
+
+      await expect(store.claimDueOnboardingFollowups(
+        new Date("2026-08-01T15:59:59Z"),
+        300_000,
+        10
+      )).resolves.toEqual([]);
+      const [capabilities] = await store.claimDueOnboardingFollowups(
+        new Date("2026-08-01T16:00:00Z"),
+        300_000,
+        10
+      );
+      expect(capabilities).toMatchObject({
+        userId: ada.id,
+        telegramChatId: 1,
+        stage: "capabilities",
+        attempts: 1
+      });
+      await expect(store.revalidateOnboardingFollowup(
+        ada.id,
+        "capabilities",
+        new Date("2026-08-01T16:00:00Z")
+      )).resolves.toBe(true);
+      await store.markOnboardingFollowupSent(
+        ada.id,
+        "capabilities",
+        101,
+        "Capabilities",
+        new Date("2026-08-01T16:00:00Z")
+      );
+      await expect(store.claimDueOnboardingFollowups(
+        new Date("2026-08-02T10:00:00Z"),
+        300_000,
+        10
+      )).resolves.toEqual([expect.objectContaining({ stage: "workspace" })]);
+    });
+
+    it("moves onboarding follow-ups out of the traveller's quiet hours", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const startedAt = new Date("2026-08-01T16:00:00Z");
+      await store.updateProfile(ada.id, {
+        quietHoursEnabled: true,
+        quietHoursStart: 22,
+        quietHoursEnd: 7
+      }, startedAt);
+      await store.claimOnboardingWelcome(ada.id, startedAt);
+
+      await expect(store.claimDueOnboardingFollowups(
+        new Date("2026-08-02T06:59:59Z"),
+        300_000,
+        10
+      )).resolves.toEqual([]);
+      await expect(store.claimDueOnboardingFollowups(
+        new Date("2026-08-02T07:00:00Z"),
+        300_000,
+        10
+      )).resolves.toEqual([expect.objectContaining({ stage: "capabilities" })]);
+    });
+
+    it("deterministically suppresses follow-ups after the traveller self-onboards", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const startedAt = new Date("2026-08-01T10:00:00Z");
+      await store.updateProfile(ada.id, { quietHoursEnabled: false }, startedAt);
+      await store.appendMessage(ada.id, "user", "/start", new Date("2026-08-01T09:59:59Z"));
+      await store.claimOnboardingWelcome(ada.id, startedAt);
+      await store.appendMessage(ada.id, "user", "Lagos in September", new Date("2026-08-01T10:05:00Z"));
+
+      await expect(store.claimDueOnboardingFollowups(
+        new Date("2026-08-04T10:00:00Z"),
+        300_000,
+        10
+      )).resolves.toEqual([]);
+      await expect(store.revalidateOnboardingFollowup(
+        ada.id,
+        "capabilities",
+        new Date("2026-08-04T10:00:00Z")
+      )).resolves.toBe(false);
+    });
+
     it("clears travellers and resets preferences without deleting the account", async () => {
       const store = await createStore();
       const ada = await user(store, 1);

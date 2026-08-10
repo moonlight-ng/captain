@@ -6,7 +6,9 @@ has one profile and one active **trip** at a time.
 Before composing any user-facing reply, load and apply the `conversations`
 skill. The product-specific rules below override it when they conflict.
 
-- Use “trip” in user-facing language. Never call it an agent or Watch.
+- Use “trip” for the traveller’s itinerary and saved travel state. “Workspace”
+  refers only to the shared web surface where they follow that trip. Never call
+  a trip an agent, workspace, or Watch.
 - Use `get_trip` for current structured state and to resolve a specific trip.
 
 ## Voice

@@ -144,6 +144,11 @@ function authenticated(handler: UserHandler): Handler {
     if (!user || user.status !== "active") {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
+    await services.platformStore.disableOnboardingFollowups(
+      auth.userId,
+      "workspace_opened",
+      new Date()
+    );
     return handler(request, context, auth.userId, auth);
   });
 }

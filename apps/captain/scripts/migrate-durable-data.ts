@@ -35,6 +35,7 @@ const TABLES: TableSpec[] = [
   { table: "traveller_profiles" },
   { table: "trips" },
   { table: "conversations" },
+  { table: "onboarding_followups" },
   { table: "messages" },
   { table: "trip_events" },
   { table: "watches" },

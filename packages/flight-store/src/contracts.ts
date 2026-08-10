@@ -62,6 +62,29 @@ export type ConversationContext = {
   recentMessages: Array<{ id: string; role: "user" | "assistant"; content: string; createdAt: string }>;
 };
 
+export const ONBOARDING_FOLLOWUP_STAGES = [
+  { stage: "capabilities", delayMs: 6 * 60 * 60_000 },
+  { stage: "workspace", delayMs: 24 * 60 * 60_000 },
+  { stage: "commands", delayMs: 72 * 60 * 60_000 }
+] as const;
+
+export type OnboardingFollowupStage = typeof ONBOARDING_FOLLOWUP_STAGES[number]["stage"];
+
+export type OnboardingEngagementReason =
+  | "telegram_message"
+  | "telegram_command"
+  | "telegram_callback"
+  | "workspace_opened"
+  | "trip_activity";
+
+export type ClaimedOnboardingFollowup = {
+  userId: string;
+  telegramChatId: number;
+  stage: OnboardingFollowupStage;
+  attempts: number;
+  availableAt: string;
+};
+
 export type ClaimedSearchRun = {
   id: string;
   searchSpecId: string;
@@ -198,6 +221,37 @@ export interface CaptainPlatformStore {
    * caller that won. Two updates arriving together must not both greet.
    */
   claimOnboardingWelcome(userId: string, now: Date): Promise<boolean>;
+  /** Permanently suppresses every unsent onboarding follow-up in this cycle. */
+  disableOnboardingFollowups(
+    userId: string,
+    reason: OnboardingEngagementReason,
+    now: Date
+  ): Promise<void>;
+  /** Atomically leases at most one due follow-up per still-inactive traveller. */
+  claimDueOnboardingFollowups(
+    now: Date,
+    leaseMs: number,
+    limit: number
+  ): Promise<ClaimedOnboardingFollowup[]>;
+  /** Rechecks durable activity immediately before an external Telegram send. */
+  revalidateOnboardingFollowup(
+    userId: string,
+    stage: OnboardingFollowupStage,
+    now: Date
+  ): Promise<boolean>;
+  markOnboardingFollowupSent(
+    userId: string,
+    stage: OnboardingFollowupStage,
+    telegramMessageId: number,
+    body: string,
+    now: Date
+  ): Promise<void>;
+  markOnboardingFollowupFailed(
+    userId: string,
+    stage: OnboardingFollowupStage,
+    error: string,
+    now: Date
+  ): Promise<void>;
   createLoginToken(
     userId: string,
     tokenHash: string,

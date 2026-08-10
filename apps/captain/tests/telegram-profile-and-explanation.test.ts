@@ -14,7 +14,6 @@ import {
   CAPTAIN_OPENING_STATUS_VARIANTS,
   CAPTAIN_PLANNING_STATUS,
   CAPTAIN_PROFILE_COMMAND,
-  CAPTAIN_READY_PROMPT,
   CAPTAIN_RETURNING_TRAVELLER_WELCOME,
   CAPTAIN_TRIP_COMMAND,
   CAPTAIN_TRIPS_COMMAND,
@@ -26,31 +25,43 @@ import {
   returningTravellerWelcome,
   telegramCommandName
 } from "../agent/channels/telegram.js";
+import {
+  CAPTAIN_ONBOARDING_CAPABILITIES,
+  CAPTAIN_ONBOARDING_COMMANDS,
+  CAPTAIN_ONBOARDING_WORKSPACE
+} from "../services/onboarding/followups.js";
 
 describe("Telegram profile onboarding", () => {
-  it("starts every new traveller with the fixed two-message introduction", () => {
+  it("starts every new traveller with a conversational introduction", () => {
     expect(CAPTAIN_NEW_USER_GREETING).toBe(
-      "Hi, I’m Captain. I can plan multi-city trips, answer general travel questions, and compare real-time flight options across your possible dates."
+      "Hi, I’m Captain. Nice to meet you! What are you thinking about for your next trip?"
     );
-    expect(CAPTAIN_READY_PROMPT).toBe(
-      "Share your travel plans via text or voice note and I'll help you explore the options."
+    expect(CAPTAIN_ONBOARDING_CAPABILITIES).toBe(
+      "I can help you figure out where to go, plan a multi-city trip, compare flight options across different dates, or watch for fare changes once your trip is set."
+    );
+    expect(CAPTAIN_ONBOARDING_WORKSPACE).toBe(
+      "You can send requests via voice note or text and I’ll take it from there. Once we start a trip, you’ll also get a shared workspace to follow it."
+    );
+    expect(CAPTAIN_ONBOARDING_COMMANDS).toBe(
+      "If you need any help, use the menu beside the message box to browse my commands."
     );
   });
 
-  it("keeps the introduction focused on Captain’s core capability", () => {
+  it("keeps the greeting warm and moves product orientation into follow-ups", () => {
     expect(CAPTAIN_NEW_USER_GREETING).not.toContain("early testing");
     expect(CAPTAIN_NEW_USER_GREETING).not.toContain("one trip at a time");
     expect(CAPTAIN_NEW_USER_GREETING).not.toContain("USD fares");
     expect(CAPTAIN_NEW_USER_GREETING).not.toContain("book or pay");
-    expect(CAPTAIN_READY_PROMPT).toContain("voice note");
-    expect(CAPTAIN_READY_PROMPT).toContain("explore the options");
-    expect(CAPTAIN_NEW_USER_GREETING).toContain("general travel questions");
-    expect(CAPTAIN_NEW_USER_GREETING).toContain("real-time flight options");
+    expect(CAPTAIN_ONBOARDING_CAPABILITIES).toContain("multi-city trip");
+    expect(CAPTAIN_ONBOARDING_CAPABILITIES).toContain("once your trip is set");
+    expect(CAPTAIN_ONBOARDING_WORKSPACE).toContain("voice note or text");
+    expect(CAPTAIN_ONBOARDING_WORKSPACE).toContain("shared workspace");
+    expect(CAPTAIN_ONBOARDING_COMMANDS).not.toContain("bottom left");
   });
 
   it("introduces Captain once and welcomes returning travellers differently", () => {
     expect(CAPTAIN_NEW_USER_GREETING).toMatch(/I['’]m Captain/u);
-    expect(CAPTAIN_READY_PROMPT).not.toMatch(/I['’]m Captain/u);
+    expect(CAPTAIN_ONBOARDING_CAPABILITIES).not.toMatch(/I['’]m Captain/u);
     expect(CAPTAIN_RETURNING_TRAVELLER_WELCOME).not.toMatch(/I['’]m Captain/u);
     expect(CAPTAIN_RETURNING_TRAVELLER_WELCOME).toBe(
       "Welcome back. Where to next?"
