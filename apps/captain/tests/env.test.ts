@@ -37,10 +37,10 @@ describe("Captain public environment", () => {
     expect(() => loadEnv()).toThrow("CAPTAIN_ADMIN_EMAILS");
   });
 
-  it("uses the balanced GPT-5.6 tier by default while preserving an override", () => {
+  it("uses Claude Sonnet by default while preserving an override", () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("AI_MODEL", "");
-    expect(loadEnv().aiModel).toBe("openai/gpt-5.6-terra");
+    expect(loadEnv().aiModel).toBe("anthropic/claude-sonnet-5");
     vi.stubEnv("AI_MODEL", "openai/custom-model");
     expect(loadEnv().aiModel).toBe("openai/custom-model");
   });

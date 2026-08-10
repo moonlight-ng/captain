@@ -31,7 +31,11 @@ import {
   formatTripPlanConfirmation
 } from "./format.js";
 import { suggestedMaxStops, suggestedTripCurrency } from "./currency.js";
-import { airportMarket, orderedAirportCodesFromText } from "./airport-catalog.js";
+import {
+  airportMarket,
+  orderedAirportCodesFromText,
+  orderedAirportMentionsFromText
+} from "./airport-catalog.js";
 import {
   createTripDraftReadinessAssessor,
   type TripDraftReadinessAssessor
@@ -199,6 +203,24 @@ export class TripPlanningService {
         timeZone
       });
     if (allowUnhandled && turn?.intent === "unrelated" && turn.operations.length === 0) return null;
+    // A question about a trip that already exists is not a request for a new
+    // one. Without this, a turn carrying no route or date opens an empty
+    // draft, the reducer finds nothing to set, and the traveller is asked
+    // where they are flying from — about a route Captain is already holding.
+    // The freshly created draft is cancelled too: left open it would own the
+    // next turn and ask the same question again.
+    if (turn && turn.operations.length === 0 && isUncollectedDraft(draft)) {
+      const activeTrip = await this.#store.getActiveTrip(userId);
+      if (activeTrip) {
+        await this.cancel(userId, draft.id, draft.revision);
+        console.info(JSON.stringify({
+          event: "captain.trip_plan_no_change",
+          trip_id: activeTrip.id,
+          turn_intent: turn.intent
+        }));
+        return { status: "no_trip_change", trip: activeTrip };
+      }
+    }
     const beforeHash = stableJson(draft.state);
     const reduced = compiledConstraints
       ? {
@@ -226,6 +248,10 @@ export class TripPlanningService {
           now,
           timeZone
         });
+    // A country resolves to its primary airport, which is Captain's pick, not
+    // the traveller's. Carry those codes on the draft so the confirmation can
+    // mark them — an unmarked guess is how a whole leg goes to the wrong city.
+    reduced.state = withAssumedAirports(reduced.state, request);
     const unresolvedFields = missingTripFields(reduced.state, null);
     const canReviewWithDateAssumptions = unresolvedFields.length > 0
       && unresolvedFields.every((field) => ASSUMABLE_DATE_FIELDS.has(field));
@@ -579,17 +605,59 @@ export class TripPlanningService {
     return { message: UNGROUNDED_CREATION_MESSAGE, createdTrip: false };
   }
 
-  async handleOpenDraftText(
+  /**
+   * The planning service owns the confirmation wording and the instructions
+   * ask the model to return it verbatim, but nothing enforced that — so a
+   * paraphrase reached a traveller with the “(default)” markers stripped off
+   * the values Captain had assumed rather than been told. They confirmed a
+   * plan whose guesses were invisible.
+   *
+   * A bulleted restatement of a pending plan is replaced with the canonical
+   * text. Prose is left alone: the model still owns the conversation around
+   * the plan, just not the plan itself.
+   */
+  async enforceVerbatimPlanText(userId: string, message: string): Promise<string> {
+    const draft = await this.findOpen(userId);
+    if (draft?.status !== "awaiting_confirmation" || !draft.confirmationSnapshot) {
+      return message;
+    }
+    const canonical = formatTripPlanConfirmation(draft);
+    if (message.trim() === canonical.trim()) return message;
+    if (countBulletLines(message) < MIN_PLAN_RESTATEMENT_BULLETS) return message;
+    console.info(JSON.stringify({
+      event: "captain.trip_plan_paraphrase_replaced",
+      draft_id: draft.id,
+      revision: draft.revision
+    }));
+    return canonical;
+  }
+
+  /**
+   * The decisions a traveller makes *about* an open draft — confirm, cancel,
+   * decline Captain's dates, consent to a replacement, keep both. These are
+   * unambiguous words with one meaning each, so the channel answers them
+   * directly and instantly.
+   *
+   * Everything else about a draft is interpretation and belongs to the agent.
+   * The channel used to own that too, which is how “what's the best day to
+   * fly that week” became a request to plan a new trip.
+   */
+  async handleDraftDecision(
     userId: string,
     request: string,
     sourceMessageId: string | null
   ): Promise<TripPlanResult | null> {
     const draft = await this.findOpen(userId);
     if (!draft) return null;
-    if (isNarrativeItineraryRequest(request)) {
-      await this.cancel(userId, draft.id, draft.revision);
-      return this.prepare(userId, request, sourceMessageId);
-    }
+    return this.#draftDecision(draft, userId, request, sourceMessageId);
+  }
+
+  async #draftDecision(
+    draft: TripPlanDraft,
+    userId: string,
+    request: string,
+    sourceMessageId: string | null
+  ): Promise<TripPlanResult | null> {
     if (draft.status === "collecting" && draft.confirmationSnapshot) {
       if (KEEP_BOTH_PATTERN.test(request)) {
         return {
@@ -622,6 +690,22 @@ export class TripPlanningService {
     if (CANCEL_PATTERN.test(request.trim())) {
       return this.cancel(userId, draft.id, draft.revision);
     }
+    return null;
+  }
+
+  async handleOpenDraftText(
+    userId: string,
+    request: string,
+    sourceMessageId: string | null
+  ): Promise<TripPlanResult | null> {
+    const draft = await this.findOpen(userId);
+    if (!draft) return null;
+    if (isNarrativeItineraryRequest(request)) {
+      await this.cancel(userId, draft.id, draft.revision);
+      return this.prepare(userId, request, sourceMessageId);
+    }
+    const decision = await this.#draftDecision(draft, userId, request, sourceMessageId);
+    if (decision) return decision;
     // There is nothing to confirm on a draft that is still being collected, and
     // no proposal for a “yes” to land on. Saying so and re-asking beats revising
     // the draft into the identical question the traveller is already looking at.
@@ -719,6 +803,47 @@ function formatPlanningWindow(window: { start: string; end: string }): string {
   return window.start === window.end
     ? formatCalendarDate(window.start)
     : `${formatCalendarDate(window.start)} – ${formatCalendarDate(window.end)}`;
+}
+
+/** A draft that has collected nothing yet, so abandoning it loses nothing. */
+function isUncollectedDraft(draft: TripPlanDraft): boolean {
+  return draft.revision === 1 && draft.state.legs.length === 0;
+}
+
+/**
+ * Enough bullets that the message is restating the plan rather than talking
+ * about it. A conversational reply does not carry three of them; every
+ * rendering of the plan carries far more.
+ */
+const MIN_PLAN_RESTATEMENT_BULLETS = 3;
+
+function countBulletLines(message: string): number {
+  return message
+    .split("\n")
+    .filter((line) => /^\s*[•*-]\s+\S/u.test(line))
+    .length;
+}
+
+/**
+ * Records which of the draft's airports Captain inferred from a country name.
+ * Codes accumulate across turns, because the country may have been named
+ * several messages before the leg it produced reaches the confirmation, and
+ * are kept only while they are still routed somewhere.
+ */
+function withAssumedAirports(state: TripDraftState, request: string): TripDraftState {
+  const routed = new Set(state.legs.flatMap((leg) =>
+    [...leg.originAirports, ...leg.destinationAirports]
+  ));
+  const assumed = new Set([
+    ...state.assumedAirports,
+    ...orderedAirportMentionsFromText(request)
+      .filter((mention) => mention.assumed)
+      .map((mention) => mention.code)
+  ]);
+  return {
+    ...state,
+    assumedAirports: [...assumed].filter((code) => routed.has(code)).slice(0, 6)
+  };
 }
 
 function applyNarrativeOptions(state: TripDraftState, request: string): TripDraftState {

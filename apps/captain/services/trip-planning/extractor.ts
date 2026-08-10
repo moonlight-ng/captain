@@ -107,11 +107,17 @@ export function fallbackTripFactExtraction(
         : /\beconomy\b/iu.test(lower)
           ? "economy" as const
           : null;
-  const maxStops = /\bnon[ -]?stop\b|\bdirect\b/iu.test(lower)
+  // Stop constraints arrive hyphenated at least as often as spaced — “max
+  // one-stop”, or “non‑stop” carrying a non-breaking hyphen from a phone
+  // keyboard. Folding every dash to a space first keeps one readable pattern
+  // per constraint instead of a dash class repeated in each. The class covers
+  // U+2010–U+2015, U+2212, and the ASCII hyphen.
+  const dashless = lower.replace(/[‐-―−-]+/gu, " ");
+  const maxStops = /\bnon[ -]?stop\b|\bdirect\b/iu.test(dashless)
     ? 0
-    : /\b(?:at most|maximum|max)\s+(?:one|1)\s+stops?\b/iu.test(lower)
+    : /\b(?:at most|maximum|max)\s+(?:one|1)\s+stops?\b/iu.test(dashless)
       ? 1
-      : /\b(?:at most|maximum|max)\s+(?:two|2)\s+stops?\b/iu.test(lower)
+      : /\b(?:at most|maximum|max)\s+(?:two|2)\s+stops?\b/iu.test(dashless)
         ? 2
         : null;
   const currency = /\b(?:in|currency)\s+(NGN|USD|GBP|EUR|KES)\b/iu.exec(normalized)?.[1]?.toUpperCase() ?? null;

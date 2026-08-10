@@ -1,6 +1,7 @@
 import type {
   CanonicalFlightPayload,
   LegSearchSnapshot,
+  TravellerFact,
   TravellerProfile,
   TripCityLeg,
   TripPayload
@@ -83,6 +84,14 @@ export function getSession(): Promise<{
 
 export async function getProfile(): Promise<TravellerProfile> {
   return (await api<{ profile: TravellerProfile }>("/api/me/profile")).profile;
+}
+
+export async function listTravellerFacts(): Promise<TravellerFact[]> {
+  return (await api<{ facts: TravellerFact[] }>("/api/me/facts")).facts;
+}
+
+export async function dismissTravellerFact(factId: string): Promise<void> {
+  await api(`/api/me/facts/${encodeURIComponent(factId)}`, { method: "DELETE" });
 }
 
 export async function updateProfile(

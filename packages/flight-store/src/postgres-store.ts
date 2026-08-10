@@ -53,6 +53,9 @@ import type {
   ClaimedSearchRun,
   CompletedProviderOffer,
   ConversationContext,
+  TravellerFact,
+  TravellerFactInput,
+  TravellerFactKind,
   TelegramUserInput,
   TrackingMaintenance,
   MultiCityLegSearchRecording,
@@ -237,9 +240,12 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       await tx`delete from captain.trip_plan_drafts where user_id = ${userId}`;
       await tx`delete from captain.onboarding_followups where user_id = ${userId}`;
       await tx`delete from captain.messages where user_id = ${userId}`;
+      await tx`delete from captain.traveller_facts where user_id = ${userId}`;
       await tx`
         update captain.conversations set
           summary = '',
+          summary_updated_at = null,
+          summary_through_message_id = null,
           active_trip_id = null,
           updated_at = ${now}
         where user_id = ${userId}
@@ -626,8 +632,15 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
   }
 
   async getConversation(userId: string, limit = 20): Promise<ConversationContext> {
-    const conversations = await this.#sql<Array<{ id: string; summary: string; active_trip_id: string | null }>>`
-      select id, summary, active_trip_id from captain.conversations where user_id = ${userId}
+    const conversations = await this.#sql<Array<{
+      id: string;
+      summary: string;
+      summary_updated_at: Date | null;
+      summary_through_message_id: string | null;
+      active_trip_id: string | null;
+    }>>`
+      select id, summary, summary_updated_at, summary_through_message_id, active_trip_id
+      from captain.conversations where user_id = ${userId}
     `;
     const conversation = conversations[0];
     if (!conversation) throw new Error("Conversation not found");
@@ -639,11 +652,83 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     return {
       conversationId: conversation.id,
       summary: conversation.summary,
+      summaryUpdatedAt: conversation.summary_updated_at
+        ? iso(conversation.summary_updated_at)
+        : null,
+      summaryThroughMessageId: conversation.summary_through_message_id,
       activeTripId: conversation.active_trip_id,
       recentMessages: messages.reverse().map((message) => ({
         id: message.id, role: message.role, content: message.content, createdAt: iso(message.created_at)
       }))
     };
+  }
+
+  async listTravellerFacts(userId: string): Promise<TravellerFact[]> {
+    const rows = await this.#sql<TravellerFactRow[]>`
+      select id, kind, value, evidence, source_message_id, status, created_at, updated_at
+      from captain.traveller_facts
+      where user_id = ${userId} and status = 'active'
+      order by kind, created_at
+    `;
+    return rows.map(travellerFactFromRow);
+  }
+
+  async recordTravellerFacts(
+    userId: string,
+    facts: TravellerFactInput[],
+    now: Date
+  ): Promise<TravellerFact[]> {
+    if (facts.length === 0) return [];
+    const recorded: TravellerFact[] = [];
+    for (const fact of facts) {
+      // `where status = 'active'` on the update: a dismissed fact stays
+      // dismissed. The traveller correcting Captain has to outrank Captain
+      // hearing the same sentence again.
+      const rows = await this.#sql<TravellerFactRow[]>`
+        insert into captain.traveller_facts (
+          id, user_id, kind, value, evidence, source_message_id, status, created_at, updated_at
+        )
+        values (
+          ${randomUUID()}, ${userId}, ${fact.kind}, ${fact.value},
+          ${fact.evidence}, ${fact.sourceMessageId}, 'active', ${now}, ${now}
+        )
+        on conflict (user_id, kind, value) do update
+          set evidence = excluded.evidence,
+              source_message_id = excluded.source_message_id,
+              updated_at = ${now}
+          where captain.traveller_facts.status = 'active'
+        returning id, kind, value, evidence, source_message_id, status, created_at, updated_at
+      `;
+      const row = rows[0];
+      if (row) recorded.push(travellerFactFromRow(row));
+    }
+    return recorded;
+  }
+
+  async dismissTravellerFact(userId: string, factId: string, now: Date): Promise<boolean> {
+    const rows = await this.#sql<Array<{ id: string }>>`
+      update captain.traveller_facts
+      set status = 'dismissed', updated_at = ${now}
+      where user_id = ${userId} and id = ${factId} and status = 'active'
+      returning id
+    `;
+    return rows.length === 1;
+  }
+
+  async setConversationSummary(
+    userId: string,
+    summary: string,
+    throughMessageId: string | null,
+    now: Date
+  ): Promise<void> {
+    await this.#sql`
+      update captain.conversations
+      set summary = ${summary},
+          summary_updated_at = ${now},
+          summary_through_message_id = ${throughMessageId},
+          updated_at = ${now}
+      where user_id = ${userId}
+    `;
   }
 
   async appendMessage(userId: string, role: "user" | "assistant", content: string, now: Date): Promise<string> {
@@ -3182,6 +3267,29 @@ type OnboardingFollowupRow = {
   attempts: number;
   available_at: Date;
 };
+type TravellerFactRow = {
+  id: string;
+  kind: TravellerFactKind;
+  value: string;
+  evidence: string;
+  source_message_id: string | null;
+  status: "active" | "dismissed";
+  created_at: Date;
+  updated_at: Date;
+};
+
+function travellerFactFromRow(row: TravellerFactRow): TravellerFact {
+  return {
+    id: row.id,
+    kind: row.kind,
+    value: row.value,
+    evidence: row.evidence,
+    sourceMessageId: row.source_message_id,
+    status: row.status,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at)
+  };
+}
 type ProfileRow = {
   user_id: string;
   default_currency: string;

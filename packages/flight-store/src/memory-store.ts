@@ -49,6 +49,8 @@ import type {
   ClaimedSearchRun,
   CompletedProviderOffer,
   ConversationContext,
+  TravellerFact,
+  TravellerFactInput,
   TelegramUserInput,
   TrackingMaintenance,
   MultiCityLegSearchRecording,
@@ -143,6 +145,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   readonly #apiUsage = new Map<string, { responses: number; webSearchCalls: number }>();
   readonly #updates = new Map<string, string>();
   readonly #conversations = new Map<string, MemoryConversation>();
+  readonly #travellerFacts = new Map<string, TravellerFact[]>();
   readonly #trips = new Map<string, Trip>();
   readonly #tripGraphs = new Map<string, TripGraph>();
   readonly #legSearchSnapshots = new Map<string, LegSearchSnapshot>();
@@ -193,6 +196,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       userId: user.id,
       conversationId: randomUUID(),
       summary: "",
+      summaryUpdatedAt: null,
+      summaryThroughMessageId: null,
       activeTripId: null,
       recentMessages: []
     });
@@ -251,11 +256,14 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     for (const [key, followup] of this.#onboardingFollowups) {
       if (followup.userId === userId) this.#onboardingFollowups.delete(key);
     }
+    this.#travellerFacts.delete(userId);
     const conversation = this.#conversations.get(userId);
     if (conversation) {
       this.#conversations.set(userId, {
         ...conversation,
         summary: "",
+        summaryUpdatedAt: null,
+        summaryThroughMessageId: null,
         activeTripId: null,
         recentMessages: []
       });
@@ -628,6 +636,74 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       ...conversation,
       recentMessages: limit === 0 ? [] : conversation.recentMessages.slice(-limit)
     });
+  }
+
+  async listTravellerFacts(userId: string): Promise<TravellerFact[]> {
+    return clone((this.#travellerFacts.get(userId) ?? [])
+      .filter((fact) => fact.status === "active")
+      .sort((left, right) =>
+        left.kind.localeCompare(right.kind) || left.createdAt.localeCompare(right.createdAt)
+      ));
+  }
+
+  async recordTravellerFacts(
+    userId: string,
+    facts: TravellerFactInput[],
+    now: Date
+  ): Promise<TravellerFact[]> {
+    const existing = this.#travellerFacts.get(userId) ?? [];
+    const recorded: TravellerFact[] = [];
+    for (const fact of facts) {
+      const match = existing.find((candidate) =>
+        candidate.kind === fact.kind && candidate.value === fact.value
+      );
+      // A dismissed fact stays dismissed — the traveller's correction outranks
+      // Captain hearing the same sentence a second time.
+      if (match?.status === "dismissed") continue;
+      if (match) {
+        match.evidence = fact.evidence;
+        match.sourceMessageId = fact.sourceMessageId;
+        match.updatedAt = now.toISOString();
+        recorded.push(clone(match));
+        continue;
+      }
+      const created: TravellerFact = {
+        id: randomUUID(),
+        kind: fact.kind,
+        value: fact.value,
+        evidence: fact.evidence,
+        sourceMessageId: fact.sourceMessageId,
+        status: "active",
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString()
+      };
+      existing.push(created);
+      recorded.push(clone(created));
+    }
+    this.#travellerFacts.set(userId, existing);
+    return recorded;
+  }
+
+  async dismissTravellerFact(userId: string, factId: string, now: Date): Promise<boolean> {
+    const fact = (this.#travellerFacts.get(userId) ?? [])
+      .find((candidate) => candidate.id === factId && candidate.status === "active");
+    if (!fact) return false;
+    fact.status = "dismissed";
+    fact.updatedAt = now.toISOString();
+    return true;
+  }
+
+  async setConversationSummary(
+    userId: string,
+    summary: string,
+    throughMessageId: string | null,
+    now: Date
+  ): Promise<void> {
+    const conversation = this.#conversations.get(userId);
+    if (!conversation) throw new Error("Conversation not found");
+    conversation.summary = summary;
+    conversation.summaryUpdatedAt = now.toISOString();
+    conversation.summaryThroughMessageId = throughMessageId;
   }
 
   async appendMessage(userId: string, role: "user" | "assistant", content: string, now: Date): Promise<string> {

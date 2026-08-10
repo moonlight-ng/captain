@@ -1591,6 +1591,57 @@ textarea {
 }
 .settings-card small { color: var(--quiet); font-size: var(--type-body); line-height: 1.45; }
 .settings-card .form-error { margin: -10px 0 0; color: rgba(242, 176, 163, .9); font-size: var(--type-body); }
+.traveller-facts-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.traveller-facts-list li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.traveller-facts-list li:first-child { border-top: 0; padding-top: 0; }
+.traveller-facts-list li > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.traveller-facts-list strong {
+  color: var(--text);
+  font-size: var(--type-body);
+  font-weight: var(--weight-medium);
+}
+.traveller-facts-list span {
+  color: var(--muted);
+  font-size: var(--type-body);
+  line-height: 1.45;
+}
+.traveller-facts-list small {
+  color: var(--quiet);
+  font-size: var(--type-body);
+  line-height: 1.45;
+  font-style: italic;
+}
+.traveller-facts-list button {
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.traveller-facts-list button:disabled { opacity: 0.6; cursor: wait; }
 .feedback-shell .settings-intro h1 { margin-bottom: 7px; }
 .feedback-card textarea { min-height: 150px; line-height: 1.55; }
 .feedback-success { display: flex; flex-direction: column; gap: 12px; }

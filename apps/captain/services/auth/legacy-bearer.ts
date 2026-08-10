@@ -14,6 +14,7 @@ export function legacyBearerAllowed(method: string, pathname: string): boolean {
   const normalized = method.toUpperCase();
   if (pathname === "/api/auth/session" && normalized === "GET") return true;
   if (pathname === "/api/me/profile" && (normalized === "GET" || normalized === "PATCH")) return true;
+  if (pathname === "/api/me/facts" && normalized === "GET") return true;
   if (pathname === "/api/me/trip" && (normalized === "GET" || normalized === "PATCH")) return true;
   if (pathname === "/api/me/trip/actions" && normalized === "POST") return true;
   if (pathname === "/api/me/trip/selections" && normalized === "POST") return true;

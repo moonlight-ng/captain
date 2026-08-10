@@ -55,9 +55,47 @@ export type TelegramUserInput = {
   lastName: string | null;
 };
 
+/**
+ * Something durable about the traveller, learned from what they said rather
+ * than set in preferences. Distinct from the conversation summary: a summary
+ * decays with the chat, a fact outlives the trip it was learned on.
+ */
+export const TRAVELLER_FACT_KINDS = [
+  "home_airport",
+  "cabin_preference",
+  "airline_affinity",
+  "routine_route",
+  "constraint",
+  "context"
+] as const;
+export type TravellerFactKind = (typeof TRAVELLER_FACT_KINDS)[number];
+
+export type TravellerFact = {
+  id: string;
+  kind: TravellerFactKind;
+  value: string;
+  /** Verbatim span from the traveller's own message that produced this fact. */
+  evidence: string;
+  sourceMessageId: string | null;
+  status: "active" | "dismissed";
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TravellerFactInput = {
+  kind: TravellerFactKind;
+  value: string;
+  evidence: string;
+  sourceMessageId: string | null;
+};
+
 export type ConversationContext = {
   conversationId: string;
   summary: string;
+  /** Null until a summary has ever been written. */
+  summaryUpdatedAt: string | null;
+  /** How far the summary consumed, so a turn can summarise only what is new. */
+  summaryThroughMessageId: string | null;
   activeTripId: string | null;
   recentMessages: Array<{ id: string; role: "user" | "assistant"; content: string; createdAt: string }>;
 };
@@ -268,6 +306,29 @@ export interface CaptainPlatformStore {
   recordWebSearchCalls(now: Date, count: number): Promise<void>;
   claimTelegramUpdate(updateKey: string, userId: string, now: Date): Promise<boolean>;
   getConversation(userId: string, limit?: number): Promise<ConversationContext>;
+  /**
+   * Replaces the rolling summary of everything older than the messages still
+   * carried in context. `throughMessageId` records how far it consumed.
+   */
+  setConversationSummary(
+    userId: string,
+    summary: string,
+    throughMessageId: string | null,
+    now: Date
+  ): Promise<void>;
+  /** Active facts only, for injection into agent context. */
+  listTravellerFacts(userId: string): Promise<TravellerFact[]>;
+  /**
+   * Upserts learned facts. A fact the traveller has dismissed is never
+   * revived: dismissing it is a correction, and re-learning it from the same
+   * words would make the correction impossible to make stick.
+   */
+  recordTravellerFacts(
+    userId: string,
+    facts: TravellerFactInput[],
+    now: Date
+  ): Promise<TravellerFact[]>;
+  dismissTravellerFact(userId: string, factId: string, now: Date): Promise<boolean>;
   appendMessage(userId: string, role: "user" | "assistant", content: string, now: Date): Promise<string>;
   /**
    * Marks a notification delivered and appends the exact Telegram text to the

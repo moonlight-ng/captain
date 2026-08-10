@@ -18,13 +18,15 @@ import {
   CAPTAIN_TRIP_COMMAND,
   CAPTAIN_TRIPS_COMMAND,
   CAPTAIN_VOICE_TURN_CONTEXT,
-  explainNotification,
-  explainRecommendation,
   promoteVoiceTranscriptToTelegramTurn,
   repliedToTelegramMessageId,
   returningTravellerWelcome,
   telegramCommandName
 } from "../agent/channels/telegram.js";
+import {
+  explainNotification,
+  explainRecommendation
+} from "../services/trips/explain.js";
 import {
   CAPTAIN_ONBOARDING_CAPABILITIES,
   CAPTAIN_ONBOARDING_COMMANDS,

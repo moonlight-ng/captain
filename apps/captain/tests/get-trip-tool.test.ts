@@ -103,6 +103,7 @@ function servicesFixture() {
       listTrips: vi.fn(async () => [trip]),
       getActiveTrip: vi.fn(async () => trip),
       getTrackedFlightPrices: vi.fn(async () => null),
+      getRecommendation: vi.fn(async () => null),
       ensureProfile: vi.fn(async () => ({ rankingMode: "balanced" as const })),
       getTripGraph: vi.fn(async () => ({
         cities: [

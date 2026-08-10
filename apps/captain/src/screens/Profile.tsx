@@ -1,7 +1,8 @@
 import type { TravellerProfile } from "../domain";
 import { AccountPreferences } from "./AccountPreferences";
+import { TravellerFacts } from "./TravellerFacts";
 
-/** Flight-search preferences for manual leg searches. */
+/** Flight-search preferences for manual leg searches, plus learned facts. */
 export function Profile({
   profile,
   displayName,
@@ -20,6 +21,7 @@ export function Profile({
         <span className="name">{displayName}</span>
       </header>
       <AccountPreferences profile={profile} onSaved={onSaved} />
+      <TravellerFacts />
     </main>
   );
 }
