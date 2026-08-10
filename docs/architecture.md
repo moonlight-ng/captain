@@ -121,15 +121,16 @@ Do not treat those tables as read-only while the Track action remains enabled.
 `captain.trip_events` is the trip-scoped **progress journal**: checkpoints that
 signal movement toward finding and watching the right flights (plan confirmed,
 initial overview, watching a flight, price movement, material plan change,
-pause/resume, tracking finished, trip closed). Non-checkpoint audit noise
-(`trip_created`, renames, manual refresh, freeform chat) is not shown in the
-traveller feed even if older rows exist.
+pause/resume, tracking finished, trip closed). The traveller feed shows
+lifecycle trip events only; spoken Telegram deliveries and non-checkpoint audit
+noise (`trip_created`, renames, manual refresh, freeform chat) are not shown
+even if older rows exist.
 
 **Event → optional Telegram → Feed.** Checkpoint writes enqueue a
 `notifications` row where applicable; delivery records a spoken
-`captain_update` (exact outbound text + `notification_id`) and the feed
-suppresses only the quieter lifecycle twin with the same `checkpointKey`.
-Immediate checkpoint acknowledgements wake the worker through the shared
+`captain_update` (exact outbound text + `notification_id`) for chat history.
+The traveller feed shows lifecycle trip events only — not the Telegram message
+bodies. Immediate checkpoint acknowledgements wake the worker through the shared
 PostgreSQL notification channel. Conversational tool turns keep ownership of
 their own Telegram reply and therefore skip the second outbox acknowledgement.
 `messages` remains the conversation
@@ -138,9 +139,9 @@ changes write `trip_plan_changed` (not every cosmetic patch). Ops kinds such as
 `inventory_gap` / `watch_attention` do not become feed checkpoints.
 
 The web Feed and Trip Settings Activity card both read `listTripActivity` and
-render through `feedPostsFromActivity`. Authorship defaults to Captain; only
-explicit traveller checkpoint mutations (plan change, pause/resume,
-cancel/complete, flight select/unselect) render as “You”.
+render through `feedPostsFromActivity` (lifecycle events only). Authorship
+defaults to Captain; only explicit traveller checkpoint mutations (plan change,
+pause/resume, cancel/complete, flight select/unselect) render as “You”.
 
 The conversational `get_trip` tool reads the same normalized leg graph and
 latest per-leg search snapshots as the web trip screen. Its compact

@@ -860,8 +860,29 @@ a.recommendation-card:active { transform: scale(.99); }
   font-size: var(--type-body);
   font-weight: var(--weight-medium);
 }
-.feed-checks .card-top {
+.feed-checks > summary.card-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 14px;
   align-items: center;
+  column-gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+.feed-checks > summary.card-top::-webkit-details-marker { display: none; }
+.feed-checks > summary.card-top::after {
+  box-sizing: border-box;
+  width: 7px;
+  height: 7px;
+  justify-self: end;
+  border-right: 1.5px solid rgba(255, 255, 255, .48);
+  border-bottom: 1.5px solid rgba(255, 255, 255, .48);
+  content: "";
+  transform: translateY(-1px) rotate(45deg);
+  transform-origin: 50% 50%;
+  transition: transform var(--duration-sheet-exit) var(--ease-out);
+}
+.feed-checks[open] > summary.card-top::after {
+  transform: translateY(1px) rotate(225deg);
 }
 .feed-checks .card-top h2 {
   margin: 0;

@@ -24,7 +24,7 @@ export const CHECKPOINT_NOTIFICATION_KINDS = [
 
 export type CheckpointNotificationKind = (typeof CHECKPOINT_NOTIFICATION_KINDS)[number];
 
-/** Lifecycle / spoken event types that belong in the traveller progress journal. */
+/** Lifecycle + spoken event types stored in the progress journal. Feed shows lifecycle only. */
 export const CHECKPOINT_EVENT_TYPES = [
   "trip_tracking_started",
   "trip_plan_changed",
