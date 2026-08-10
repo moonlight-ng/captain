@@ -49,6 +49,7 @@ import type {
   CaptainNotification,
   CaptainPlatformStore,
   CaptainUser,
+  ClaimedOnboardingFollowup,
   ClaimedSearchRun,
   CompletedProviderOffer,
   ConversationContext,
@@ -60,7 +61,13 @@ import type {
   TripActivity,
   TripRecommendation
 } from "./contracts.js";
-import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
+import {
+  BetaCapacityError,
+  BetaLaunchGateError,
+  ONBOARDING_FOLLOWUP_STAGES,
+  type OnboardingEngagementReason,
+  type OnboardingFollowupStage
+} from "./contracts.js";
 import { matchingMultiCityLegs, multiCityLegRevision } from "./multi-city-results.js";
 import { notificationGoalPayload, offerDateSummary, offerRangeSummary } from "./notification-payload.js";
 import {
@@ -228,6 +235,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       // price history—belongs to every traveller on the route, so it stays.
       await tx`delete from captain.trips where user_id = ${userId}`;
       await tx`delete from captain.trip_plan_drafts where user_id = ${userId}`;
+      await tx`delete from captain.onboarding_followups where user_id = ${userId}`;
       await tx`delete from captain.messages where user_id = ${userId}`;
       await tx`
         update captain.conversations set
@@ -407,17 +415,168 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
 
   async claimOnboardingWelcome(userId: string, now: Date): Promise<boolean> {
     await this.ensureProfile(userId, now);
-    const rows = await this.#sql<Array<{ user_id: string }>>`
-      update captain.traveller_profiles
-      set onboarding_step = 'complete',
-        onboarding_completed_at = ${now},
-        updated_at = ${now}
-      where user_id = ${userId}
-        and onboarding_step = 'welcome'
-        and onboarding_completed_at is null
-      returning user_id
+    return this.#sql.begin(async (tx) => {
+      const rows = await tx<Array<{ user_id: string }>>`
+        update captain.traveller_profiles
+        set onboarding_step = 'complete',
+          onboarding_completed_at = ${now},
+          updated_at = ${now}
+        where user_id = ${userId}
+          and onboarding_step = 'welcome'
+          and onboarding_completed_at is null
+        returning user_id
+      `;
+      if (rows.length !== 1) return false;
+      for (const [index, followup] of ONBOARDING_FOLLOWUP_STAGES.entries()) {
+        const baseDue = new Date(now.getTime() + followup.delayMs);
+        const availableAt = await userDeliveryTime(tx, userId, baseDue);
+        await tx`
+          insert into captain.onboarding_followups (
+            user_id, stage, position, sequence_started_at, available_at,
+            status, attempts, created_at, updated_at
+          ) values (
+            ${userId}, ${followup.stage}, ${index + 1}, ${now}, ${availableAt},
+            'pending', 0, ${now}, ${now}
+          )
+          on conflict (user_id, stage) do update set
+            position = excluded.position,
+            sequence_started_at = excluded.sequence_started_at,
+            available_at = excluded.available_at,
+            status = 'pending', attempts = 0, lease_expires_at = null,
+            telegram_message_id = null, delivered_at = null,
+            disabled_at = null, disabled_reason = null, error = null,
+            updated_at = excluded.updated_at
+        `;
+      }
+      return true;
+    });
+  }
+
+  async disableOnboardingFollowups(
+    userId: string,
+    reason: OnboardingEngagementReason,
+    now: Date
+  ): Promise<void> {
+    await this.#sql`
+      update captain.onboarding_followups set
+        status = 'cancelled', lease_expires_at = null,
+        disabled_at = ${now}, disabled_reason = ${reason},
+        error = null, updated_at = ${now}
+      where user_id = ${userId} and status in ('pending', 'sending')
     `;
-    return rows.length === 1;
+  }
+
+  async claimDueOnboardingFollowups(
+    now: Date,
+    leaseMs: number,
+    limit: number
+  ): Promise<ClaimedOnboardingFollowup[]> {
+    return this.#sql.begin(async (tx) => {
+      await tx`
+        update captain.onboarding_followups set
+          status = case when attempts >= 3 then 'failed' else 'pending' end,
+          lease_expires_at = null,
+          updated_at = ${now}
+        where status = 'sending' and lease_expires_at <= ${now}
+      `;
+      await cancelOnboardingFollowupsWithActivity(tx, null, now);
+      const rows = await tx<Array<OnboardingFollowupRow & { chat_id: string }>>`
+        with candidates as (
+          select followup.user_id, followup.stage
+          from captain.onboarding_followups followup
+          where followup.status = 'pending'
+            and followup.available_at <= ${now}
+            and not exists (
+              select 1
+              from captain.onboarding_followups earlier
+              where earlier.user_id = followup.user_id
+                and earlier.position < followup.position
+                and earlier.status in ('pending', 'sending')
+            )
+          order by followup.available_at asc, followup.position asc
+          limit ${Math.max(0, limit)}
+          for update of followup skip locked
+        ), claimed as (
+          update captain.onboarding_followups followup set
+            status = 'sending', attempts = followup.attempts + 1,
+            lease_expires_at = ${new Date(now.getTime() + leaseMs)},
+            updated_at = ${now}
+          from candidates
+          where followup.user_id = candidates.user_id
+            and followup.stage = candidates.stage
+          returning followup.*
+        )
+        select claimed.*, telegram.chat_id::text as chat_id
+        from claimed
+        join captain.telegram_accounts telegram on telegram.user_id = claimed.user_id
+      `;
+      return rows.map((row) => ({
+        userId: row.user_id,
+        telegramChatId: Number(row.chat_id),
+        stage: row.stage,
+        attempts: row.attempts,
+        availableAt: iso(row.available_at)
+      }));
+    });
+  }
+
+  async revalidateOnboardingFollowup(
+    userId: string,
+    stage: OnboardingFollowupStage,
+    now: Date
+  ): Promise<boolean> {
+    return this.#sql.begin(async (tx) => {
+      await cancelOnboardingFollowupsWithActivity(tx, userId, now);
+      const rows = await tx<Array<{ eligible: boolean }>>`
+        select exists(
+          select 1 from captain.onboarding_followups
+          where user_id = ${userId} and stage = ${stage} and status = 'sending'
+        ) as eligible
+      `;
+      return rows[0]?.eligible === true;
+    });
+  }
+
+  async markOnboardingFollowupSent(
+    userId: string,
+    stage: OnboardingFollowupStage,
+    telegramMessageId: number,
+    body: string,
+    now: Date
+  ): Promise<void> {
+    const trimmed = body.trim();
+    await this.#sql.begin(async (tx) => {
+      const rows = await tx<Array<{ user_id: string }>>`
+        update captain.onboarding_followups set
+          status = 'sent', lease_expires_at = null,
+          telegram_message_id = ${telegramMessageId}, delivered_at = ${now},
+          error = null, updated_at = ${now}
+        where user_id = ${userId} and stage = ${stage} and status = 'sending'
+        returning user_id
+      `;
+      if (!rows[0] || !trimmed) return;
+      await tx`
+        insert into captain.messages (id, conversation_id, user_id, role, content, created_at)
+        select ${randomUUID()}, conversation.id, ${userId}, 'assistant', ${trimmed}, ${now}
+        from captain.conversations conversation where conversation.user_id = ${userId}
+      `;
+    });
+  }
+
+  async markOnboardingFollowupFailed(
+    userId: string,
+    stage: OnboardingFollowupStage,
+    error: string,
+    now: Date
+  ): Promise<void> {
+    await this.#sql`
+      update captain.onboarding_followups set
+        status = case when attempts >= 3 then 'failed' else 'pending' end,
+        available_at = ${new Date(now.getTime() + 5 * 60_000)},
+        lease_expires_at = null,
+        error = ${truncateErrorDetail(error)}, updated_at = ${now}
+      where user_id = ${userId} and stage = ${stage} and status = 'sending'
+    `;
   }
 
   async reserveDailyResponseBudget(now: Date, amount: number, limit: number): Promise<boolean> {
@@ -2758,6 +2917,48 @@ async function expireTripPlanDrafts(sql: Sql, userId: string, now: Date): Promis
   `;
 }
 
+async function cancelOnboardingFollowupsWithActivity(
+  sql: Sql,
+  userId: string | null,
+  now: Date
+): Promise<void> {
+  await sql`
+    update captain.onboarding_followups followup set
+      status = 'cancelled', lease_expires_at = null,
+      disabled_at = ${now},
+      disabled_reason = case
+        when exists (
+          select 1 from captain.messages message
+          where message.user_id = followup.user_id
+            and message.role = 'user'
+            and message.created_at > followup.sequence_started_at
+        ) then 'telegram_message'
+        else 'trip_activity'
+      end,
+      error = null, updated_at = ${now}
+    where followup.status in ('pending', 'sending')
+      and (${userId}::uuid is null or followup.user_id = ${userId}::uuid)
+      and (
+        exists (
+          select 1 from captain.messages message
+          where message.user_id = followup.user_id
+            and message.role = 'user'
+            and message.created_at > followup.sequence_started_at
+        )
+        or exists (
+          select 1 from captain.trips trip
+          where trip.user_id = followup.user_id
+            and trip.created_at >= followup.sequence_started_at
+        )
+        or exists (
+          select 1 from captain.trip_plan_drafts draft
+          where draft.user_id = followup.user_id
+            and draft.created_at >= followup.sequence_started_at
+        )
+      )
+  `;
+}
+
 async function userDeliveryTime(sql: Sql, userId: string, now: Date): Promise<Date> {
   const rows = await sql<Array<{
     timezone: string;
@@ -2974,6 +3175,12 @@ type NotificationRow = {
   id: string; user_id: string; trip_id: string; kind: CaptainNotification["kind"];
   payload: Record<string, unknown>; attempts: number;
   telegram_message_id: string | number | null;
+};
+type OnboardingFollowupRow = {
+  user_id: string;
+  stage: OnboardingFollowupStage;
+  attempts: number;
+  available_at: Date;
 };
 type ProfileRow = {
   user_id: string;

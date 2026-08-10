@@ -45,6 +45,7 @@ import type {
   CaptainNotification,
   CaptainPlatformStore,
   CaptainUser,
+  ClaimedOnboardingFollowup,
   ClaimedSearchRun,
   CompletedProviderOffer,
   ConversationContext,
@@ -56,7 +57,13 @@ import type {
   TripActivity,
   TripRecommendation
 } from "./contracts.js";
-import { BetaCapacityError, BetaLaunchGateError } from "./contracts.js";
+import {
+  BetaCapacityError,
+  BetaLaunchGateError,
+  ONBOARDING_FOLLOWUP_STAGES,
+  type OnboardingEngagementReason,
+  type OnboardingFollowupStage
+} from "./contracts.js";
 import { matchingMultiCityLegs, multiCityLegRevision } from "./multi-city-results.js";
 import {
   notificationGoalPayload,
@@ -111,12 +118,28 @@ type StoredWebSession = {
   expiresAt: string;
   revokedAt: string | null;
 };
+type StoredOnboardingFollowup = {
+  userId: string;
+  stage: OnboardingFollowupStage;
+  position: number;
+  sequenceStartedAt: string;
+  availableAt: string;
+  status: "pending" | "sending" | "sent" | "cancelled" | "failed";
+  attempts: number;
+  leaseExpiresAt: string | null;
+  telegramMessageId: number | null;
+  deliveredAt: string | null;
+  disabledAt: string | null;
+  disabledReason: OnboardingEngagementReason | null;
+  error: string | null;
+};
 
 export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   readonly #usersByTelegram = new Map<number, CaptainUser>();
   readonly #profiles = new Map<string, TravellerProfile>();
   readonly #loginTokens = new Map<string, StoredLoginToken>();
   readonly #webSessions = new Map<string, StoredWebSession>();
+  readonly #onboardingFollowups = new Map<string, StoredOnboardingFollowup>();
   readonly #apiUsage = new Map<string, { responses: number; webSearchCalls: number }>();
   readonly #updates = new Map<string, string>();
   readonly #conversations = new Map<string, MemoryConversation>();
@@ -199,6 +222,9 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       if (user.id === userId) this.#usersByTelegram.delete(telegramId);
     }
     this.#profiles.delete(userId);
+    for (const [key, followup] of this.#onboardingFollowups) {
+      if (followup.userId === userId) this.#onboardingFollowups.delete(key);
+    }
     this.#conversations.delete(userId);
     for (const [updateKey, ownerId] of this.#updates) {
       if (ownerId === userId) this.#updates.delete(updateKey);
@@ -222,6 +248,9 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       updatedAt: now.toISOString()
     });
     this.#clearTrips(userId);
+    for (const [key, followup] of this.#onboardingFollowups) {
+      if (followup.userId === userId) this.#onboardingFollowups.delete(key);
+    }
     const conversation = this.#conversations.get(userId);
     if (conversation) {
       this.#conversations.set(userId, {
@@ -414,7 +443,159 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     profile.onboardingStep = "complete";
     profile.onboardingCompletedAt = now.toISOString();
     profile.updatedAt = now.toISOString();
+    const user = await this.getUser(userId);
+    if (!user) throw new Error("User not found");
+    for (const [index, followup] of ONBOARDING_FOLLOWUP_STAGES.entries()) {
+      const baseDue = new Date(now.getTime() + followup.delayMs);
+      const availableAt = deliveryTime(baseDue, user.timezone, profile);
+      this.#onboardingFollowups.set(onboardingFollowupKey(userId, followup.stage), {
+        userId,
+        stage: followup.stage,
+        position: index + 1,
+        sequenceStartedAt: now.toISOString(),
+        availableAt: availableAt.toISOString(),
+        status: "pending",
+        attempts: 0,
+        leaseExpiresAt: null,
+        telegramMessageId: null,
+        deliveredAt: null,
+        disabledAt: null,
+        disabledReason: null,
+        error: null
+      });
+    }
     return true;
+  }
+
+  async disableOnboardingFollowups(
+    userId: string,
+    reason: OnboardingEngagementReason,
+    now: Date
+  ): Promise<void> {
+    for (const [key, followup] of this.#onboardingFollowups) {
+      if (followup.userId !== userId || !["pending", "sending"].includes(followup.status)) continue;
+      this.#onboardingFollowups.set(key, {
+        ...followup,
+        status: "cancelled",
+        leaseExpiresAt: null,
+        disabledAt: now.toISOString(),
+        disabledReason: reason,
+        error: null
+      });
+    }
+  }
+
+  async claimDueOnboardingFollowups(
+    now: Date,
+    leaseMs: number,
+    limit: number
+  ): Promise<ClaimedOnboardingFollowup[]> {
+    const nowIso = now.toISOString();
+    for (const [key, followup] of this.#onboardingFollowups) {
+      if (
+        followup.status === "sending"
+        && followup.leaseExpiresAt !== null
+        && followup.leaseExpiresAt <= nowIso
+      ) {
+        this.#onboardingFollowups.set(key, {
+          ...followup,
+          status: followup.attempts >= 3 ? "failed" : "pending",
+          leaseExpiresAt: null
+        });
+      }
+    }
+    for (const userId of new Set([...this.#onboardingFollowups.values()].map((item) => item.userId))) {
+      const reason = this.#onboardingActivityReason(userId);
+      if (reason) {
+        await this.disableOnboardingFollowups(userId, reason, now);
+      }
+    }
+    const firstDueByUser = new Map<string, StoredOnboardingFollowup>();
+    for (const followup of [...this.#onboardingFollowups.values()]
+      .filter((item) =>
+        item.status === "pending"
+        && item.availableAt <= nowIso
+        && ![...this.#onboardingFollowups.values()].some((earlier) =>
+          earlier.userId === item.userId
+          && earlier.position < item.position
+          && ["pending", "sending"].includes(earlier.status)
+        )
+      )
+      .sort((left, right) => left.availableAt.localeCompare(right.availableAt) || left.position - right.position)) {
+      if (!firstDueByUser.has(followup.userId)) firstDueByUser.set(followup.userId, followup);
+    }
+    const claimed: ClaimedOnboardingFollowup[] = [];
+    for (const followup of [...firstDueByUser.values()].slice(0, Math.max(0, limit))) {
+      const next = {
+        ...followup,
+        status: "sending" as const,
+        attempts: followup.attempts + 1,
+        leaseExpiresAt: new Date(now.getTime() + leaseMs).toISOString()
+      };
+      this.#onboardingFollowups.set(onboardingFollowupKey(followup.userId, followup.stage), next);
+      const user = await this.getUser(followup.userId);
+      if (!user) continue;
+      claimed.push({
+        userId: followup.userId,
+        telegramChatId: user.telegramChatId,
+        stage: followup.stage,
+        attempts: next.attempts,
+        availableAt: followup.availableAt
+      });
+    }
+    return claimed;
+  }
+
+  async revalidateOnboardingFollowup(
+    userId: string,
+    stage: OnboardingFollowupStage,
+    now: Date
+  ): Promise<boolean> {
+    const reason = this.#onboardingActivityReason(userId);
+    if (reason) {
+      await this.disableOnboardingFollowups(userId, reason, now);
+      return false;
+    }
+    return this.#onboardingFollowups.get(onboardingFollowupKey(userId, stage))?.status === "sending";
+  }
+
+  async markOnboardingFollowupSent(
+    userId: string,
+    stage: OnboardingFollowupStage,
+    telegramMessageId: number,
+    body: string,
+    now: Date
+  ): Promise<void> {
+    const key = onboardingFollowupKey(userId, stage);
+    const followup = this.#onboardingFollowups.get(key);
+    if (!followup || followup.status !== "sending") return;
+    this.#onboardingFollowups.set(key, {
+      ...followup,
+      status: "sent",
+      leaseExpiresAt: null,
+      telegramMessageId,
+      deliveredAt: now.toISOString(),
+      error: null
+    });
+    await this.appendMessage(userId, "assistant", body, now);
+  }
+
+  async markOnboardingFollowupFailed(
+    userId: string,
+    stage: OnboardingFollowupStage,
+    error: string,
+    now: Date
+  ): Promise<void> {
+    const key = onboardingFollowupKey(userId, stage);
+    const followup = this.#onboardingFollowups.get(key);
+    if (!followup || followup.status !== "sending") return;
+    this.#onboardingFollowups.set(key, {
+      ...followup,
+      status: followup.attempts >= 3 ? "failed" : "pending",
+      availableAt: new Date(now.getTime() + 5 * 60_000).toISOString(),
+      leaseExpiresAt: null,
+      error: error.slice(0, 500)
+    });
   }
 
   async reserveDailyResponseBudget(now: Date, amount: number, limit: number): Promise<boolean> {
@@ -1835,6 +2016,23 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
 
   async close(): Promise<void> {}
 
+  #onboardingActivityReason(userId: string): OnboardingEngagementReason | null {
+    const startedAt = [...this.#onboardingFollowups.values()]
+      .find((followup) => followup.userId === userId)?.sequenceStartedAt;
+    if (!startedAt) return null;
+    const conversation = this.#conversations.get(userId);
+    if (conversation?.recentMessages.some((message) =>
+      message.role === "user" && message.createdAt > startedAt
+    )) return "telegram_message";
+    if ([...this.#trips.values()].some((trip) =>
+      trip.userId === userId && trip.createdAt >= startedAt
+    )) return "trip_activity";
+    if ([...this.#tripPlanDrafts.values()].some((draft) =>
+      draft.userId === userId && draft.createdAt >= startedAt
+    )) return "trip_activity";
+    return null;
+  }
+
   #expireDraft(draft: TripPlanDraft, now: Date): TripPlanDraft {
     if (
       draft.expiresAt <= now.toISOString()
@@ -2121,6 +2319,10 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     return true;
   }
 
+}
+
+function onboardingFollowupKey(userId: string, stage: OnboardingFollowupStage): string {
+  return `${userId}:${stage}`;
 }
 
 function checkpointCorrelationPayload(payload: Record<string, unknown>): Record<string, unknown> {
