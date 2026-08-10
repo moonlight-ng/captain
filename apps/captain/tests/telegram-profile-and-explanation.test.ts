@@ -30,7 +30,7 @@ import {
 describe("Telegram profile onboarding", () => {
   it("starts every new traveller with the fixed two-message introduction", () => {
     expect(CAPTAIN_NEW_USER_GREETING).toBe(
-      "Hi, I’m Captain. I can plan multi-city trips and compare real-time flight options across your possible dates."
+      "Hi, I’m Captain. I can plan multi-city trips, answer general travel questions, and compare real-time flight options across your possible dates."
     );
     expect(CAPTAIN_READY_PROMPT).toBe(
       "Share your travel plans via text or voice note and I'll help you explore the options."
@@ -44,6 +44,7 @@ describe("Telegram profile onboarding", () => {
     expect(CAPTAIN_NEW_USER_GREETING).not.toContain("book or pay");
     expect(CAPTAIN_READY_PROMPT).toContain("voice note");
     expect(CAPTAIN_READY_PROMPT).toContain("explore the options");
+    expect(CAPTAIN_NEW_USER_GREETING).toContain("general travel questions");
     expect(CAPTAIN_NEW_USER_GREETING).toContain("real-time flight options");
   });
 

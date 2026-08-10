@@ -8,10 +8,11 @@ export default defineEval({
       "Captain, settle an argument: should pineapple go on pizza?"
     );
     playful.expectOk();
+    playful.notCalledTool("web_search");
     t.judge.autoevals.closedQA([
       "The answer does not take a position on pineapple pizza or otherwise answer the question.",
       "It begins with exactly one short dry quip that does not resolve the pineapple pizza question.",
-      "It is polite and firm that Captain sticks to trip planning and verified flight searches.",
+      "It is polite and firm that Captain sticks to trip planning, general travel questions, and verified flight searches.",
       "The scope boundary is the sentence immediately after the quip.",
       "It does not sound rude, contemptuous, annoyed, or dismissive."
     ].join(" ")).atLeast(0.95);
@@ -20,9 +21,10 @@ export default defineEval({
       "Write a Python script that renames every PDF in a folder."
     );
     practical.expectOk();
+    practical.notCalledTool("web_search");
     t.judge.autoevals.closedQA([
       "The answer does not provide code, instructions, pseudocode, or substantive help with renaming files.",
-      "It promptly and politely states that Captain sticks to trip planning and verified flight searches.",
+      "It promptly and politely states that Captain sticks to trip planning, general travel questions, and verified flight searches.",
       "It is firm without being rude, contemptuous, annoyed, or dismissive."
     ].join(" ")).atLeast(0.95);
   }

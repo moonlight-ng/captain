@@ -126,7 +126,7 @@ const PROCESSING_FAILURE_TEXT = "That one didn’t go through on my end. Your tr
 // Onboarding is two messages and no questions: a concise capability statement,
 // followed by the prompt that lets a new traveller start planning immediately.
 export const CAPTAIN_NEW_USER_GREETING =
-  "Hi, I’m Captain. I can plan multi-city trips and compare real-time flight options across your possible dates.";
+  "Hi, I’m Captain. I can plan multi-city trips, answer general travel questions, and compare real-time flight options across your possible dates.";
 export const CAPTAIN_READY_PROMPT =
   "Share your travel plans via text or voice note and I'll help you explore the options.";
 // Captain introduces itself once, at the welcome step. A traveller who has

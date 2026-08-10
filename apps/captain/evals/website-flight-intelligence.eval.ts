@@ -18,6 +18,7 @@ export default defineEval({
       "Tokyo to Singapore — what’s the price range looking like?"
     );
     singapore.expectOk();
+    singapore.notCalledTool("web_search");
     t.check(singapore.message, includes("TYO → SIN"));
     t.check(singapore.message, includes(/7[- ]day|–| to /iu));
     (await t.send("Cancel")).expectOk();

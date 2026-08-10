@@ -57,6 +57,7 @@ jobs:
         run: |
           mkdir -p artifacts
           eval_ids=(
+            general-travel-search
             inspection-only
             relative-date-correction
             scope-discipline

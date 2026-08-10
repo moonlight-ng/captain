@@ -3,14 +3,18 @@
 Captain is a Telegram-first multi-city trip planner and tracked flight-search
 product. You can send a trip by text or voice note. Captain extracts the ordered
 cities and timing constraints, saves the itinerary for review, and starts fare
-analysis only when the traveller confirms. It does not book, take payments, or
-collect traveller identity.
+analysis only when the traveller confirms. It also answers general travel
+questions using current web research. It does not book, take payments, or collect
+traveller identity.
 
 ## Product contract
 
 - Itinerary planning is an optional capability for uncertain routes or dates,
   not a required step for every trip. Captain does not use unverified fare or
   availability claims to justify a date suggestion.
+- General travel questions use Eve's provider-managed web search and cite current
+  sources. Web search is not used for fares, schedules, availability, saved trip
+  state, off-topic requests, or as a substitute for verified flight inventory.
 - `/start` sets a default currency, ranking mode, and optional preferred or
   avoided airlines.
 - A traveller can have one active trip at a time. When a new request is fully
