@@ -9,7 +9,7 @@ import {
   type UpdateTripBrief,
   type UpdateTripTitle
 } from "@agents/flight-domain";
-import type { CaptainPlatformStore } from "@agents/flight-store";
+import type { ApplyTripActionOptions, CaptainPlatformStore } from "@agents/flight-store";
 
 export class TripService {
   readonly #store: CaptainPlatformStore;
@@ -34,11 +34,22 @@ export class TripService {
     return { ...created, searchCombinations: 0 };
   }
 
-  async action(userId: string, tripId: string, value: TripAction) {
+  async action(
+    userId: string,
+    tripId: string,
+    value: TripAction,
+    options: ApplyTripActionOptions = {}
+  ) {
     const action = tripActionSchema.parse(value);
     if (action.type === "track") {
       const trip = await this.#store.getTrip(userId, tripId);
-      if (!trip) return this.#store.applyTripAction(userId, tripId, action, this.#now());
+      if (!trip) return this.#store.applyTripAction(
+        userId,
+        tripId,
+        action,
+        this.#now(),
+        options
+      );
       if (["draft", "tracking", "recommended"].includes(trip.status)) {
         return (await this.#store.startTripTracking(
           userId,
@@ -49,7 +60,7 @@ export class TripService {
         )).trip;
       }
     }
-    return this.#store.applyTripAction(userId, tripId, action, this.#now());
+    return this.#store.applyTripAction(userId, tripId, action, this.#now(), options);
   }
 
   async update(userId: string, tripId: string, value: UpdateTripBrief) {

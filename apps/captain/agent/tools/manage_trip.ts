@@ -15,6 +15,9 @@ export default defineTool({
       ? await services.platformStore.getTrip(userId, tripId)
       : await services.platformStore.getActiveTrip(userId);
     if (!trip) throw new Error("No active trip");
-    return services.trips.action(userId, trip.id, action);
+    return services.trips.action(userId, trip.id, action, {
+      // The agent's final message is the Telegram acknowledgement for this turn.
+      notifyCheckpoint: false
+    });
   }
 });

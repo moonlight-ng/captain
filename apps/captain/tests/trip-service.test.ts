@@ -88,7 +88,7 @@ describe("Trip service", () => {
     await expect(store.getWatch(owner.id, created.trip.id)).resolves.toBeNull();
     await expect(store.listTripActivity(owner.id, created.trip.id)).resolves.toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ eventType: "trip_brief_updated" }),
+        expect.objectContaining({ eventType: "trip_plan_changed" }),
         expect.objectContaining({ eventType: "trip_created" })
       ])
     );
@@ -174,5 +174,56 @@ describe("Trip service", () => {
       title: "Nairobi",
       brief: defaultTestBrief({ destinationAirports: ["NBO"] })
     })).resolves.toMatchObject({ created: true });
+  });
+
+  it("lets a conversational channel own the action acknowledgement", async () => {
+    const now = new Date("2026-08-01T12:00:00Z");
+    const store = new MemoryCaptainPlatformStore();
+    const owner = await store.ensureTelegramUser({
+      telegramUserId: 3,
+      telegramChatId: 3,
+      username: null,
+      firstName: "Ada",
+      lastName: null
+    }, now);
+    const service = new TripService({ store, now: () => now });
+    const created = await service.create(owner.id, {
+      title: "LOS → LHR",
+      brief: defaultTestBrief()
+    });
+
+    await service.action(owner.id, created.trip.id, {
+      type: "cancel",
+      expectedVersion: created.trip.version
+    }, { notifyCheckpoint: false });
+
+    expect(await store.listPendingNotifications(now, 10)).toEqual([]);
+    expect(await store.listTripActivity(owner.id, created.trip.id)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ eventType: "trip_cancel" })])
+    );
+  });
+
+  it("keeps replacement as a quiet checkpoint beside the new-plan reply", async () => {
+    const now = new Date("2026-08-01T12:00:00Z");
+    const store = new MemoryCaptainPlatformStore();
+    const owner = await store.ensureTelegramUser({
+      telegramUserId: 4,
+      telegramChatId: 4,
+      username: null,
+      firstName: "Ada",
+      lastName: null
+    }, now);
+    const service = new TripService({ store, now: () => now });
+    const created = await service.create(owner.id, {
+      title: "LOS → LHR",
+      brief: defaultTestBrief()
+    });
+
+    await store.archiveTripForReplacement(owner.id, created.trip.id, now);
+
+    expect(await store.listPendingNotifications(now, 10)).toEqual([]);
+    expect(await store.listTripActivity(owner.id, created.trip.id)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ eventType: "trip_replaced" })])
+    );
   });
 });

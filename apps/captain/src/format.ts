@@ -144,9 +144,11 @@ export function activityLabel(eventType: string): string {
   const labels: Record<string, string> = {
     trip_created: "Trip created",
     trip_tracking_started: "Tracking started",
+    trip_plan_changed: "Trip plan changed",
     trip_brief_updated: "Trip brief updated",
     trip_title_updated: "Trip title updated",
     trip_leg_flight_selected: "Flight selected for watching",
+    trip_leg_flight_unselected: "Flight removed from watching",
     flight_selected: "Flight added to watch",
     flight_unselected: "Flight removed from watch",
     trip_pause: "Tracking paused",

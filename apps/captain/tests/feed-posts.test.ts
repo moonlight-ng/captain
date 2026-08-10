@@ -35,41 +35,84 @@ describe("feedPostsFromActivity", () => {
     ]);
 
     expect(posts.map((post) => [post.kind, post.id, post.body, post.author])).toEqual([
-      ["update", "n1", "Plan confirmed. Now checking flights…", "captain"],
-      ["event", "l2", "Created this trip.", "captain"]
+      ["update", "n1", "Plan confirmed. Now checking flights…", "captain"]
     ]);
   });
 
-  it("attributes only explicit traveller mutations to the traveller", () => {
-    expect(feedPostAuthor("trip_title_updated")).toBe("traveller");
-    expect(feedPostAuthor("trip_created")).toBe("captain");
-    expect(feedPostAuthor("trip_brief_updated")).toBe("captain");
+  it("hides non-checkpoint audit and chat mirrors", () => {
+    const posts = feedPostsFromActivity([
+      activity({ id: "c1", eventType: "trip_created" }),
+      activity({ id: "t1", eventType: "trip_title_updated", payload: { title: "Summer" } }),
+      activity({ id: "r1", eventType: "trip_refresh" }),
+      activity({
+        id: "m1",
+        eventType: "telegram_message",
+        body: "Itinerary ready to confirm.",
+        channel: "telegram"
+      }),
+      activity({
+        id: "ops",
+        eventType: "captain_update",
+        payload: { kind: "inventory_gap" },
+        body: "Inventory gap",
+        channel: "telegram"
+      }),
+      activity({ id: "w1", eventType: "trip_leg_flight_selected", payload: { legId: "leg-1" } })
+    ]);
+
+    expect(posts.map((post) => post.id)).toEqual(["w1"]);
+  });
+
+  it("suppresses only the lifecycle occurrence narrated by a delivered update", () => {
+    const posts = feedPostsFromActivity([
+      activity({
+        id: "new-plan",
+        eventType: "trip_plan_changed",
+        payload: { checkpointKey: "trip:plan_changed:3", tripVersion: 3 }
+      }),
+      activity({
+        id: "old-spoken",
+        eventType: "captain_update",
+        payload: { kind: "plan_changed", checkpointKey: "trip:plan_changed:2" },
+        body: "I’ve updated the plan.",
+        channel: "telegram"
+      }),
+      activity({
+        id: "old-plan",
+        eventType: "trip_plan_changed",
+        payload: { checkpointKey: "trip:plan_changed:2", tripVersion: 2 }
+      })
+    ]);
+
+    expect(posts.map((post) => post.id)).toEqual(["new-plan", "old-spoken"]);
+  });
+
+  it("attributes only traveller checkpoint mutations to the traveller", () => {
+    expect(feedPostAuthor("trip_plan_changed")).toBe("traveller");
+    expect(feedPostAuthor("trip_pause")).toBe("traveller");
     expect(feedPostAuthor("trip_tracking_started")).toBe("captain");
     expect(feedPostAuthor("tracking_completed")).toBe("captain");
     expect(feedPostsFromActivity([
-      activity({ id: "r1", eventType: "trip_title_updated", payload: { title: "Summer" } })
+      activity({ id: "r1", eventType: "trip_plan_changed", payload: { cabin: "economy" } })
     ])[0]).toMatchObject({
       author: "traveller",
-      body: "Renamed this trip.",
+      body: "Updated the trip plan.",
       kind: "event"
     });
   });
 
-  it("falls back to agent-voice lines for silent lifecycle events", () => {
-    expect(activityFeedLine("trip_refresh")).toBe("Ran a manual check.");
+  it("falls back to agent-voice lines for quiet checkpoints", () => {
     expect(activityFeedLine("trip_leg_flight_unselected")).toBe("Stopped watching a flight.");
     expect(feedPostsFromActivity([
-      activity({ id: "a1", eventType: "trip_refresh" }),
       activity({ id: "a2", eventType: "trip_leg_flight_unselected" })
     ])).toEqual([
-      expect.objectContaining({ body: "Ran a manual check.", author: "traveller" }),
       expect.objectContaining({ body: "Stopped watching a flight.", author: "traveller" })
     ]);
   });
 });
 
-describe("trip feed audit writes", () => {
-  it("records the exact Telegram text as a captain_update event", async () => {
+describe("trip checkpoint writes", () => {
+  it("records the exact Telegram text as a captain_update checkpoint", async () => {
     const now = new Date("2026-08-09T12:00:00Z");
     const store = new MemoryCaptainPlatformStore();
     const owner = await store.ensureTelegramUser({
@@ -107,9 +150,10 @@ describe("trip feed audit writes", () => {
         notificationId: notification!.id
       })
     ]));
+    expect(feedPostsFromActivity(feed).map((post) => post.body)).toContain(body);
   });
 
-  it("records trip-scoped assistant replies on the trip feed", async () => {
+  it("does not mirror freeform assistant chat onto the trip feed", async () => {
     const now = new Date("2026-08-09T12:00:00Z");
     const store = new MemoryCaptainPlatformStore();
     const owner = await store.ensureTelegramUser({
@@ -126,19 +170,95 @@ describe("trip feed audit writes", () => {
     });
     await store.setActiveTrip(owner.id, created.trip.id, now);
 
-    const messageId = await store.appendMessage(
+    await store.appendMessage(
       owner.id,
       "assistant",
-      "I am watching BA123 for you.",
+      "Itinerary ready to confirm.\n\nLOS → CDG",
       now
     );
 
     const feed = await store.listTripActivity(owner.id, created.trip.id);
-    expect(feed[0]).toMatchObject({
-      eventType: "telegram_message",
-      body: "I am watching BA123 for you.",
-      channel: "telegram",
-      sourceMessageId: messageId
+    expect(feed.some((item) => item.eventType === "telegram_message")).toBe(false);
+    expect(feedPostsFromActivity(feed).some((post) => post.body.includes("Itinerary ready"))).toBe(false);
+  });
+
+  it("emits plan_changed checkpoint + Telegram ack for material brief updates", async () => {
+    const now = new Date("2026-08-09T12:00:00Z");
+    const store = new MemoryCaptainPlatformStore();
+    const owner = await store.ensureTelegramUser({
+      telegramUserId: 44,
+      telegramChatId: 44,
+      username: null,
+      firstName: "Ada",
+      lastName: null
+    }, now);
+    const service = new TripService({ store, now: () => now });
+    const created = await service.create(owner.id, {
+      title: "LOS → LHR",
+      brief: defaultTestBrief()
     });
+    await service.update(owner.id, created.trip.id, {
+      expectedVersion: created.trip.version,
+      brief: defaultTestBrief({
+        destinationAirports: ["CDG"],
+        currency: "EUR",
+        maximumPrice: 850
+      })
+    });
+
+    const activity = await store.listTripActivity(owner.id, created.trip.id);
+    expect(activity).toEqual(expect.arrayContaining([
+      expect.objectContaining({ eventType: "trip_plan_changed" })
+    ]));
+    expect(activity.some((item) => item.eventType === "trip_brief_updated")).toBe(false);
+
+    const pending = await store.listPendingNotifications(now, 10);
+    expect(pending).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        tripId: created.trip.id,
+        kind: "plan_changed",
+        payload: expect.objectContaining({
+          tripRoute: "LHR → CDG and back",
+          checkpointKey: `${created.trip.id}:plan_changed:2`
+        })
+      })
+    ]));
+  });
+
+  it("enqueues pause ack notifications from the checkpoint", async () => {
+    const now = new Date("2026-08-09T12:00:00Z");
+    const store = new MemoryCaptainPlatformStore();
+    const owner = await store.ensureTelegramUser({
+      telegramUserId: 45,
+      telegramChatId: 45,
+      username: null,
+      firstName: "Ada",
+      lastName: null
+    }, now);
+    const service = new TripService({ store, now: () => now });
+    const created = await service.create(owner.id, {
+      title: "LOS → LHR",
+      brief: defaultTestBrief()
+    });
+    const tracked = await service.action(owner.id, created.trip.id, {
+      type: "track",
+      expectedVersion: created.trip.version
+    });
+    await store.listPendingNotifications(now, 10);
+    await service.action(owner.id, created.trip.id, {
+      type: "pause",
+      expectedVersion: tracked.version
+    });
+
+    const pending = await store.listPendingNotifications(now, 10);
+    expect(pending).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        tripId: created.trip.id,
+        kind: "tracking_paused",
+        payload: expect.objectContaining({
+          checkpointKey: `${created.trip.id}:trip_pause:3`
+        })
+      })
+    ]));
   });
 });

@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./admin": "./src/admin.ts"
+    "./admin": "./src/admin.ts",
+    "./trip-checkpoints": "./src/trip-checkpoints.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

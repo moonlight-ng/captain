@@ -146,7 +146,11 @@ export type CaptainNotification = {
     | "inventory_gap"
     | "price_rise"
     | "tracking_activation"
-    | "tracking_summary";
+    | "tracking_summary"
+    | "plan_changed"
+    | "tracking_paused"
+    | "tracking_resumed"
+    | "trip_closed";
   payload: Record<string, unknown>;
   attempts: number;
   telegramMessageId: number | null;
@@ -160,6 +164,11 @@ export type TrackingMaintenance = {
 export type MultiCityLegSearchRecording = {
   matched: number;
   notified: number;
+};
+
+export type ApplyTripActionOptions = {
+  /** The Telegram channel already owns the acknowledgement for agent tool calls. */
+  notifyCheckpoint?: boolean;
 };
 
 export type LoginTokenRecord = {
@@ -267,7 +276,13 @@ export interface CaptainPlatformStore {
   updateTripBrief(userId: string, tripId: string, input: UpdateTripBrief, specs: SearchSpec[], now: Date): Promise<Trip>;
   updateTripTitle(userId: string, tripId: string, input: UpdateTripTitle, now: Date): Promise<Trip>;
   archiveTripForReplacement(userId: string, tripId: string, now: Date): Promise<Trip>;
-  applyTripAction(userId: string, tripId: string, action: TripAction, now: Date): Promise<Trip>;
+  applyTripAction(
+    userId: string,
+    tripId: string,
+    action: TripAction,
+    now: Date,
+    options?: ApplyTripActionOptions
+  ): Promise<Trip>;
   listTripActivity(userId: string, tripId: string): Promise<TripActivity[]>;
   listTripOffers(userId: string, tripId: string, now: Date): Promise<OfferSnapshot[]>;
   listTripFlightSelections(userId: string, tripId: string): Promise<TripFlightSelection[]>;

@@ -180,6 +180,33 @@ describe("flight worker orchestration", () => {
     })).toBe("Plan confirmed. Now checking flights…");
   });
 
+  it("acks checkpoint pause and plan-change notifications", () => {
+    expect(notificationText({
+      id: "paused",
+      userId: "user",
+      tripId: "trip",
+      telegramChatId: 1,
+      kind: "tracking_paused",
+      attempts: 0,
+      telegramMessageId: null,
+      payload: { tripTitle: "Lagos to London" }
+    })).toContain("Paused tracking");
+    expect(notificationText({
+      id: "plan",
+      userId: "user",
+      tripId: "trip",
+      telegramChatId: 1,
+      kind: "plan_changed",
+      attempts: 0,
+      telegramMessageId: null,
+      payload: {
+        tripTitle: "Lagos to London",
+        tripRoute: "LOS → CDG",
+        eventType: "trip_plan_changed"
+      }
+    })).toBe("I’ve updated the plan for LOS → CDG.\nOpen the trip to review the changes.");
+  });
+
   it("opens a trip with a concise, goal-oriented overview", () => {
     expect(notificationText({
       id: "first",

@@ -2,8 +2,12 @@ import { randomUUID } from "node:crypto";
 
 import {
   DEFAULT_PROFILE,
+  checkpointNotificationKindForAction,
   cityLabelForAirportCodes,
   formatTripGoal,
+  formatTripRoute,
+  isCheckpointNotificationKind,
+  isMaterialTripPlanChange,
   legSearchSnapshotSchema,
   MAX_MANUAL_SEARCH_DAYS,
   MAX_ACTIVE_TRIPS_PER_USER,
@@ -12,6 +16,7 @@ import {
   TripVersionConflictError,
   EMPTY_TRIP_DRAFT_STATE,
   type CanonicalFlight,
+  type CheckpointNotificationKind,
   type CreateTripInput,
   type FlightOfferSnapshot,
   type LegSearchSnapshot,
@@ -36,6 +41,7 @@ import {
 } from "@agents/flight-domain";
 
 import type {
+  ApplyTripActionOptions,
   CaptainNotification,
   CaptainPlatformStore,
   CaptainUser,
@@ -449,16 +455,8 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     const id = randomUUID();
     const trimmed = content.trim();
     conversation.recentMessages.push({ id, role, content: trimmed, createdAt: now.toISOString() });
-    if (role === "assistant" && conversation.activeTripId) {
-      const trip = this.#trips.get(conversation.activeTripId);
-      if (trip?.userId === userId && trimmed) {
-        this.#recordTripActivity(trip.id, "telegram_message", {}, now, {
-          body: trimmed,
-          channel: "telegram",
-          sourceMessageId: id
-        });
-      }
-    }
+    void now;
+    // Chat stays in messages — freeform assistant replies are not trip checkpoints.
     return id;
   }
 
@@ -790,10 +788,12 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     this.#trips.set(tripId, updated);
     this.#watches.set(watch.id, watch);
     this.#setSpecs(watch.id, specs);
+    const checkpointKey = `${tripId}:tracking_started:${updated.version}`;
     this.#recordTripActivity(tripId, "trip_tracking_started", {
-      tripVersion: updated.version
+      tripVersion: updated.version,
+      checkpointKey
     }, now);
-    this.#enqueueTrackingStartedNotification(updated, now);
+    this.#enqueueTrackingStartedNotification(updated, checkpointKey, now);
     return clone({ trip: updated, watch });
   }
 
@@ -806,6 +806,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
   ): Promise<Trip> {
     const trip = this.#requiredTrip(userId, tripId);
     if (trip.version !== input.expectedVersion) throw new TripVersionConflictError(trip.version);
+    const material = isMaterialTripPlanChange(trip.brief, input.brief);
     const updated: Trip = {
       ...trip,
       brief: clone(input.brief),
@@ -831,7 +832,21 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       });
     }
     void specs;
-    this.#recordTripActivity(tripId, "trip_brief_updated", clone(input.brief), now);
+    if (material) {
+      const checkpointKey = `${tripId}:plan_changed:${updated.version}`;
+      this.#recordTripActivity(tripId, "trip_plan_changed", {
+        ...clone(input.brief),
+        tripVersion: updated.version,
+        checkpointKey
+      }, now);
+      this.#enqueueCheckpointAck(updated, checkpointNotificationKindForAction("plan_changed"), {
+        eventType: "trip_plan_changed",
+        tripTitle: updated.title,
+        tripRoute: formatTripRoute(updated.brief),
+        tripVersion: updated.version,
+        checkpointKey
+      }, now, checkpointKey);
+    }
     return clone(updated);
   }
 
@@ -1004,7 +1019,13 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     }
   }
 
-  async applyTripAction(userId: string, tripId: string, action: TripAction, now: Date): Promise<Trip> {
+  async applyTripAction(
+    userId: string,
+    tripId: string,
+    action: TripAction,
+    now: Date,
+    options: ApplyTripActionOptions = {}
+  ): Promise<Trip> {
     const trip = this.#requiredTrip(userId, tripId);
     if (trip.version !== action.expectedVersion) throw new TripVersionConflictError(trip.version);
     const watch = [...this.#watches.values()].find((item) => item.tripId === tripId);
@@ -1047,7 +1068,38 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         updatedAt: now.toISOString()
       });
     }
-    this.#recordTripActivity(tripId, `trip_${action.type}`, clone(action), now);
+    const checkpointKey = action.type === "cancel" || action.type === "complete"
+      ? `${tripId}:trip_closed:${updated.version}`
+      : `${tripId}:trip_${action.type}:${updated.version}`;
+    this.#recordTripActivity(tripId, `trip_${action.type}`, {
+      ...clone(action),
+      tripVersion: updated.version,
+      checkpointKey
+    }, now);
+    if (
+      options.notifyCheckpoint !== false
+      && (action.type === "pause" || action.type === "resume")
+    ) {
+      this.#enqueueCheckpointAck(updated, checkpointNotificationKindForAction(action.type), {
+        eventType: `trip_${action.type}`,
+        tripTitle: updated.title,
+        tripRoute: formatTripRoute(updated.brief),
+        tripVersion: updated.version,
+        checkpointKey
+      }, now, checkpointKey);
+    } else if (
+      options.notifyCheckpoint !== false
+      && (action.type === "cancel" || action.type === "complete")
+    ) {
+      this.#enqueueCheckpointAck(updated, checkpointNotificationKindForAction(action.type), {
+        eventType: `trip_${action.type}`,
+        tripTitle: updated.title,
+        tripRoute: formatTripRoute(updated.brief),
+        tripVersion: updated.version,
+        reason: action.type,
+        checkpointKey
+      }, now, checkpointKey);
+    }
     return clone(updated);
   }
 
@@ -1194,6 +1246,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       );
       if (runEnded && !hasPendingCheck) {
         const timestamp = now.toISOString();
+        const checkpointKey = `${trip.id}:tracking_summary:${watch.runStartedAt}`;
         this.#watches.set(watchId, {
           ...watch,
           status: "completed",
@@ -1210,17 +1263,20 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         const recommendation = this.#recommendations.get(trip.id);
         this.#recordTripActivity(trip.id, "tracking_completed", {
           checksCompleted: watch.checksCompleted,
-          recommendationSummary: recommendation?.summary ?? null
+          recommendationSummary: recommendation?.summary ?? null,
+          checkpointKey
         }, now);
         if (profile.notificationMode !== "off") {
           this.#enqueueSimpleNotification(
             trip,
             "tracking_summary",
-            `${trip.id}:tracking_summary:${watch.runStartedAt}`,
+            checkpointKey,
             {
               tripTitle: trip.title,
+              tripRoute: formatTripRoute(trip.brief),
               checksCompleted: watch.checksCompleted,
-              summary: recommendation?.summary ?? "The latest verified options are ready to review."
+              summary: recommendation?.summary ?? "The latest verified options are ready to review.",
+              checkpointKey
             },
             now
           );
@@ -1740,9 +1796,10 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       telegramMessageId
     });
     const trimmed = body.trim();
-    if (trimmed) {
+    if (trimmed && isCheckpointNotificationKind(notification.kind)) {
       this.#recordTripActivity(notification.tripId, "captain_update", {
-        kind: notification.kind
+        kind: notification.kind,
+        ...checkpointCorrelationPayload(notification.payload)
       }, now, {
         body: trimmed,
         channel: "telegram",
@@ -1860,10 +1917,29 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     this.#tripActivity.set(tripId, activity.slice(0, 50));
   }
 
-  #enqueueTrackingStartedNotification(trip: Trip, now: Date): boolean {
+  #enqueueTrackingStartedNotification(
+    trip: Trip,
+    checkpointKey: string,
+    now: Date
+  ): boolean {
+    return this.#enqueueCheckpointAck(trip, "tracking_started", {
+      eventType: "trip_tracking_started",
+      tripTitle: trip.title,
+      tripVersion: trip.version,
+      checkpointKey
+    }, now, checkpointKey);
+  }
+
+  /** Immediate Telegram ack for a progress checkpoint (event → outbox). */
+  #enqueueCheckpointAck(
+    trip: Trip,
+    kind: CheckpointNotificationKind,
+    payload: Record<string, unknown>,
+    now: Date,
+    dedupKey = `${trip.id}:${kind}:${trip.version}`
+  ): boolean {
     const user = [...this.#usersByTelegram.values()].find((item) => item.id === trip.userId);
     if (!user) return false;
-    const dedupKey = `${trip.id}:tracking_started:${trip.version}`;
     if ([...this.#notifications.values()].some((item) => item.dedupKey === dedupKey)) return false;
     const id = randomUUID();
     this.#notifications.set(id, {
@@ -1871,11 +1947,11 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       userId: trip.userId,
       tripId: trip.id,
       telegramChatId: user.telegramChatId,
-      kind: "tracking_started",
+      kind,
       payload: {
-        eventType: "trip_tracking_started",
         tripTitle: trip.title,
-        tripVersion: trip.version
+        tripRoute: formatTripRoute(trip.brief),
+        ...payload
       },
       attempts: 0,
       telegramMessageId: null,
@@ -2045,6 +2121,17 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     return true;
   }
 
+}
+
+function checkpointCorrelationPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...(typeof payload.checkpointKey === "string"
+      ? { checkpointKey: payload.checkpointKey }
+      : {}),
+    ...(typeof payload.tripVersion === "number"
+      ? { tripVersion: payload.tripVersion }
+      : {})
+  };
 }
 
 function displayName(input: TelegramUserInput): string {

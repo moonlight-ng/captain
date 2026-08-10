@@ -33,6 +33,12 @@ fly secrets set -a dr-flight-worker \
 
 ## Safe sequence
 
+For changes that add notification kinds or payload contracts shared by Captain
+and the flight worker, deploy the worker consumer first. Verify its `/ready`
+endpoint before deploying the Captain producer or its database migration. The
+two GitHub deployment workflows are independent, so do not rely on their
+completion order for a cross-service contract change.
+
 1. Keep `CAPTAIN_PUBLIC_BETA_ENABLED=false` and
    `TRACKING_KILL_SWITCH=true`.
 2. Run `pnpm check`.

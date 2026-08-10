@@ -336,11 +336,11 @@ Stages: `stopped` | `paused` | `stale` | `searching` | `tracking`. `stageLabel()
 #### Captain feed posts
 - **Classes / components:** `.feed-posts`, `.feed-post` (+ `.is-update`), `.feed-post-dot`, `.feed-post-body`, `.feed-post-header`, `CaptainFeedPosts`, `feedPostsFromActivity`, `withFeedUpdateAction`
 - **Status:** `live`
-- **Job:** Profile-style stream. **Updates** are first-person `captain_update` / Telegram message events — the exact text delivered to the traveller. **Events** are quieter lifecycle rows. Author defaults to **Captain**; only explicit traveller mutations (rename, pause/resume/refresh/cancel/complete, select/unselect flight) show **You**. Optional quiet action on the newest update.
-- **Inputs:** `TripActivity[]` via `GET /api/me/trip`; spoken `body` required for update posts; lifecycle twins shadowed by delivered notifications are filtered out.
+- **Job:** Progress journal. **Updates** are spoken checkpoint deliveries (`captain_update`) — the same short text Telegram sent. **Events** are quieter checkpoints that skipped notify (e.g. in-UI flight select). Author defaults to **Captain**; traveller checkpoint mutations (plan change, pause/resume, cancel/complete, select/unselect flight) show **You**. Optional quiet action on the newest update.
+- **Inputs:** Checkpoint-filtered `TripActivity[]` via `GET /api/me/trip`; spoken `body` required for update posts; lifecycle twins shadowed by delivered notifications are filtered out; chat mirrors and non-checkpoint audit rows are hidden.
 - **Compose with:** Watching cards, Agent schedule on Feed.
 - **Do not use when:** Settings / watchlist need a compact disclosure — use `.activity-list` with `feedPostsFromActivity` (same stream).
-- **Do not use when:** Inventing dashboard briefing copy — that is not a feed post; only delivered Captain updates.
+- **Do not use when:** Inventing dashboard briefing copy — that is not a feed post; only delivered Captain checkpoint updates.
 
 #### Flight details heading
 - **Classes:** `.flight-details-heading`, `.stop-count`

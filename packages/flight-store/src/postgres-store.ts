@@ -2,8 +2,12 @@ import { randomUUID } from "node:crypto";
 
 import {
   DEFAULT_PROFILE,
+  checkpointNotificationKindForAction,
   cityLabelForAirportCodes,
   formatTripGoal,
+  formatTripRoute,
+  isCheckpointNotificationKind,
+  isMaterialTripPlanChange,
   legSearchSnapshotSchema,
   MAX_MANUAL_SEARCH_DAYS,
   MAX_ACTIVE_TRIPS_PER_USER,
@@ -41,6 +45,7 @@ import {
 import postgres, { type Sql } from "postgres";
 
 import type {
+  ApplyTripActionOptions,
   CaptainNotification,
   CaptainPlatformStore,
   CaptainUser,
@@ -485,31 +490,14 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
   async appendMessage(userId: string, role: "user" | "assistant", content: string, now: Date): Promise<string> {
     const id = randomUUID();
     const trimmed = content.trim();
-    const rows = await this.#sql<Array<{ id: string; active_trip_id: string | null }>>`
-      with inserted as (
-        insert into captain.messages (id, conversation_id, user_id, role, content, created_at)
-        select ${id}, conversation.id, ${userId}, ${role}, ${trimmed}, ${now}
-        from captain.conversations conversation where conversation.user_id = ${userId}
-        returning id, conversation_id
-      )
-      select inserted.id, conversation.active_trip_id
-      from inserted
-      join captain.conversations conversation on conversation.id = inserted.conversation_id
+    const rows = await this.#sql<Array<{ id: string }>>`
+      insert into captain.messages (id, conversation_id, user_id, role, content, created_at)
+      select ${id}, conversation.id, ${userId}, ${role}, ${trimmed}, ${now}
+      from captain.conversations conversation where conversation.user_id = ${userId}
+      returning id
     `;
     if (!rows[0]) throw new Error("Conversation not found");
-    const activeTripId = rows[0].active_trip_id;
-    if (role === "assistant" && activeTripId && trimmed) {
-      await this.#sql`
-        insert into captain.trip_events (
-          id, trip_id, user_id, event_type, payload, body, channel, source_message_id, created_at
-        )
-        select
-          ${randomUUID()}, trip.id, trip.user_id, 'telegram_message', '{}'::jsonb,
-          ${trimmed}, 'telegram', ${id}, ${now}
-        from captain.trips trip
-        where trip.id = ${activeTripId} and trip.user_id = ${userId}
-      `;
-    }
+    // Chat stays in messages — freeform assistant replies are not trip checkpoints.
     return id;
   }
 
@@ -895,22 +883,27 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         where id = ${tripId}
         returning *
       `;
+      const checkpointKey = `${tripId}:tracking_started:${updated[0]!.version}`;
       await tx`
         insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
         values (
           ${randomUUID()}, ${tripId}, ${userId}, 'trip_tracking_started',
-          ${tx.json(json({ tripVersion: updated[0]!.version }))}, ${now}
+          ${tx.json(json({
+            tripVersion: updated[0]!.version,
+            checkpointKey
+          }))}, ${now}
         )
       `;
       await enqueueNotification(tx, {
         userId,
         tripId,
         kind: "tracking_started",
-        dedupKey: `${tripId}:tracking_started:${updated[0]!.version}`,
+        dedupKey: checkpointKey,
         payload: {
           eventType: "trip_tracking_started",
           tripTitle: updated[0]!.title,
-          tripVersion: updated[0]!.version
+          tripVersion: updated[0]!.version,
+          checkpointKey
         },
         immediate: true,
         now
@@ -939,6 +932,8 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       if (current.version !== input.expectedVersion) {
         throw new TripVersionConflictError(current.version);
       }
+      const previousBrief = current.brief as TripBrief;
+      const material = isMaterialTripPlanChange(previousBrief, input.brief);
       const updated = await tx<TripRow[]>`
         update captain.trips set
           brief = ${tx.json(json(input.brief))},
@@ -960,15 +955,38 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       await tx`delete from captain.trip_cities where trip_id = ${tripId}`;
       await insertTripGraph(tx, materializeTripGraph(tripId, input.brief), now);
       await tx`delete from captain.trip_recommendations where trip_id = ${tripId}`;
-      await tx`
-        insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
-        values (
-          ${randomUUID()}, ${tripId}, ${userId}, 'trip_brief_updated',
-          ${tx.json(json(input.brief))}, ${now}
-        )
-      `;
+      const trip = toTrip(updated[0]!);
+      if (material) {
+        const checkpointKey = `${tripId}:plan_changed:${trip.version}`;
+        await tx`
+          insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
+          values (
+            ${randomUUID()}, ${tripId}, ${userId}, 'trip_plan_changed',
+            ${tx.json(json({
+              ...input.brief,
+              tripVersion: trip.version,
+              checkpointKey
+            }))}, ${now}
+          )
+        `;
+        await enqueueNotification(tx, {
+          userId,
+          tripId,
+          kind: checkpointNotificationKindForAction("plan_changed"),
+          dedupKey: checkpointKey,
+          payload: {
+            eventType: "trip_plan_changed",
+            tripTitle: trip.title,
+            tripRoute: formatTripRoute(trip.brief),
+            tripVersion: trip.version,
+            checkpointKey
+          },
+          immediate: true,
+          now
+        });
+      }
       void specs;
-      return toTrip(updated[0]!);
+      return trip;
     });
   }
 
@@ -1193,7 +1211,13 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     return confirmed;
   }
 
-  async applyTripAction(userId: string, tripId: string, action: TripAction, now: Date): Promise<Trip> {
+  async applyTripAction(
+    userId: string,
+    tripId: string,
+    action: TripAction,
+    now: Date,
+    options: ApplyTripActionOptions = {}
+  ): Promise<Trip> {
     return this.#sql.begin(async (tx) => {
       const rows = await tx<TripRow[]>`select * from captain.trips where id = ${tripId} and user_id = ${userId} for update`;
       const current = rows[0];
@@ -1240,14 +1264,61 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           updated_at = ${now}
         where trip_id = ${tripId}
       `;
+      const trip = toTrip(updated[0]!);
+      const checkpointKey = action.type === "cancel" || action.type === "complete"
+        ? `${tripId}:trip_closed:${trip.version}`
+        : `${tripId}:trip_${action.type}:${trip.version}`;
       await tx`
         insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
-        values (${randomUUID()}, ${tripId}, ${userId}, ${`trip_${action.type}`}, ${tx.json(json(action))}, ${now})
+        values (
+          ${randomUUID()}, ${tripId}, ${userId}, ${`trip_${action.type}`},
+          ${tx.json(json({ ...action, tripVersion: trip.version, checkpointKey }))}, ${now}
+        )
       `;
+      if (
+        options.notifyCheckpoint !== false
+        && (action.type === "pause" || action.type === "resume")
+      ) {
+        await enqueueNotification(tx, {
+          userId,
+          tripId,
+          kind: checkpointNotificationKindForAction(action.type),
+          dedupKey: checkpointKey,
+          payload: {
+            eventType: `trip_${action.type}`,
+            tripTitle: trip.title,
+            tripRoute: formatTripRoute(trip.brief),
+            tripVersion: trip.version,
+            checkpointKey
+          },
+          immediate: true,
+          now
+        });
+      } else if (
+        options.notifyCheckpoint !== false
+        && (action.type === "cancel" || action.type === "complete")
+      ) {
+        await enqueueNotification(tx, {
+          userId,
+          tripId,
+          kind: checkpointNotificationKindForAction(action.type),
+          dedupKey: checkpointKey,
+          payload: {
+            eventType: `trip_${action.type}`,
+            tripTitle: trip.title,
+            tripRoute: formatTripRoute(trip.brief),
+            tripVersion: trip.version,
+            reason: action.type,
+            checkpointKey
+          },
+          immediate: true,
+          now
+        });
+      }
       if (["resume", "refresh", "track"].includes(action.type)) {
         await signalFlightWorker(tx);
       }
-      return toTrip(updated[0]!);
+      return trip;
     });
   }
 
@@ -1541,6 +1612,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     let completed = 0;
     for (const row of rows) {
       if (row.watch_status === "active" && row.run_ends_at.getTime() <= now.getTime()) {
+        const checkpointKey = `${row.trip_id}:tracking_summary:${row.run_started_at.toISOString()}`;
         const didComplete = await this.#sql.begin(async (tx) => {
           const watches = await tx<Array<{ id: string }>>`
             update captain.watches set
@@ -1574,7 +1646,8 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
               ${randomUUID()}, ${row.trip_id}, ${row.user_id}, 'tracking_completed',
               ${tx.json(json({
                 checksCompleted: row.checks_completed,
-                recommendationSummary: row.recommendation_summary
+                recommendationSummary: row.recommendation_summary,
+                checkpointKey
               }))}, ${now}
             )
           `;
@@ -1586,12 +1659,14 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
             userId: row.user_id,
             tripId: row.trip_id,
             kind: "tracking_summary",
-            dedupKey: `${row.trip_id}:tracking_summary:${row.run_started_at.toISOString()}`,
+            dedupKey: checkpointKey,
             payload: {
               tripTitle: row.title,
+              tripRoute: formatTripRoute(row.brief),
               tripGoal: formatTripGoal({ brief: row.brief, rankingMode: row.ranking_mode }),
               checksCompleted: row.checks_completed,
-              summary: row.recommendation_summary ?? "The latest verified options are ready to review."
+              summary: row.recommendation_summary ?? "The latest verified options are ready to review.",
+              checkpointKey
             },
             now
           });
@@ -2309,20 +2384,28 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
   ): Promise<void> {
     const trimmed = body.trim();
     await this.#sql.begin(async (tx) => {
-      const rows = await tx<Array<{ trip_id: string; user_id: string; kind: string }>>`
+      const rows = await tx<Array<{
+        trip_id: string;
+        user_id: string;
+        kind: string;
+        payload: Record<string, unknown>;
+      }>>`
         update captain.notifications set status = 'sent', delivered_at = ${now},
           telegram_message_id = ${telegramMessageId}, error = null, updated_at = ${now}
         where id = ${notificationId} and status = 'sending'
-        returning trip_id, user_id, kind
+        returning trip_id, user_id, kind, payload
       `;
       const row = rows[0];
-      if (!row || !trimmed) return;
+      if (!row || !trimmed || !isCheckpointNotificationKind(row.kind)) return;
       await tx`
         insert into captain.trip_events (
           id, trip_id, user_id, event_type, payload, body, channel, notification_id, created_at
         ) values (
           ${randomUUID()}, ${row.trip_id}, ${row.user_id}, 'captain_update',
-          ${tx.json({ kind: row.kind })}, ${trimmed}, 'telegram', ${notificationId}, ${now}
+          ${tx.json({
+            kind: row.kind,
+            ...checkpointCorrelationPayload(row.payload)
+          })}, ${trimmed}, 'telegram', ${notificationId}, ${now}
         )
       `;
     });
@@ -2748,7 +2831,19 @@ async function enqueueNotification(
     on conflict (dedup_key) do nothing
     returning id
   `;
+  if (rows.length === 1 && input.immediate) await signalFlightWorker(sql);
   return rows.length === 1;
+}
+
+function checkpointCorrelationPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...(typeof payload.checkpointKey === "string"
+      ? { checkpointKey: payload.checkpointKey }
+      : {}),
+    ...(typeof payload.tripVersion === "number"
+      ? { tripVersion: payload.tripVersion }
+      : {})
+  };
 }
 
 function localParts(now: Date, timezone: string): { date: string; hour: number } {

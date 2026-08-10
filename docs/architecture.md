@@ -116,19 +116,31 @@ The normalized durable model is:
 worker, older payload fields, and historical price views still consume them.
 Do not treat those tables as read-only while the Track action remains enabled.
 
-## Trip feed audit (`trip_events`)
+## Trip progress journal (`trip_events`)
 
-`captain.trip_events` is the trip-scoped agent feed and audit log. Lifecycle
-writes (create, track, pause, refresh, …), successful Telegram notification
-deliveries as `captain_update` (exact outbound text + `notification_id`), and
-trip-scoped assistant chat replies (`telegram_message` + `source_message_id`)
-all append here. `notifications` remains the delivery outbox; `messages`
-remains the conversation transcript. The web Feed and Trip Settings Activity
-card both read `listTripActivity` and render through `feedPostsFromActivity`,
-which treats spoken deliveries as first-person update posts and suppresses
-lifecycle twins already narrated by a delivered notification. Feed authorship
-defaults to Captain; only explicit traveller mutations (title, pause/resume/
-refresh/cancel/complete, flight select/unselect) render as “You”.
+`captain.trip_events` is the trip-scoped **progress journal**: checkpoints that
+signal movement toward finding and watching the right flights (plan confirmed,
+initial overview, watching a flight, price movement, material plan change,
+pause/resume, tracking finished, trip closed). Non-checkpoint audit noise
+(`trip_created`, renames, manual refresh, freeform chat) is not shown in the
+traveller feed even if older rows exist.
+
+**Event → optional Telegram → Feed.** Checkpoint writes enqueue a
+`notifications` row where applicable; delivery records a spoken
+`captain_update` (exact outbound text + `notification_id`) and the feed
+suppresses only the quieter lifecycle twin with the same `checkpointKey`.
+Immediate checkpoint acknowledgements wake the worker through the shared
+PostgreSQL notification channel. Conversational tool turns keep ownership of
+their own Telegram reply and therefore skip the second outbox acknowledgement.
+`messages` remains the conversation
+transcript and is never mirrored wholesale into `trip_events`. Material brief
+changes write `trip_plan_changed` (not every cosmetic patch). Ops kinds such as
+`inventory_gap` / `watch_attention` do not become feed checkpoints.
+
+The web Feed and Trip Settings Activity card both read `listTripActivity` and
+render through `feedPostsFromActivity`. Authorship defaults to Captain; only
+explicit traveller checkpoint mutations (plan change, pause/resume,
+cancel/complete, flight select/unselect) render as “You”.
 
 The conversational `get_trip` tool reads the same normalized leg graph and
 latest per-leg search snapshots as the web trip screen. Its compact

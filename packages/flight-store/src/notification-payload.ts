@@ -1,4 +1,10 @@
-import { formatTripGoal, type OfferSnapshot, type Trip, type TravellerProfile } from "@agents/flight-domain";
+import {
+  formatTripGoal,
+  formatTripRoute,
+  type OfferSnapshot,
+  type Trip,
+  type TravellerProfile
+} from "@agents/flight-domain";
 
 /**
  * The shape of the market behind a trip, rather than one fare out of it. The
@@ -112,9 +118,10 @@ function snapshotDepartureDates(snapshot: Record<string, unknown>): string[] {
 export function notificationGoalPayload(
   trip: Trip,
   profile: Pick<TravellerProfile, "rankingMode">
-): { tripTitle: string; tripGoal: string } {
+): { tripTitle: string; tripRoute: string; tripGoal: string } {
   return {
     tripTitle: trip.title,
+    tripRoute: formatTripRoute(trip.brief),
     tripGoal: formatTripGoal({ brief: trip.brief, rankingMode: profile.rankingMode })
   };
 }

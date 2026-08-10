@@ -300,9 +300,29 @@ export function notificationText(notification: CaptainNotification): string {
 
 function notificationDraftText(notification: CaptainNotification): string {
   const title = stringField(notification.payload, "tripTitle") || "your trip";
-  const route = shortRoute(title);
+  const route = stringField(notification.payload, "tripRoute") || shortRoute(title);
   if (notification.kind === "tracking_started") {
     return "Plan confirmed. Now checking flights…";
+  }
+  if (notification.kind === "plan_changed") {
+    return `I’ve updated the plan for ${route}.\nOpen the trip to review the changes.`;
+  }
+  if (notification.kind === "tracking_paused") {
+    return `Paused tracking for ${route}.`;
+  }
+  if (notification.kind === "tracking_resumed") {
+    return `Resumed tracking for ${route}. I’ll message you when something changes.`;
+  }
+  if (notification.kind === "trip_closed") {
+    const reason = stringField(notification.payload, "reason")
+      || stringField(notification.payload, "eventType");
+    if (reason === "replaced" || reason === "trip_replaced") {
+      return `Archived ${route} so we can start the new trip.`;
+    }
+    if (reason === "complete" || reason === "trip_complete") {
+      return `Marked ${route} complete.`;
+    }
+    return `Stopped tracking ${route}.`;
   }
   if (notification.kind === "inventory_gap") {
     const multiCity = notification.payload.multiCity === true;

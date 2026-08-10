@@ -56,12 +56,25 @@ const rankingGoals: Record<RankingMode, string> = {
  * be held to: a route, a date range, and the way live options will be ranked.
  */
 export function formatTripGoal(input: TripGoalInput): string {
-  const route = goalRoute(input.brief);
+  const route = formatTripRoute(input.brief);
   const target = input.brief.maximumPrice
     ? `under ${formatCeiling(input.brief.maximumPrice, input.brief.currency)}`
     : rankingGoals[input.rankingMode];
   return `Get you ${route} on ${goalDate(input.brief.departureWindow)} for ${target}, `
     + "using verified fares as prices change.";
+}
+
+/** Stable airport-code route copy for notifications and other short UI text. */
+export function formatTripRoute(brief: TripGoalInput["brief"]): string {
+  const legs = brief.legs ?? [];
+  if (brief.tripType === "multi_city" && legs.length >= 2) {
+    return [
+      legs[0]!.originAirports.join("/"),
+      ...legs.map((leg) => leg.destinationAirports.join("/"))
+    ].join(" → ");
+  }
+  const route = `${brief.originAirports.join("/")} → ${brief.destinationAirports.join("/")}`;
+  return brief.tripType === "round_trip" ? `${route} and back` : route;
 }
 
 /**
@@ -72,18 +85,6 @@ export function formatTripGoalTarget(input: TripGoalInput): string {
   return input.brief.maximumPrice
     ? `your ${formatCeiling(input.brief.maximumPrice, input.brief.currency)} target`
     : rankingGoals[input.rankingMode];
-}
-
-function goalRoute(brief: TripGoalInput["brief"]): string {
-  const legs = brief.legs ?? [];
-  if (brief.tripType === "multi_city" && legs.length >= 2) {
-    return [
-      legs[0]!.originAirports.join("/"),
-      ...legs.map((leg) => leg.destinationAirports.join("/"))
-    ].join(" → ");
-  }
-  const route = `${brief.originAirports.join("/")} → ${brief.destinationAirports.join("/")}`;
-  return brief.tripType === "round_trip" ? `${route} and back` : route;
 }
 
 /**
