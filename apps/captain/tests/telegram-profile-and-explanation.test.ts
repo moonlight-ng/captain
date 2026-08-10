@@ -11,7 +11,7 @@ import {
   CAPTAIN_FEEDBACK_PROMPT,
   CAPTAIN_HOLDING_STATUS,
   CAPTAIN_NEW_USER_GREETING,
-  CAPTAIN_OPENING_STATUS,
+  CAPTAIN_OPENING_STATUS_VARIANTS,
   CAPTAIN_PLANNING_STATUS,
   CAPTAIN_PROFILE_COMMAND,
   CAPTAIN_READY_PROMPT,
@@ -103,11 +103,15 @@ describe("Telegram profile onboarding", () => {
 });
 
 describe("Captain progress copy", () => {
-  it("acknowledges the traveller without promising a result", () => {
-    expect(CAPTAIN_OPENING_STATUS).toBe("Got it — let me check…");
-    // The opening is said before Captain has looked at anything, so it must not
-    // name a route, a fare, or an outcome it cannot yet stand behind.
-    expect(CAPTAIN_OPENING_STATUS).not.toMatch(/found|fare|price|trip|cheap/iu);
+  it("varies its acknowledgement without promising a result", () => {
+    expect(CAPTAIN_OPENING_STATUS_VARIANTS.length).toBeGreaterThan(1);
+    for (const variant of CAPTAIN_OPENING_STATUS_VARIANTS) {
+      const opening = `${variant.lead} — ${variant.genericAction}…`;
+      expect(opening).not.toMatch(/got it/iu);
+      // The opening is said before Captain has looked at anything, so it must
+      // not name a fare or an outcome it cannot yet stand behind.
+      expect(opening).not.toMatch(/found|fare|price|trip|cheap/iu);
+    }
   });
 
   it("keeps holding lines honest about waiting", () => {
@@ -146,7 +150,8 @@ describe("Telegram voice notes", () => {
 
     expect(message.text).toBe("Why did the fare go up?");
     expect(CAPTAIN_VOICE_TURN_CONTEXT).toContain("actual current request");
-    expect(CAPTAIN_VOICE_TURN_CONTEXT).toContain("acknowledge what you understood");
+    expect(CAPTAIN_VOICE_TURN_CONTEXT).toContain("name the concrete route or dates");
+    expect(CAPTAIN_VOICE_TURN_CONTEXT).not.toContain("Briefly acknowledge");
     expect(CAPTAIN_VOICE_TURN_CONTEXT).not.toContain("Where would you like to fly to");
   });
 

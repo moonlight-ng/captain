@@ -146,14 +146,14 @@ describe("Telegram progress copy", () => {
       sessionId: "session-1",
       chatId: "42",
       turnId: "turn-1",
-      opening: "Got it — let me check…",
+      opening: "On it — taking a look…",
       onShow,
       onEdit,
       onDiscard
     });
 
     await vi.advanceTimersByTimeAsync(400);
-    expect(onShow).toHaveBeenCalledWith("Got it — let me check…");
+    expect(onShow).toHaveBeenCalledWith("On it — taking a look…");
 
     // The first named step replaces the acknowledgement in place rather than
     // posting a second message.
@@ -173,7 +173,7 @@ describe("Telegram progress copy", () => {
       sessionId: "session-1",
       chatId: "42",
       turnId: "turn-1",
-      opening: "Got it — let me check…",
+      opening: "On it — taking a look…",
       onShow,
       onEdit,
       onDiscard
@@ -194,7 +194,7 @@ describe("Telegram progress copy", () => {
       sessionId: "session-1",
       chatId: "42",
       turnId: "turn-1",
-      opening: "Got it — let me check…",
+      opening: "On it — taking a look…",
       holdingLines: ["Still on it…", "Almost there…"],
       holdingIntervalMs: 5_000,
       onShow,
@@ -225,7 +225,7 @@ describe("Telegram progress copy", () => {
       sessionId: "session-1",
       chatId: "42",
       turnId: "turn-1",
-      opening: "Got it — let me check…",
+      opening: "On it — taking a look…",
       holdingLines: ["Still on it…"],
       holdingIntervalMs: 5_000,
       onShow,

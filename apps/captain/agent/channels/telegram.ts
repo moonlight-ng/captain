@@ -73,17 +73,38 @@ const CAPTAIN_TOOL_STATUS: Readonly<Record<string, string>> = {
   start_prepared_trip: "Saving your trip…",
   manage_trip: "Updating your trip…"
 };
-// Said before Captain knows anything, so it promises nothing but attention.
-export const CAPTAIN_OPENING_STATUS = "Got it — let me check…";
+// Said before Captain knows anything, so every variant promises nothing but
+// attention. Keeping the copy in one small palette makes the acknowledgement
+// feel conversational without paying for a model call just to write a status.
+export const CAPTAIN_OPENING_STATUS_VARIANTS = [
+  { lead: "On it", genericAction: "taking a look", routeAction: "Taking a look" },
+  { lead: "Alright", genericAction: "working through that", routeAction: "Working through it" },
+  { lead: "Understood", genericAction: "one moment", routeAction: "One moment" },
+  { lead: "Absolutely", genericAction: "I’m on it", routeAction: "I’m on it" },
+  { lead: "Sounds good", genericAction: "looking into it", routeAction: "Looking into it" }
+] as const;
 
 /**
  * The opening acknowledgement, naming their route when they gave one plainly
  * enough to repeat. Echoing their own words costs nothing and says nothing
  * Captain has not been told, so it stays true however the search turns out.
  */
-export function captainOpeningStatus(content: string): string {
+export function captainOpeningStatus(content: string, variationKey = content): string {
   const route = tripRouteEcho(content);
-  return route ? `Got it — ${route}. Checking…` : CAPTAIN_OPENING_STATUS;
+  const variant = CAPTAIN_OPENING_STATUS_VARIANTS[
+    stableVariationIndex(variationKey, CAPTAIN_OPENING_STATUS_VARIANTS.length)
+  ]!;
+  return route
+    ? `${variant.lead} — ${route}. ${variant.routeAction}…`
+    : `${variant.lead} — ${variant.genericAction}…`;
+}
+
+function stableVariationIndex(seed: string, choices: number): number {
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = Math.imul(hash, 31) + seed.charCodeAt(index) | 0;
+  }
+  return (hash >>> 0) % choices;
 }
 // One line sitting still reads as a hang. These take over in order once a step
 // outlasts its welcome, and stop once Captain has run out of honest things to
@@ -131,8 +152,9 @@ export const CAPTAIN_CLEAR_CONFIRMATION =
   "Cleared — trips, preferences, and conversation history. Tap Start to begin again.";
 export const CAPTAIN_VOICE_TURN_CONTEXT =
   "The current user message was transcribed from a Telegram voice note. "
-  + "Treat it as the traveller’s actual current request. Briefly acknowledge what you understood, "
-  + "then answer it or ask only for genuinely missing information. Do not replace it with a generic trip-opening question.";
+  + "Treat it as the traveller’s actual current request. Answer it directly or ask only for genuinely missing information. "
+  + "If reflecting your understanding is useful, name the concrete route or dates instead of using a generic acknowledgement. "
+  + "Do not replace it with a generic trip-opening question.";
 
 export default telegramChannel({
   route: "/eve/v1/telegram",
@@ -322,12 +344,14 @@ export default telegramChannel({
 
     try {
       // Trip planning is the only turn this path is certain to answer itself.
-      // Anything else may fall through to the agent, which posts its own
-      // acknowledgement—so those turns stay on the typing indicator rather than
-      // posting a status message and deleting it a second later.
+      // Anything else may fall through to the agent, where it stays on the
+      // typing indicator until a tool names real work.
       const stages = TripPlanningService.isTripPlanningRequest(content)
         && !TripPlanningService.needsItineraryPlanningConversation(content)
-        ? { opening: captainOpeningStatus(content), lines: CAPTAIN_PLANNING_STATUS }
+        ? {
+            opening: captainOpeningStatus(content, String(messageId)),
+            lines: CAPTAIN_PLANNING_STATUS
+          }
         : null;
       // The reply is worked out under the progress message and posted after it
       // is gone, so the traveller never sees Captain's answer land underneath
@@ -541,7 +565,6 @@ export default telegramChannel({
         sessionId: ctx.session.id,
         chatId,
         turnId: data.turnId,
-        opening: CAPTAIN_OPENING_STATUS,
         holdingLines: CAPTAIN_HOLDING_STATUS,
         ...telegramProgressCallbacks(channel.telegram, chatId),
         onTyping: () => channel.telegram.startTyping()

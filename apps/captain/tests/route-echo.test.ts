@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { captainOpeningStatus, CAPTAIN_OPENING_STATUS } from "../agent/channels/telegram.js";
+import {
+  captainOpeningStatus,
+  CAPTAIN_OPENING_STATUS_VARIANTS
+} from "../agent/channels/telegram.js";
 import { tripRouteEcho } from "../services/trip-planning/route-echo.js";
 
 describe("trip route echo", () => {
@@ -65,14 +68,18 @@ describe("trip route echo", () => {
 
 describe("opening acknowledgement", () => {
   it("names their route when they gave one", () => {
-    expect(captainOpeningStatus("Lagos to London in September")).toBe(
-      "Got it — Lagos to London. Checking…"
-    );
+    expect(captainOpeningStatus("Lagos to London in September", "message-1"))
+      .toContain("Lagos to London");
   });
 
-  it("falls back to the plain acknowledgement rather than guessing", () => {
-    expect(captainOpeningStatus("I want to fly to Lagos")).toBe(CAPTAIN_OPENING_STATUS);
-    expect(captainOpeningStatus("find me a cheap flight")).toBe(CAPTAIN_OPENING_STATUS);
+  it("falls back to a varied acknowledgement rather than guessing", () => {
+    const openings = Array.from({ length: 20 }, (_, index) =>
+      captainOpeningStatus("I want to fly to Lagos", `message-${index}`)
+    );
+    expect(new Set(openings).size).toBe(CAPTAIN_OPENING_STATUS_VARIANTS.length);
+    expect(openings.every((opening) => !opening.includes("Lagos"))).toBe(true);
+    expect(captainOpeningStatus("find me a cheap flight", "message-1"))
+      .not.toMatch(/got it/iu);
   });
 
   it("claims nothing about what the search will find", () => {

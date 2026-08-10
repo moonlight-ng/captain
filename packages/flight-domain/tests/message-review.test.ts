@@ -22,4 +22,18 @@ describe("Captain message review", () => {
     const message = "I found a fare under your $500 target.";
     expect(reviewCaptainMessage(message)).toBe(message);
   });
+
+  it("removes a generic Got it opener and keeps the useful answer", () => {
+    expect(reviewCaptainMessage("Got it — your trip is paused."))
+      .toBe("Your trip is paused.");
+    expect(reviewCaptainMessage("Got it. I’ll compare those dates."))
+      .toBe("I’ll compare those dates.");
+    expect(reviewCaptainMessage("I got it below your target."))
+      .toBe("I got it below your target.");
+  });
+
+  it("replaces a bare acknowledgement with a useful continuation prompt", () => {
+    expect(reviewCaptainMessage("Got it."))
+      .toBe("What would you like me to do next?");
+  });
 });
