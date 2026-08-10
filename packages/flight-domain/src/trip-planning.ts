@@ -76,7 +76,13 @@ export const tripDraftStateSchema = z.object({
   currency: z.string().regex(/^[A-Z]{3}$/u).nullable(),
   maximumPrice: z.number().positive().nullable(),
   preferredAirlines: z.array(z.string().regex(/^[A-Z0-9]{2,3}$/u)).max(12),
-  excludedAirlines: z.array(z.string().regex(/^[A-Z0-9]{2,3}$/u)).max(12)
+  excludedAirlines: z.array(z.string().regex(/^[A-Z0-9]{2,3}$/u)).max(12),
+  /**
+   * Airports Captain chose because the traveller named a country rather than a
+   * city. Recorded so the confirmation can mark the guess; defaulted so drafts
+   * persisted before this field parse unchanged.
+   */
+  assumedAirports: z.array(z.string().regex(/^[A-Z]{3}$/u)).max(6).default([])
 }).strict();
 export type TripDraftState = z.infer<typeof tripDraftStateSchema>;
 
@@ -91,7 +97,8 @@ export const EMPTY_TRIP_DRAFT_STATE: TripDraftState = {
   currency: null,
   maximumPrice: null,
   preferredAirlines: [],
-  excludedAirlines: []
+  excludedAirlines: [],
+  assumedAirports: []
 };
 
 export const tripPlanDraftSchema = z.object({
@@ -170,6 +177,15 @@ export type TripPlanResult =
       status: "cancelled";
       draft: TripPlanDraft;
       message: string;
+    }
+  /**
+   * The turn carried no route or date evidence and a trip already exists, so
+   * there was nothing to plan. Distinct from `needs_input`: Captain is not
+   * short of an answer, the traveller was asking about the trip they have.
+   */
+  | {
+      status: "no_trip_change";
+      trip: import("./trip.js").Trip;
     };
 
 export type TripPlanDraftRevision = {

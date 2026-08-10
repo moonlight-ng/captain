@@ -9,7 +9,9 @@ export default defineTool({
     "Prepare or revise one durable, GUI-editable trip draft from the traveller's itinerary.",
     "Ask at most the service-provided two ambiguity questions; after that Captain uses safe best-fit date windows and saves the draft without starting fare tracking.",
     "Use this immediately for both straightforward requests and uncertain itineraries; the traveller reviews the Plan page and changes route or timing details in Trip Settings.",
-    "Return the service prompt, summary, or creation receipt verbatim; do not add questions, recalculate dates, or rewrite defaults."
+    "Return the service prompt, summary, or creation receipt verbatim; do not add questions, recalculate dates, or rewrite defaults.",
+    "A no_trip_change status means the request carried no route or date and the traveller already has a trip:",
+    "nothing was created or altered, so answer their question from the returned trip instead of asking for a route."
   ].join(" "),
   inputSchema: z.object({
     request: z.string().trim().min(1).max(2_000),
@@ -17,15 +19,18 @@ export default defineTool({
   }).strict(),
   async execute({ request, draftId }, ctx) {
     const services = await getCaptainServices();
-    const result = await services.tripPlanning.prepare(
-      requireCaptainUser(ctx),
-      request,
-      null,
-      draftId
-    );
+    const userId = requireCaptainUser(ctx);
+    // An open draft interprets the turn against what it has already collected
+    // — a revision, a decision, a restart. The Telegram channel used to do this
+    // before the agent ran; now that it only handles unambiguous decisions,
+    // the tool owns the rest.
+    const result = draftId
+      ? await services.tripPlanning.prepare(userId, request, null, draftId)
+      : await services.tripPlanning.handleOpenDraftText(userId, request, null)
+        ?? await services.tripPlanning.prepare(userId, request, null);
     if (result.status === "awaiting_confirmation") {
       return services.tripPlanning.confirm(
-        requireCaptainUser(ctx),
+        userId,
         result.draft.id,
         result.draft.revision
       );

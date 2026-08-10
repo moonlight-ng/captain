@@ -66,6 +66,8 @@ export default defineChannel({
     GET("/api/admin/costs", adminAuthenticated(adminCosts)),
     GET("/api/me/profile", authenticated(getProfile)),
     PATCH("/api/me/profile", authenticatedMutation(updateProfile)),
+    GET("/api/me/facts", authenticated(listFacts)),
+    DELETE("/api/me/facts/:id", authenticatedMutation(requireSession(dismissFact))),
     POST("/api/me/feedback", authenticatedMutation(requireSession(submitFeedback))),
     GET("/api/me/trip", authenticated(getTrip)),
     PATCH("/api/me/trip", authenticatedMutation(updateTrip)),
@@ -368,6 +370,34 @@ async function getProfile(
   return Response.json({
     profile: { ...profile, timeZone: user?.timezone ?? "UTC" }
   }, { headers: noStore() });
+}
+
+async function listFacts(
+  _request: Request,
+  _context: RouteContext,
+  userId: string
+): Promise<Response> {
+  const services = await getCaptainServices();
+  const facts = await services.platformStore.listTravellerFacts(userId);
+  return Response.json({ facts }, { headers: noStore() });
+}
+
+async function dismissFact(
+  _request: Request,
+  context: RouteContext,
+  userId: string
+): Promise<Response> {
+  const factId = z.string().uuid().parse(context.params.id);
+  const services = await getCaptainServices();
+  const dismissed = await services.platformStore.dismissTravellerFact(
+    userId,
+    factId,
+    new Date()
+  );
+  if (!dismissed) {
+    return Response.json({ error: "not_found" }, { status: 404, headers: noStore() });
+  }
+  return Response.json({ dismissed: true }, { headers: noStore() });
 }
 
 async function updateProfile(

@@ -80,6 +80,36 @@ export function describeCaptainPlatformStore(
       });
     });
 
+    it("carries a rolling summary and how far it consumed", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const now = new Date("2026-08-01T12:00:00Z");
+      const first = await store.appendMessage(ada.id, "user", "Lagos to London", now);
+      await store.appendMessage(ada.id, "assistant", "When would you fly?", now);
+
+      // Never written before this: the column defaulted to '' and the agent's
+      // injected context always read "No summary yet."
+      await expect(store.getConversation(ada.id, 0)).resolves.toMatchObject({
+        summary: "",
+        summaryUpdatedAt: null,
+        summaryThroughMessageId: null
+      });
+
+      const summarisedAt = new Date("2026-08-01T12:05:00Z");
+      await store.setConversationSummary(
+        ada.id,
+        "Traveller is planning Lagos to London.",
+        first,
+        summarisedAt
+      );
+
+      await expect(store.getConversation(ada.id, 0)).resolves.toMatchObject({
+        summary: "Traveller is planning Lagos to London.",
+        summaryUpdatedAt: summarisedAt.toISOString(),
+        summaryThroughMessageId: first
+      });
+    });
+
     it("permits only one concurrently-created open Trip draft per traveller", async () => {
       const store = await createStore();
       const ada = await user(store, 1);
@@ -461,6 +491,12 @@ export function describeCaptainPlatformStore(
         onboardingCompletedAt: now.toISOString()
       }, now);
       const sourceMessageId = await store.appendMessage(ada.id, "user", "Clear this", now);
+      await store.recordTravellerFacts(ada.id, [{
+        kind: "cabin_preference",
+        value: "Business on long haul",
+        evidence: "Clear this",
+        sourceMessageId
+      }], now);
       const draft = await store.createTripPlanDraft(ada.id, "Plan a trip", sourceMessageId, now);
       await store.createTrip(ada.id, tripInput, buildSearchSpecs(tripInput.brief), now);
       await store.createTrip(grace.id, tripInput, buildSearchSpecs(tripInput.brief), now);
@@ -484,11 +520,55 @@ export function describeCaptainPlatformStore(
       await expect(store.getTripPlanDraft(ada.id, draft.id, now)).resolves.toBeNull();
       await expect(store.getConversation(ada.id)).resolves.toMatchObject({
         summary: "",
+        // A summary describes the conversation being cleared, so it goes with
+        // it — leaving it would carry the old trip into the next one.
+        summaryUpdatedAt: null,
+        summaryThroughMessageId: null,
         activeTripId: null,
         recentMessages: []
       });
+      await expect(store.listTravellerFacts(ada.id)).resolves.toEqual([]);
       // One traveller clearing their own data leaves everyone else's alone.
       await expect(store.listTrips(grace.id)).resolves.toHaveLength(1);
+    });
+
+    it("records traveller facts, dismisses them, and refuses to re-learn a dismissed one", async () => {
+      const store = await createStore();
+      const ada = await user(store, 1);
+      const now = new Date("2026-08-01T12:00:00Z");
+      const sourceMessageId = await store.appendMessage(
+        ada.id,
+        "user",
+        "I always fly out of Lagos",
+        now
+      );
+
+      const [recorded] = await store.recordTravellerFacts(ada.id, [{
+        kind: "home_airport",
+        value: "Usually departs Lagos",
+        evidence: "I always fly out of Lagos",
+        sourceMessageId
+      }], now);
+      expect(recorded).toMatchObject({
+        kind: "home_airport",
+        value: "Usually departs Lagos",
+        evidence: "I always fly out of Lagos",
+        status: "active"
+      });
+      await expect(store.listTravellerFacts(ada.id)).resolves.toHaveLength(1);
+
+      await expect(store.dismissTravellerFact(ada.id, recorded!.id, now)).resolves.toBe(true);
+      await expect(store.listTravellerFacts(ada.id)).resolves.toEqual([]);
+
+      // A dismissed fact stays dismissed: hearing the same sentence again must
+      // not silently undo the traveller's correction.
+      await expect(store.recordTravellerFacts(ada.id, [{
+        kind: "home_airport",
+        value: "Usually departs Lagos",
+        evidence: "I always fly out of Lagos",
+        sourceMessageId
+      }], now)).resolves.toEqual([]);
+      await expect(store.listTravellerFacts(ada.id)).resolves.toEqual([]);
     });
 
     it("clears all user-owned data when a user is deleted", async () => {

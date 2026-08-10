@@ -12,6 +12,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 
 import { getCaptainServices } from "../../services/app/services.js";
+import { explainRecommendation } from "../../services/trips/explain.js";
 import { requireCaptainUser } from "../lib/principal.js";
 
 export default defineTool({
@@ -38,13 +39,14 @@ export default defineTool({
       };
     }
     const checkedAt = new Date();
-    const [offers, tracked, profile, legSearches] = await Promise.all([
+    const [offers, tracked, profile, legSearches, recommendation] = await Promise.all([
       services.trips.offers(userId, trip.id),
       services.platformStore.getTrackedFlightPrices(userId, trip.id),
       services.platformStore.ensureProfile(userId, checkedAt),
       services.env.simplifiedMultiCityEnabled
         ? getLegSearches(services.platformStore, userId, trip.id, checkedAt)
-        : Promise.resolve([])
+        : Promise.resolve([]),
+      services.platformStore.getRecommendation(userId, trip.id)
     ]);
     return {
       trips,
@@ -57,6 +59,12 @@ export default defineTool({
       // below are empty.
       legSearches,
       offers,
+      // Why the current pick won, worked out deterministically from the
+      // recommendation snapshot. Quote it rather than reasoning about the
+      // comparison again — the arithmetic is already settled here.
+      recommendationExplanation: recommendation
+        ? explainRecommendation(recommendation.snapshot)
+        : null,
       // The whole point of the trip: what the watched fare has done, and
       // whether now is the moment. Null until the traveller picks a flight.
       watchedFlight: tracked

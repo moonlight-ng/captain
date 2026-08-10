@@ -1,3 +1,5 @@
+import { COUNTRY_ALIASES, COUNTRY_PRIMARY_AIRPORTS } from "./country-catalog.js";
+
 export type AirportMarket = {
   code: string;
   label: string;
@@ -9,6 +11,20 @@ export type AirportMention = {
   code: string;
   index: number;
   evidence: string;
+  /**
+   * True when the traveller named a country and Captain picked its primary
+   * airport. The city is Captain's guess, so it has to be reviewable rather
+   * than silently searched.
+   */
+  assumed: boolean;
+};
+
+export type CountryAirportGuess = {
+  code: string;
+  /** The country as named, for copy: "Tokyo — Japan's main airport". */
+  countryLabel: string;
+  /** Other cities in the same country the catalog can actually search. */
+  alternatives: string[];
 };
 
 const AIRPORTS: Readonly<Record<string, Omit<AirportMarket, "code">>> = {
@@ -131,7 +147,6 @@ const LOCATION_CODES: Readonly<Record<string, string>> = {
   "addis ababa": "ADD",
   kigali: "KGL",
   kampala: "EBB",
-  uganda: "EBB",
   entebbe: "EBB",
   cairo: "CAI",
   casablanca: "CMN",
@@ -172,7 +187,20 @@ const LOCATION_CODES: Readonly<Record<string, string>> = {
   singapore: "SIN"
 };
 
-const ORDERED_ALIASES = Object.keys(LOCATION_CODES)
+/**
+ * Cities and countries share one alias table so a country reads as a location
+ * everywhere a city does — the mention count that gates itinerary planning is
+ * the same counter, and a country that resolves to nothing silently shortens
+ * an itinerary.
+ */
+const ALL_LOCATION_CODES: Readonly<Record<string, string>> = {
+  ...LOCATION_CODES,
+  ...Object.fromEntries(
+    Object.entries(COUNTRY_PRIMARY_AIRPORTS).map(([alias, entry]) => [alias, entry.code])
+  )
+};
+
+const ORDERED_ALIASES = Object.keys(ALL_LOCATION_CODES)
   .sort((left, right) => right.length - left.length);
 const LOCATION_PATTERN = new RegExp(
   String.raw`\b(${ORDERED_ALIASES.map(escapeRegex).join("|")})\b`,
@@ -188,7 +216,7 @@ export function airportMarket(code: string): AirportMarket | null {
 export function airportCodeForLocation(value: string): string | null {
   const trimmed = value.trim();
   if (/^[A-Z]{3}$/u.test(trimmed)) return trimmed;
-  return LOCATION_CODES[normalizeText(trimmed)] ?? null;
+  return ALL_LOCATION_CODES[normalizeText(trimmed)] ?? null;
 }
 
 export function airportCodeAtStart(value: string): string | null {
@@ -196,7 +224,44 @@ export function airportCodeAtStart(value: string): string | null {
   const alias = ORDERED_ALIASES.find((candidate) =>
     normalized === candidate || normalized.startsWith(`${candidate} `)
   );
-  return alias ? LOCATION_CODES[alias] ?? null : null;
+  return alias ? ALL_LOCATION_CODES[alias] ?? null : null;
+}
+
+/**
+ * Explains a country guess so it can be reviewed. Alternatives are derived
+ * from the catalog rather than listed by hand, so Captain only ever offers a
+ * city it can actually search — and offers none where the catalog holds a
+ * single city for the country, as it does for Japan.
+ */
+/**
+ * Reverse of {@link countryAirportGuess}: given an airport Captain assumed,
+ * recovers the country that produced it so the confirmation can explain the
+ * pick. Several aliases share a code (uk, britain, england all give LON); the
+ * first declared wins, which is the one written for prose.
+ */
+export function countryGuessForAirport(code: string): CountryAirportGuess | null {
+  const normalized = code.trim().toUpperCase();
+  const alias = Object.keys(COUNTRY_PRIMARY_AIRPORTS)
+    .find((candidate) => COUNTRY_PRIMARY_AIRPORTS[candidate]!.code === normalized);
+  return alias ? countryAirportGuess(alias) : null;
+}
+
+export function countryAirportGuess(alias: string): CountryAirportGuess | null {
+  const entry = COUNTRY_PRIMARY_AIRPORTS[normalizeText(alias)];
+  if (!entry) return null;
+  const primary = AIRPORTS[entry.code];
+  if (!primary) return null;
+  const alternatives = Object.entries(AIRPORTS)
+    .filter(([code, airport]) =>
+      code !== entry.code
+      && airport.country === primary.country
+      // Sub-airports of the same city are the same choice, not another one:
+      // "Tokyo Haneda" is not an alternative to Tokyo.
+      && !airport.label.startsWith(primary.label)
+    )
+    .map(([, airport]) => airport.label)
+    .slice(0, 3);
+  return { code: entry.code, countryLabel: entry.label, alternatives };
 }
 
 export function orderedAirportCodesFromText(value: string): string[] {
@@ -217,9 +282,10 @@ export function orderedAirportMentionsFromText(value: string): AirportMention[] 
       const sourceEndIndex = normalizedIndex + match[0].length - 1;
       const sourceEnd = (normalized.offsets[sourceEndIndex] ?? sourceStart) + 1;
       return {
-        code: LOCATION_CODES[match[1]!]!,
+        code: ALL_LOCATION_CODES[match[1]!]!,
         index: sourceStart,
-        evidence: value.slice(sourceStart, sourceEnd)
+        evidence: value.slice(sourceStart, sourceEnd),
+        assumed: COUNTRY_ALIASES.has(match[1]!)
       };
     })
     .filter((mention, index, all) =>

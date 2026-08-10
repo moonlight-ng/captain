@@ -22,6 +22,21 @@ export type TravellerProfile = {
   updatedAt: string;
 };
 
+/** Durable knowledge Captain learned about the traveller, with the quote behind it. */
+export type TravellerFact = {
+  id: string;
+  kind:
+    | "home_airport"
+    | "cabin_preference"
+    | "airline_affinity"
+    | "routine_route"
+    | "constraint"
+    | "context";
+  value: string;
+  evidence: string;
+  createdAt: string;
+};
+
 export type Trip = {
   id: string;
   title: string;

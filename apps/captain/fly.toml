@@ -8,7 +8,7 @@ primary_region = "lhr"
   release_command = "node scripts/release.mjs"
 
 [env]
-  AI_MODEL = "openai/gpt-5.6-terra"
+  AI_MODEL = "anthropic/claude-sonnet-5"
   TRIP_INTERPRETER_MODEL = "openai/gpt-5.6-luna"
   PORT = "8080"
   CAPTAIN_PUBLIC_URL = "https://dr-captain.fly.dev"

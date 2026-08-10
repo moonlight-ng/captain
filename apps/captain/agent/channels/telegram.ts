@@ -50,9 +50,11 @@ import {
 } from "../../services/trip-planning/service.js";
 import {
   formatTripPlanConfirmation,
+  hasSameTripConfirmationFacts,
   telegramDashboardMessage
 } from "../../services/trip-planning/format.js";
 import { tripRouteEcho } from "../../services/trip-planning/route-echo.js";
+import { explainNotification } from "../../services/trips/explain.js";
 
 const MAX_VOICE_BYTES = 20 * 1024 * 1024;
 const credentials = {
@@ -313,6 +315,16 @@ export default telegramChannel({
     }
 
     const sourceMessageId = await services.platformStore.appendMessage(user.id, "user", content, new Date());
+    // Detached: memory must never sit between a traveller and their answer.
+    // Running it here rather than after the reply means the summary trails by
+    // one turn, which is immaterial against an eight-message trigger, and it
+    // covers every path below — the fast path and the agent alike.
+    void services.rememberConversation(user.id).catch((error: unknown) => {
+      console.warn(JSON.stringify({
+        event: "captain.conversation_memory_dispatch_failed",
+        error: error instanceof Error ? error.name : "UnknownError"
+      }));
+    });
     await ctx.telegram.startTyping();
 
     const quotedMessageId = repliedToTelegramMessageId(message.raw);
@@ -331,22 +343,6 @@ export default telegramChannel({
         return null;
       }
     }
-    if (isExplanationQuestion(content)) {
-      const trip = await services.platformStore.getActiveTrip(user.id);
-      const recommendation = trip
-        ? await services.platformStore.getRecommendation(user.id, trip.id)
-        : null;
-      if (recommendation) {
-        await services.platformStore.markTripActivity(user.id, trip!.id, new Date());
-        const explanation = explainRecommendation(recommendation.snapshot);
-        await services.platformStore.appendMessage(user.id, "assistant", explanation, new Date());
-        await ctx.telegram.post(explanation);
-      } else {
-        await ctx.telegram.post("I don’t have a recommendation for this trip yet. I’ll explain it as soon as I find one.");
-      }
-      return null;
-    }
-
     if (isCaptainGreeting(content)) {
       const draft = await services.tripPlanning.findOpen(user.id);
       const response = draft
@@ -358,27 +354,23 @@ export default telegramChannel({
     }
 
     try {
-      // Trip planning is the only turn this path is certain to answer itself.
-      // Anything else may fall through to the agent, where it stays on the
-      // typing indicator until a tool names real work.
-      const stages = TripPlanningService.isTripPlanningRequest(content)
-        && !TripPlanningService.needsItineraryPlanningConversation(content)
-        ? {
-            opening: captainOpeningStatus(content, String(messageId)),
-            lines: CAPTAIN_PLANNING_STATUS
-          }
-        : null;
-      // The reply is worked out under the progress message and posted after it
-      // is gone, so the traveller never sees Captain's answer land underneath
-      // its own "still on it".
-      const reply = await withCaptainProgress(ctx, telegramChatId, stages, async () => {
-        const openDraftResult = await services.tripPlanning.handleOpenDraftText(
+      // This path answers only what a single word can settle: a decision about
+      // an open draft, or a “yes” to a trip waiting to be tracked. Everything
+      // interpretive — questions about the trip, new itineraries, anything
+      // needing a judgement about what the traveller meant — falls through to
+      // the agent, which can read the trip before it answers.
+      //
+      // It used to route on verbs. “What's the best day to fly that week”
+      // matched /fly/ and /best/, opened an empty draft, and answered a
+      // question about an existing trip by asking where they were flying from.
+      const reply = await withCaptainProgress(ctx, telegramChatId, null, async () => {
+        const decision = await services.tripPlanning.handleDraftDecision(
           user.id,
           content,
           sourceMessageId
         );
-        if (openDraftResult) {
-          return { kind: "trip_plan" as const, result: openDraftResult };
+        if (decision) {
+          return { kind: "trip_plan" as const, result: decision };
         }
         const activeTrip = await services.platformStore.getActiveTrip(user.id);
         if (activeTrip?.status === "draft" && isTripConfirmationText(content)) {
@@ -388,26 +380,10 @@ export default telegramChannel({
           });
           return { kind: "trip_confirmation_accepted" as const };
         }
-        if (TripPlanningService.isWhereQuestion(content)) {
-          const location = await services.tripPlanning.activeTripLocation(user.id);
-          if (location) return { kind: "dashboard" as const, message: location };
-        }
-        if (
-          TripPlanningService.isTripPlanningRequest(content)
-          && !TripPlanningService.needsItineraryPlanningConversation(content)
-        ) {
-          const planned = await services.tripPlanning.prepare(user.id, content, sourceMessageId);
-          return { kind: "trip_plan" as const, result: planned };
-        }
         return null;
       });
       if (reply) {
         if (reply.kind === "trip_confirmation_accepted") return null;
-        if (reply.kind === "dashboard") {
-          await services.platformStore.appendMessage(user.id, "assistant", reply.message, new Date());
-          await postTelegramDashboardMessage(ctx, reply.message);
-          return null;
-        }
         await postTripPlanResult(ctx, user.id, reply.result, {
           acknowledgeVoice: voiceTranscript !== null
         });
@@ -692,7 +668,11 @@ export default telegramChannel({
           }
         }
         const grounded = await services.tripPlanning.groundAssistantMessage(userId, message);
-        message = reviewCaptainMessage(grounded.message);
+        const verbatim = await services.tripPlanning.enforceVerbatimPlanText(
+          userId,
+          grounded.message
+        );
+        message = reviewCaptainMessage(verbatim);
         const activeTrip = await services.platformStore.getActiveTrip(userId);
         if (activeTrip?.status === "draft" && grounded.createdTrip) {
           reviewTrip = activeTrip;
@@ -770,105 +750,6 @@ export function returningTravellerWelcome(trackedTrips: string | null): string {
   return trackedTrips
     ? `${CAPTAIN_RETURNING_TRAVELLER_TRIP_WELCOME}\n\n${trackedTrips}`
     : CAPTAIN_RETURNING_TRAVELLER_WELCOME;
-}
-
-function isExplanationQuestion(content: string): boolean {
-  return /\b(?:why|explain|better|recommend)\b/iu.test(content);
-}
-
-function snapshotFromPayload(payload: Record<string, unknown>): RecommendationSnapshot | null {
-  const snapshot = record(payload.snapshot);
-  return snapshot?.current && snapshot.rankingMode
-    ? snapshot as unknown as RecommendationSnapshot
-    : null;
-}
-
-export function explainNotification(notification: CaptainNotification): string | null {
-  const snapshot = snapshotFromPayload(notification.payload);
-  if (snapshot) return explainRecommendation(snapshot);
-  if (notification.kind === "price_rise") {
-    const current = record(notification.payload.current) as unknown as OfferSnapshot | null;
-    if (!current) return null;
-    const increase = Number(notification.payload.increase);
-    const low = Number(notification.payload.sevenDayLow);
-    const percent = Number(notification.payload.percent);
-    if (![increase, low, percent].every(Number.isFinite)) return null;
-    const evidence = current.evidence[0];
-    return [
-      `The option was ${current.currency} ${current.priceAmount}, up ${formatMoney(increase, current.currency)} (${Math.round(percent)}%) from its seven-day low of ${formatMoney(low, current.currency)}.`,
-      evidence ? `I checked it here: ${evidence.url}` : ""
-    ].filter(Boolean).join("\n");
-  }
-  return null;
-}
-
-export function explainRecommendation(snapshot: RecommendationSnapshot): string {
-  const current = snapshot.current;
-  const previous = snapshot.previous;
-  const currentDuration = snapshotNumber(current.snapshot, "durationSeconds");
-  const previousDuration = previous ? snapshotNumber(previous.snapshot, "durationSeconds") : 0;
-  const evidence = current.evidence[0];
-  const source = evidence ? `\nEvidence: ${evidence.url}` : "";
-  if (!previous) {
-    return [
-      `This was the first ${titleCase(snapshot.rankingMode)} option I found for the trip.`,
-      `It was ${current.currency} ${current.priceAmount}, ${durationLabel(currentDuration)}, ${stopLabel(snapshotNumber(current.snapshot, "stops"))}.`,
-      "Prices and availability can change, so use the source below to check the latest details."
-    ].join("\n") + source;
-  }
-  const priceChange = previous.price - current.price;
-  const durationChange = previousDuration - currentDuration;
-  const comparison = snapshot.rankingMode === "cheapest"
-    ? `It saves ${formatMoney(Math.max(0, priceChange), current.currency)} (${percentage(priceChange, previous.price)}).`
-    : snapshot.rankingMode === "fastest"
-      ? `It cuts journey time by ${durationLabel(Math.max(0, durationChange))}.`
-      : [
-          "Balanced uses 50% price regret, 35% duration regret, and 15% stops, with a small preferred-airline credit.",
-          [
-            priceChange > 0 ? `${formatMoney(priceChange, current.currency)} cheaper` : "",
-            durationChange > 0 ? `${durationLabel(durationChange)} shorter` : "",
-            snapshotNumber(previous.snapshot, "stops") > snapshotNumber(current.snapshot, "stops")
-              ? "fewer stops"
-              : ""
-          ].filter(Boolean).join(", ") || "Its combined score improved by at least 10%."
-        ].join("\n");
-  return [
-    `Captain compared this alert with the exact earlier result it replaced (${previous.currency} ${previous.priceAmount}, ${durationLabel(previousDuration)}).`,
-    comparison,
-    `New result: ${current.currency} ${current.priceAmount}, ${durationLabel(currentDuration)}, ${stopLabel(snapshotNumber(current.snapshot, "stops"))}.`
-  ].join("\n") + source;
-}
-
-function snapshotNumber(snapshot: Record<string, unknown>, key: string): number {
-  const value = Number(snapshot[key]);
-  return Number.isFinite(value) ? value : 0;
-}
-
-function formatMoney(value: number, currency: string): string {
-  return new Intl.NumberFormat("en", {
-    style: "currency",
-    currency,
-    maximumFractionDigits: 2
-  }).format(value);
-}
-
-function durationLabel(seconds: number): string {
-  if (seconds <= 0) return "unknown duration";
-  const hours = Math.floor(seconds / 3_600);
-  const minutes = Math.round((seconds % 3_600) / 60);
-  return `${hours}h ${minutes}m`;
-}
-
-function stopLabel(value: number): string {
-  return value === 0 ? "nonstop" : `${value} stop${value === 1 ? "" : "s"}`;
-}
-
-function percentage(change: number, previous: number): string {
-  return previous > 0 ? `${Math.max(0, Math.round(change / previous * 100))}%` : "an improvement";
-}
-
-function titleCase(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function privateHumanMessage(message: TelegramMessage): boolean {
@@ -969,6 +850,9 @@ async function postTripPlanResult(
   options: { acknowledgeVoice?: boolean } = {}
 ): Promise<void> {
   const services = await getCaptainServices();
+  // Nothing about the trip changed, so there is nothing for the channel to
+  // announce. The agent answers the question the traveller actually asked.
+  if (result.status === "no_trip_change") return;
   // A prompt the service built from more than one turn is sent as more than one
   // message: a question bundled under a dozen dated bullets is where it is
   // least likely to be read and answered.
@@ -1106,24 +990,6 @@ export function isDuplicateTripConfirmationReply(
     && Date.parse(recent.createdAt) >= updatedAt
     && hasSameTripConfirmationFacts(confirmation, recent.content)
   );
-}
-
-function hasSameTripConfirmationFacts(expected: string, candidate: string): boolean {
-  const expectedFacts = tripConfirmationFacts(expected);
-  if (expectedFacts.length < 3) return false;
-  const candidateFacts = new Set(tripConfirmationFacts(candidate));
-  return expectedFacts.every((fact) => candidateFacts.has(fact));
-}
-
-function tripConfirmationFacts(message: string): string[] {
-  return message
-    .split("\n")
-    .map((line) => line
-      .trim()
-      .replace(/^[•*-]\s*/u, "")
-      .replace(/\s+/gu, " ")
-      .toLocaleLowerCase("en"))
-    .filter((line) => /^(?:route|leg \d+|depart|return|stay|trip type|travellers|cabin|stops|currency):/u.test(line));
 }
 
 async function postTelegramDashboardMessage(

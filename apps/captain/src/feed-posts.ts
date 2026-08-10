@@ -1,7 +1,5 @@
 import {
-  CHECKPOINT_LIFECYCLE_SHADOWED_BY_KIND,
   isCheckpointEventType,
-  isCheckpointNotificationKind,
   isSpokenCheckpointEventType,
   isTravellerCheckpointEventType
 } from "@agents/flight-domain/trip-checkpoints";
@@ -9,7 +7,7 @@ import {
 import type { TripActivity, TripActivityChannel } from "./domain.js";
 import { activityLabel } from "./format.js";
 
-/** Spoken Telegram updates vs quieter lifecycle events. */
+/** Spoken Telegram deliveries vs quieter lifecycle events. Feed shows events only. */
 export type FeedPostKind = "update" | "event";
 
 /** Who performed the action — traveller UI maps `traveller` → "You". */
@@ -34,41 +32,17 @@ export function feedPostAuthor(eventType: string): FeedPostAuthor {
 }
 
 /**
- * Progress journal: checkpoint events only. Spoken Telegram deliveries suppress
- * quieter lifecycle twins. Chat mirrors and non-checkpoint audit rows are hidden.
+ * Progress journal: lifecycle checkpoint events only. Spoken Telegram deliveries
+ * stay in chat; chat mirrors and non-checkpoint audit rows are hidden.
  */
 export function feedPostsFromActivity(
   activity: TripActivity[],
   titleFor?: (item: TripActivity) => string
 ): FeedPost[] {
-  const shadowedCheckpoints = new Set<string>();
-  const legacySuppressedEventTypes = new Set<string>();
-  for (const item of activity) {
-    if (!isSpokenCheckpointEventType(item.eventType)) continue;
-    const kind = typeof item.payload.kind === "string" ? item.payload.kind : null;
-    if (!kind || !isCheckpointNotificationKind(kind)) continue;
-    const checkpointKey = checkpointKeyFor(item);
-    for (const eventType of CHECKPOINT_LIFECYCLE_SHADOWED_BY_KIND[kind] ?? []) {
-      if (checkpointKey) {
-        shadowedCheckpoints.add(shadowKey(eventType, checkpointKey));
-      } else {
-        legacySuppressedEventTypes.add(eventType);
-      }
-    }
-  }
-
   return activity
-    .filter((item) => {
-      if (!isCheckpointFeedItem(item)) return false;
-      const checkpointKey = checkpointKeyFor(item);
-      return checkpointKey
-        ? !shadowedCheckpoints.has(shadowKey(item.eventType, checkpointKey))
-        : !legacySuppressedEventTypes.has(item.eventType);
-    })
+    .filter((item) => isLifecycleFeedItem(item))
     .map((item) => {
-      const spoken = Boolean(item.body?.trim()) && isSpokenCheckpointEventType(item.eventType);
-      const body = item.body?.trim()
-        || titleFor?.(item)?.trim()
+      const body = titleFor?.(item)?.trim()
         || activityFeedLine(item.eventType);
       return {
         id: item.id,
@@ -76,44 +50,31 @@ export function feedPostsFromActivity(
         createdAt: item.createdAt,
         channel: item.channel ?? "system",
         eventType: item.eventType,
-        kind: (spoken ? "update" : "event") as FeedPostKind,
+        kind: "event" as FeedPostKind,
         author: feedPostAuthor(item.eventType)
       };
     });
 }
 
-function checkpointKeyFor(item: TripActivity): string | null {
-  return typeof item.payload.checkpointKey === "string" && item.payload.checkpointKey.trim()
-    ? item.payload.checkpointKey
-    : null;
-}
-
-function shadowKey(eventType: string, checkpointKey: string): string {
-  return `${eventType}\u0000${checkpointKey}`;
-}
-
-function isCheckpointFeedItem(item: TripActivity): boolean {
+function isLifecycleFeedItem(item: TripActivity): boolean {
   if (!isCheckpointEventType(item.eventType)) return false;
-  if (isSpokenCheckpointEventType(item.eventType)) {
-    const kind = typeof item.payload.kind === "string" ? item.payload.kind : null;
-    // Legacy rows without kind stay visible; new writers always set kind.
-    return kind == null || isCheckpointNotificationKind(kind);
-  }
+  // Telegram / spoken deliveries are messages — not trip events in the feed.
+  if (isSpokenCheckpointEventType(item.eventType)) return false;
   return true;
 }
 
-/** Attach a single action to the newest spoken update (e.g. Open flight). */
+/** Attach a single action to the newest captain event (e.g. Open flight). */
 export function withFeedUpdateAction(
   posts: FeedPost[],
   action?: FeedPost["action"]
 ): FeedPost[] {
   if (!action) return posts;
-  const index = posts.findIndex((post) => post.kind === "update");
+  const index = posts.findIndex((post) => post.author === "captain");
   if (index < 0) return posts;
   return posts.map((post, i) => (i === index ? { ...post, action } : post));
 }
 
-/** Agent-voice fallback when a lifecycle checkpoint has no spoken body. */
+/** Agent-voice line for a lifecycle checkpoint. */
 export function activityFeedLine(eventType: string): string {
   const lines: Record<string, string> = {
     trip_tracking_started: "Started tracking this trip.",

@@ -11,6 +11,10 @@ import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
 import { CaptainWebAuth } from "../auth/web-session.js";
 import { CaptainAdminAuth } from "../admin/auth.js";
 import { CaptainUsageRecorder } from "../admin/usage.js";
+import {
+  createConversationMemoryWriter,
+  type ConversationMemoryWriter
+} from "../agent/conversation-memory.js";
 import { LegSearchService } from "../flights/leg-search.js";
 import { FlightLookupService } from "../flights/lookup.js";
 import {
@@ -35,6 +39,11 @@ export type CaptainServices = {
   flightLookup: FlightLookupService;
   legSearch: LegSearchService;
   feedback: FeedbackBridge;
+  /**
+   * Updates the rolling conversation summary and durable traveller facts.
+   * Fire-and-forget: it must never sit between a traveller and their reply.
+   */
+  rememberConversation: ConversationMemoryWriter;
 };
 
 let servicesPromise: Promise<CaptainServices> | undefined;
@@ -104,6 +113,12 @@ export async function createCaptainServices(): Promise<CaptainServices> {
     legSearch: new LegSearchService({
       store: platformStore,
       provider: flightProvider
+    }),
+    rememberConversation: createConversationMemoryWriter({
+      store: platformStore,
+      model: env.tripInterpreterModel,
+      apiKey: env.aiGatewayApiKey,
+      recordUsage: (input) => usage.recordGatewayGeneration(input)
     }),
     tripPlanning: new TripPlanningService({
       store: platformStore,

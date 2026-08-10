@@ -20,13 +20,13 @@ function activity(partial: Partial<TripActivity> & Pick<TripActivity, "id" | "ev
 }
 
 describe("feedPostsFromActivity", () => {
-  it("treats delivered Captain updates as first-person update posts", () => {
+  it("shows lifecycle trip events and hides spoken Telegram messages", () => {
     const posts = feedPostsFromActivity([
       activity({
         id: "n1",
         eventType: "captain_update",
-        payload: { kind: "tracking_started" },
-        body: "Plan confirmed. Now checking flights…",
+        payload: { kind: "initial_results" },
+        body: "PAR → NYC is $361.69–$372.28 one-way across 4–8 Nov. Open the trip to compare.",
         channel: "telegram",
         notificationId: "notif-1"
       }),
@@ -35,7 +35,7 @@ describe("feedPostsFromActivity", () => {
     ]);
 
     expect(posts.map((post) => [post.kind, post.id, post.body, post.author])).toEqual([
-      ["update", "n1", "Plan confirmed. Now checking flights…", "captain"]
+      ["event", "l1", "Started tracking this trip.", "captain"]
     ]);
   });
 
@@ -63,7 +63,7 @@ describe("feedPostsFromActivity", () => {
     expect(posts.map((post) => post.id)).toEqual(["w1"]);
   });
 
-  it("suppresses only the lifecycle occurrence narrated by a delivered update", () => {
+  it("keeps lifecycle twins visible when a Telegram ack was delivered", () => {
     const posts = feedPostsFromActivity([
       activity({
         id: "new-plan",
@@ -84,7 +84,7 @@ describe("feedPostsFromActivity", () => {
       })
     ]);
 
-    expect(posts.map((post) => post.id)).toEqual(["new-plan", "old-spoken"]);
+    expect(posts.map((post) => post.id)).toEqual(["new-plan", "old-plan"]);
   });
 
   it("attributes only traveller checkpoint mutations to the traveller", () => {
@@ -150,7 +150,8 @@ describe("trip checkpoint writes", () => {
         notificationId: notification!.id
       })
     ]));
-    expect(feedPostsFromActivity(feed).map((post) => post.body)).toContain(body);
+    expect(feedPostsFromActivity(feed).map((post) => post.body)).not.toContain(body);
+    expect(feedPostsFromActivity(feed).map((post) => post.eventType)).toContain("trip_tracking_started");
   });
 
   it("does not mirror freeform assistant chat onto the trip feed", async () => {

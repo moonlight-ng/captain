@@ -2,7 +2,7 @@ import { defineHook, type HookContext } from "eve/hooks";
 
 import { getCaptainServices } from "../../services/app/services.js";
 
-const model = () => process.env.AI_MODEL?.trim() || "openai/gpt-5.6-terra";
+const model = () => process.env.AI_MODEL?.trim() || "anthropic/claude-sonnet-5";
 
 export default defineHook({
   events: {

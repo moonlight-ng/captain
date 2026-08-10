@@ -321,6 +321,22 @@ const server = createServer(async (req, res) => {
     return json(res, 200, { profile });
   }
 
+  if (method === "GET" && path === "/api/me/facts") {
+    return json(res, 200, {
+      facts: [{
+        id: "11111111-1111-4111-8111-111111111111",
+        kind: "home_airport",
+        value: "Usually departs Lagos",
+        evidence: "I always fly out of Lagos",
+        createdAt: "2026-08-01T12:00:00.000Z"
+      }]
+    });
+  }
+
+  if (method === "DELETE" && /^\/api\/me\/facts\/[^/]+$/u.test(path)) {
+    return json(res, 200, { dismissed: true });
+  }
+
   if (method === "PATCH" && path === "/api/me/profile") {
     await readBody(req);
     return json(res, 200, { profile });

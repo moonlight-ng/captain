@@ -44,7 +44,7 @@ export function loadEnv(): CaptainEnv {
     telegramWebhookSecretToken: optional("TELEGRAM_WEBHOOK_SECRET_TOKEN"),
     feedbackBridgeUrl,
     feedbackBridgeSecret,
-    aiModel: process.env.AI_MODEL?.trim() || "openai/gpt-5.6-terra",
+    aiModel: process.env.AI_MODEL?.trim() || "anthropic/claude-sonnet-5",
     tripInterpreterModel: process.env.TRIP_INTERPRETER_MODEL?.trim() || "openai/gpt-5.6-luna",
     transcriptionModel: process.env.TRANSCRIPTION_MODEL?.trim() || "openai/gpt-4o-mini-transcribe",
     aiGatewayApiKey: optional("AI_GATEWAY_API_KEY"),

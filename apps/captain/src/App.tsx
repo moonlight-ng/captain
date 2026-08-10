@@ -1394,13 +1394,13 @@ function FeedTab({
   return (
     <div className="feed-tab">
       {watch && watch.status !== "completed" ? (
-        <div className="feed-checks watchlist-panel">
-          <div className="card-top">
+        <details className="feed-checks watchlist-panel">
+          <summary className="card-top">
             <h2>Agent schedule</h2>
             <AgentScheduleStatus stage={stage} watch={watch} />
-          </div>
+          </summary>
           <AgentScheduleChecks stage={stage} watch={watch} />
-        </div>
+        </details>
       ) : null}
       <CaptainFeedPosts posts={posts} />
       {trackedHistory ? (

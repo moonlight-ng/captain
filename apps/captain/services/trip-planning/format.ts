@@ -6,6 +6,8 @@ import {
   type TripStatus
 } from "@agents/flight-domain";
 
+import { airportMarket, countryGuessForAirport } from "./airport-catalog.js";
+
 export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
   if (!draft.confirmationSnapshot) {
     throw new Error("Cannot confirm an incomplete trip draft");
@@ -51,12 +53,51 @@ export function formatTripPlanConfirmation(draft: TripPlanDraft): string {
     `• Cabin: ${label(brief.cabin)}${defaults.has("cabin") ? " (default)" : ""}`,
     `• Stops: ${stopLabel(brief.maxStops)}${defaults.has("maxStops") ? " (default)" : ""}`,
     `• Currency: ${brief.currency}${defaults.has("currency") ? " (default)" : ""}`,
+    // Captured but previously unprinted. These carry no default — an absent
+    // budget is no budget, not an assumed one — so they appear only when the
+    // traveller actually set them, and never with a “(default)” marker.
+    ...assumedAirportNotes(draft.state.assumedAirports ?? []),
+    ...(brief.maximumPrice !== null
+      ? [`• Budget: max ${brief.currency} ${brief.maximumPrice}`]
+      : []),
+    ...(brief.preferredAirlines.length > 0
+      ? [`• Airlines: prefer ${brief.preferredAirlines.join(", ")}`]
+      : []),
+    ...(brief.excludedAirlines.length > 0
+      ? [`• Avoiding: ${brief.excludedAirlines.join(", ")}`]
+      : []),
     "",
     captainChose.size > 0
       ? "I filled the dates I marked from your itinerary. Tap Create or Cancel below, or reply with what you’d like to change."
       : "Tap Create or Cancel below, or reply with what you’d like to change."
   ];
   return lines.join("\n");
+}
+
+/**
+ * Names the city Captain picked for a country the traveller named, and the
+ * catalog cities it could swap to. Silent when the catalog holds only that one
+ * city for the country — offering an alternative Captain cannot search would
+ * be worse than offering none.
+ */
+function assumedAirportNotes(assumedAirports: string[]): string[] {
+  return assumedAirports.flatMap((code) => {
+    const market = airportMarket(code);
+    const guess = countryGuessForAirport(code);
+    if (!market || !guess) return [];
+    return [
+      `• ${market.label} for ${guess.countryLabel}${
+        guess.alternatives.length > 0
+          ? ` — say the word for ${formatList(guess.alternatives)}`
+          : ""
+      }`
+    ];
+  });
+}
+
+function formatList(values: string[]): string {
+  if (values.length <= 1) return values[0] ?? "";
+  return `${values.slice(0, -1).join(", ")} or ${values.at(-1)}`;
 }
 
 function formatDateWindow(window: { start: string; end: string }): string {
@@ -244,4 +285,27 @@ function formatLegRoute(
     legs[0]!.originAirports.join("/"),
     ...legs.map((leg) => leg.destinationAirports.join("/"))
   ].join(" → ");
+}
+
+/**
+ * Labelled fact lines from a trip confirmation. Shared by duplicate-confirmation
+ * suppression on Telegram and by any caller that needs to compare two plan
+ * restatements without depending on byte-identical wording.
+ */
+export function tripConfirmationFacts(message: string): string[] {
+  return message
+    .split("\n")
+    .map((line) => line
+      .trim()
+      .replace(/^[•*-]\s*/u, "")
+      .replace(/\s+/gu, " ")
+      .toLocaleLowerCase("en"))
+    .filter((line) => /^(?:route|leg \d+|depart|return|stay|trip type|travellers|cabin|stops|currency|budget|airlines|avoiding):/u.test(line));
+}
+
+export function hasSameTripConfirmationFacts(expected: string, candidate: string): boolean {
+  const expectedFacts = tripConfirmationFacts(expected);
+  if (expectedFacts.length < 3) return false;
+  const candidateFacts = new Set(tripConfirmationFacts(candidate));
+  return expectedFacts.every((fact) => candidateFacts.has(fact));
 }

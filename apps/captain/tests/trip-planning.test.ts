@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import {
+  EMPTY_TRIP_DRAFT_STATE,
+  type TripBrief,
+  type TripPlanDraft
+} from "@agents/flight-domain";
 import { MemoryCaptainPlatformStore } from "@agents/flight-store";
 import {
   hasDeliveredTripConfirmation,
@@ -16,6 +21,7 @@ import {
 import type { TripDraftReadinessAssessor } from "../services/trip-planning/draft-readiness.js";
 import {
   formatActiveTripList,
+  formatTripPlanConfirmation,
   telegramDashboardMessage,
   type ActiveTripFormatInput
 } from "../services/trip-planning/format.js";
@@ -44,6 +50,34 @@ async function setup(clock = now, assessReadiness?: TripDraftReadinessAssessor) 
       `https://captain.example/t#test-${tripId}`
   });
   return { store, user, trips, planning };
+}
+
+/**
+ * The smallest draft `formatTripPlanConfirmation` reads: the confirmation
+ * snapshot's brief, plus the state fields it consults to decide which values
+ * were the traveller's and which were Captain's.
+ */
+function confirmableDraft(overrides: Partial<TripBrief> = {}): TripPlanDraft {
+  const brief = defaultTestBrief({
+    tripType: "one_way",
+    stayNights: null,
+    ...overrides
+  });
+  return {
+    state: {
+      ...EMPTY_TRIP_DRAFT_STATE,
+      tripType: brief.tripType,
+      travellers: brief.travellers,
+      cabin: brief.cabin,
+      maxStops: brief.maxStops,
+      currency: brief.currency
+    },
+    confirmationSnapshot: {
+      input: { brief },
+      departureDate: brief.departureWindow.start,
+      returnDate: null
+    }
+  } as unknown as TripPlanDraft;
 }
 
 function legacyTripListEntry(
@@ -1297,5 +1331,168 @@ describe("Captain trip planning", () => {
     expect(stopped.draft.state.questionsAsked).toBe(5);
     expect(stopped.prompt).toContain("Send it as “Lagos to Nairobi”");
     expect(stopped.prompt).not.toContain("?");
+  });
+
+  // A traveller asking for “max one-stop” had the constraint silently dropped:
+  // the pattern required whitespace, so the hyphen fell through to the 2-stop
+  // default and every fare was searched against the wrong ceiling.
+  it.each([
+    ["max one-stop", "Lagos to London on 12 September, max one-stop flights"],
+    ["max 1-stop", "Lagos to London on 12 September, max 1-stop flights"],
+    ["maximum one stop", "Lagos to London on 12 September, maximum one stop"],
+    ["non-stop", "Lagos to London on 12 September, non-stop only"],
+    ["nonstop", "Lagos to London on 12 September, nonstop only"]
+  ])("keeps a %s constraint out of the two-stop default", async (label, request) => {
+    const { planning, user } = await setup();
+    const result = await planning.prepare(user.id, request);
+    if (result.status !== "awaiting_confirmation") {
+      throw new Error(`Expected confirmation for ${label}, got ${result.status}`);
+    }
+    const { maxStops } = result.draft.confirmationSnapshot!.input.brief;
+    expect(maxStops).toBe(label.includes("non") ? 0 : 1);
+    expect(result.confirmation).not.toContain("At most 2 stops");
+  });
+
+  it("echoes a stated budget in the confirmation without a default marker", async () => {
+    const { planning, user } = await setup();
+    const result = await planning.prepare(
+      user.id,
+      "Lagos to London on 12 September under USD 900"
+    );
+    if (result.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(result.draft.confirmationSnapshot?.input.brief.maximumPrice).toBe(900);
+    expect(result.confirmation).toContain("• Budget: max USD 900");
+    expect(result.confirmation).not.toContain("• Budget: max USD 900 (default)");
+  });
+
+  // The transcript verbatim. A traveller with a confirmed PAR→NYC trip asked
+  // “What's the best day to fly that week” and was asked where they were
+  // flying from — twice — because the request matched /fly/ and /best/, opened
+  // an empty draft, and the reducer had nothing to put in it.
+  describe("questions about an existing trip", () => {
+    async function withConfirmedTrip() {
+      const context = await setup();
+      const planned = await context.planning.prepare(
+        context.user.id,
+        "Lagos to London on 12 September"
+      );
+      if (planned.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+      const started = await context.planning.confirm(
+        context.user.id,
+        planned.draft.id,
+        planned.draft.revision
+      );
+      expect(started.status).toBe("started");
+      return context;
+    }
+
+    it.each([
+      "What's the best day to fly that week",
+      "Yeah what's the best day to fly that week",
+      "which day is cheapest"
+    ])("does not turn %j into a new trip", async (question) => {
+      const { planning, user } = await withConfirmedTrip();
+
+      const result = await planning.prepare(user.id, question);
+
+      expect(result.status).toBe("no_trip_change");
+      if (result.status !== "no_trip_change") throw new Error("Expected no_trip_change");
+      expect(result.trip.brief.originAirports).toEqual(["LOS"]);
+    });
+
+    it("leaves no draft behind to ask the same question on the next turn", async () => {
+      const { planning, user } = await withConfirmedTrip();
+      await planning.prepare(user.id, "What's the best day to fly that week");
+      // The loop needed two turns: the first opened the draft, the second was
+      // owned by it. An abandoned draft here would reinstate exactly that.
+      expect(await planning.findOpen(user.id)).toBeNull();
+    });
+
+    it("still plans a new trip when the traveller actually gives one", async () => {
+      const { planning, user } = await withConfirmedTrip();
+      const result = await planning.prepare(user.id, "Abuja to Accra on 3 October");
+      expect(result.status).not.toBe("no_trip_change");
+    });
+  });
+
+  // The transcript's failure: the model rewrote the plan in its own words and
+  // the “(default)” markers vanished, so a traveller confirmed a two-stop
+  // ceiling they never asked for and could not see Captain had assumed.
+  describe("verbatim plan enforcement", () => {
+    async function awaitingConfirmation() {
+      const context = await setup();
+      const result = await context.planning.prepare(
+        context.user.id,
+        "Lagos to London on 12 September"
+      );
+      if (result.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+      return { ...context, canonical: result.confirmation };
+    }
+
+    it("replaces a bulleted paraphrase with the service's own wording", async () => {
+      const { planning, user, canonical } = await awaitingConfirmation();
+      const paraphrase = [
+        "Here's your plan:",
+        "• Dates: 12 September 2025",
+        "• Economy, 1 adult",
+        "• Up to 2 stops",
+        "• Prices in USD"
+      ].join("\n");
+
+      const enforced = await planning.enforceVerbatimPlanText(user.id, paraphrase);
+      expect(enforced).toBe(canonical);
+      expect(enforced).toContain("(default)");
+    });
+
+    it("leaves prose about the plan alone", async () => {
+      const { planning, user } = await awaitingConfirmation();
+      const prose = "That route only has one nonstop a day. Want me to widen the dates?";
+      expect(await planning.enforceVerbatimPlanText(user.id, prose)).toBe(prose);
+    });
+
+    it("passes the canonical confirmation through untouched", async () => {
+      const { planning, user, canonical } = await awaitingConfirmation();
+      expect(await planning.enforceVerbatimPlanText(user.id, canonical)).toBe(canonical);
+    });
+
+    it("does not police messages when no plan is pending", async () => {
+      const { planning, user } = await setup();
+      const bulleted = "• one\n• two\n• three";
+      expect(await planning.enforceVerbatimPlanText(user.id, bulleted)).toBe(bulleted);
+    });
+  });
+
+  it("marks the city it picked when the traveller named a country", async () => {
+    const { planning, user } = await setup();
+    const result = await planning.prepare(user.id, "Lagos to Japan on 12 September");
+    if (result.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(result.draft.confirmationSnapshot?.input.brief.destinationAirports)
+      .toEqual(["TYO"]);
+    expect(result.draft.state.assumedAirports).toEqual(["TYO"]);
+    expect(result.confirmation).toContain("• Tokyo for Japan");
+  });
+
+  it("does not mark a city the traveller named outright", async () => {
+    const { planning, user } = await setup();
+    const result = await planning.prepare(user.id, "Lagos to Tokyo on 12 September");
+    if (result.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(result.draft.state.assumedAirports).toEqual([]);
+    expect(result.confirmation).not.toContain("for Japan");
+  });
+
+  it("echoes airline preferences, and omits the lines entirely when unset", () => {
+    const withAirlines = formatTripPlanConfirmation(confirmableDraft({
+      preferredAirlines: ["BA", "VS"],
+      excludedAirlines: ["RA"]
+    }));
+    expect(withAirlines).toContain("• Airlines: prefer BA, VS");
+    expect(withAirlines).toContain("• Avoiding: RA");
+
+    // An absent preference is no preference, not an assumed one, so the line
+    // is dropped rather than printed with a “(default)” marker.
+    const without = formatTripPlanConfirmation(confirmableDraft());
+    expect(without).not.toContain("• Airlines:");
+    expect(without).not.toContain("• Avoiding:");
+    expect(without).not.toContain("• Budget:");
   });
 });

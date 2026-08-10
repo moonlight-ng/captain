@@ -114,7 +114,8 @@ describe("Trip planner v3 reducer invariants", () => {
     currency: "USD",
     maximumPrice: 900,
     preferredAirlines: ["AT"],
-    excludedAirlines: ["BA"]
+    excludedAirlines: ["BA"],
+    assumedAirports: []
   };
 
   it.each<TripTurnPatch>([

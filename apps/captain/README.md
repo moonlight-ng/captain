@@ -143,7 +143,7 @@ The retained legacy flight worker has its own ignored `.env`. It requires:
 Optional worker controls include `DUFFEL_BASE_URL`, `FLYSOAR_MCP_URL`,
 `TRACKING_KILL_SWITCH`, and the worker scheduling controls.
 
-Captain uses `AI_MODEL=openai/gpt-5.6-terra` for its general agent and
+Captain uses `AI_MODEL=anthropic/claude-sonnet-5` for its general agent and
 `TRIP_INTERPRETER_MODEL=openai/gpt-5.6-luna` for strict, low-latency trip
 interpretation. Voice notes use
 `TRANSCRIPTION_MODEL=openai/gpt-4o-mini-transcribe`. Relative Telegram dates use
