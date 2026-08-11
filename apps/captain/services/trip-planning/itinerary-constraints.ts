@@ -159,7 +159,10 @@ export function compileItineraryConstraints(
     return [{ airportCode: item.airportCode, start, end }];
   });
   const route = constraints.origin
-    ? uniqueAdjacent([constraints.origin.airportCode, ...visits])
+    ? dropUnearnedReturn(
+        uniqueAdjacent([constraints.origin.airportCode, ...visits]),
+        resolved
+      )
     : visits;
   const pairs: Array<{ origin: string | null; destination: string }> = constraints.origin
     ? route.slice(0, -1).map((origin, index) => ({
@@ -409,6 +412,10 @@ function sanitizeConstraintSet(
   const stops = parsed.data.stops.filter((stop) =>
     allowed.has(stop.airportCode) && containsEvidence(stop.evidence)
   );
+  // A stop struck from the middle of an itinerary leaves the cities either
+  // side sitting next to each other, which is a route nobody described. Fall
+  // back to the deterministic reading of the whole message instead.
+  if (stops.length !== parsed.data.stops.length) return null;
   const origin = parsed.data.origin
     && allowed.has(parsed.data.origin.airportCode)
     && containsEvidence(parsed.data.origin.evidence)
@@ -461,6 +468,30 @@ function nearestAirport(
 
 function inClause(index: number, clause: Clause): boolean {
   return index >= clause.start && index < clause.end;
+}
+
+/**
+ * A traveller mentions home more than once — "flying from London", "back in
+ * London for work" — and only the first mention is the origin, so the rest
+ * survive as stops and the last one becomes a flight home. Keep a trailing
+ * return only when something is actually dated there after the final stop;
+ * "Christmas in Lagos" having started in Lagos is a real return leg, an
+ * aside about London is not.
+ */
+function dropUnearnedReturn(
+  route: string[],
+  presence: ReadonlyArray<{ airportCode: string; start: string; end: string }>
+): string[] {
+  if (route.length < 3 || route.at(-1) !== route[0]) return route;
+  const previousStop = route.at(-2)!;
+  const lastStopEnd = latest(
+    presence.filter((item) => item.airportCode === previousStop).map((item) => item.end)
+  );
+  const returnsHome = presence.some((item) =>
+    item.airportCode === route[0]
+    && (!lastStopEnd || daysBetween(lastStopEnd, item.start) > 0)
+  );
+  return returnsHome ? route : route.slice(0, -1);
 }
 
 function uniqueAdjacent(values: string[]): string[] {

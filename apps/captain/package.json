@@ -10,6 +10,7 @@
   "scripts": {
     "build": "pnpm build:web && eve build",
     "build:web": "pnpm --filter @agents/web build",
+    "catalog:generate": "node --import tsx scripts/generate-airport-catalog.ts",
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "db:manifest": "node --env-file-if-exists=.env --import tsx scripts/migrate-durable-data.ts manifest",
     "db:copy": "node --env-file-if-exists=.env --import tsx scripts/migrate-durable-data.ts copy",

@@ -90,7 +90,7 @@ describe("Trip planner v3 transcript", () => {
       now: clock,
       timeZone: "UTC"
     });
-    expect(turn).toEqual({ intent: "unrelated", operations: [] });
+    expect(turn).toEqual({ intent: "unrelated", operations: [], unresolvedPlaces: [] });
   });
 });
 
@@ -305,6 +305,159 @@ describe("Trip planner v3 reducer invariants", () => {
       kind: "exact",
       date: "2026-11-01"
     });
+  });
+});
+
+/**
+ * A multi-city route is a chain: each leg leaves from where the previous one
+ * landed. `validateMultiCityBrief` enforces this at the brief boundary, but a
+ * draft that breaks it earlier turns a dropped city into a valid-looking
+ * shorter trip instead of an error.
+ */
+function routeBreaks(legs: TripDraftState["legs"]): string[] {
+  return legs.flatMap((leg, index) => {
+    const next = legs[index + 1];
+    if (!next) return [];
+    const landed = new Set(leg.destinationAirports);
+    return next.originAirports.some((code) => landed.has(code))
+      ? []
+      : [`${leg.destinationAirports.join("/")} → ${next.originAirports.join("/")}`];
+  });
+}
+
+describe("route contiguity", () => {
+  const chained: TripDraftState = {
+    ...EMPTY_TRIP_DRAFT_STATE,
+    legs: [
+      { originAirports: ["LON"], destinationAirports: ["PAR"], departure: { kind: "exact", date: "2026-11-04" } },
+      { originAirports: ["PAR"], destinationAirports: ["NYC"], departure: { kind: "exact", date: "2026-12-09" } }
+    ]
+  };
+
+  it("holds when a route operation rewrites the whole chain", () => {
+    const reduced = applyTripTurnPatch({
+      state: chained,
+      patch: {
+        intent: "continue",
+        operations: [{
+          type: "set_route",
+          legs: [
+            { originAirports: ["LON"], destinationAirports: ["PAR"] },
+            { originAirports: ["PAR"], destinationAirports: ["MAD"] },
+            { originAirports: ["MAD"], destinationAirports: ["LOS"] }
+          ],
+          evidence: "London to Paris to Madrid to Lagos"
+        }]
+      },
+      now: clock,
+      timeZone: "UTC"
+    });
+    expect(reduced.issue).toBeNull();
+    expect(routeBreaks(reduced.state.legs)).toEqual([]);
+  });
+
+  it("holds when a date operation leaves the route alone", () => {
+    const reduced = applyTripTurnPatch({
+      state: chained,
+      patch: {
+        intent: "continue",
+        operations: [{
+          type: "set_date",
+          target: { field: "leg", legIndex: 1 },
+          expression: "2026-12-10",
+          evidence: "December 10"
+        }]
+      },
+      now: clock,
+      timeZone: "UTC"
+    });
+    expect(routeBreaks(reduced.state.legs)).toEqual([]);
+  });
+
+  // A dropped city leaves a gap rather than a shorter journey. Accepting this
+  // is what let a lost Marseille pass as a London–Paris–New York trip.
+  it("rejects a broken chain and keeps the state it had", () => {
+    const reduced = applyTripTurnPatch({
+      state: chained,
+      patch: {
+        intent: "continue",
+        operations: [{
+          type: "set_route",
+          legs: [
+            { originAirports: ["LON"], destinationAirports: ["PAR"] },
+            { originAirports: ["MRS"], destinationAirports: ["NYC"] }
+          ],
+          evidence: "London to Paris, Marseille to New York"
+        }]
+      },
+      now: clock,
+      timeZone: "UTC"
+    });
+    expect(reduced.issue).toContain("PAR → MRS");
+    expect(reduced.appliedOperations).toEqual([]);
+    expect(reduced.state.legs).toEqual(chained.legs);
+  });
+
+  it("keeps each flight's own date when a city is inserted mid-itinerary", () => {
+    const threeLegs: TripDraftState = {
+      ...EMPTY_TRIP_DRAFT_STATE,
+      legs: [
+        { originAirports: ["LON"], destinationAirports: ["PAR"], departure: { kind: "exact", date: "2026-11-04" } },
+        { originAirports: ["PAR"], destinationAirports: ["NYC"], departure: { kind: "exact", date: "2026-12-09" } },
+        { originAirports: ["NYC"], destinationAirports: ["LOS"], departure: { kind: "exact", date: "2026-12-20" } }
+      ]
+    };
+    const reduced = applyTripTurnPatch({
+      state: threeLegs,
+      patch: {
+        intent: "continue",
+        operations: [{
+          type: "set_route",
+          legs: [
+            { originAirports: ["LON"], destinationAirports: ["PAR"] },
+            { originAirports: ["PAR"], destinationAirports: ["MRS"] },
+            { originAirports: ["MRS"], destinationAirports: ["NYC"] },
+            { originAirports: ["NYC"], destinationAirports: ["LOS"] }
+          ],
+          evidence: "add Marseille between Paris and New York"
+        }]
+      },
+      now: clock,
+      timeZone: "UTC"
+    });
+    expect(reduced.issue).toBeNull();
+    expect(reduced.state.legs).toHaveLength(4);
+    // Inserting Marseille shifts every later leg along by one. Matching by
+    // index left the new fourth leg — the flight to Lagos — with no date at
+    // all; matching by route keeps 20 December on it.
+    expect(reduced.state.legs[0]!.departure).toEqual({ kind: "exact", date: "2026-11-04" });
+    expect(reduced.state.legs.at(-1)!.departure).toEqual({ kind: "exact", date: "2026-12-20" });
+  });
+
+  it("finds a leg it only knew half of once the other half arrives", () => {
+    const halfKnown: TripDraftState = {
+      ...EMPTY_TRIP_DRAFT_STATE,
+      legs: [{
+        originAirports: [],
+        destinationAirports: ["NYC"],
+        departure: { kind: "exact", date: "2026-08-17" }
+      }]
+    };
+    const reduced = applyTripTurnPatch({
+      state: halfKnown,
+      patch: {
+        intent: "continue",
+        operations: [{
+          type: "set_route",
+          legs: [{ originAirports: ["LOS"], destinationAirports: ["NYC"] }],
+          evidence: "Lagos"
+        }]
+      },
+      now: clock,
+      timeZone: "UTC"
+    });
+    expect(reduced.issue).toBeNull();
+    expect(reduced.state.legs[0]!.departure).toEqual({ kind: "exact", date: "2026-08-17" });
   });
 });
 

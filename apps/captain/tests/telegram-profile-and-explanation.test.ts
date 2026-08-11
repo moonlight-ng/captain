@@ -13,6 +13,8 @@ import {
   CAPTAIN_NEW_USER_GREETING,
   CAPTAIN_OPENING_STATUS_VARIANTS,
   CAPTAIN_PLANNING_STATUS,
+  CAPTAIN_PROVIDER_HOLDING_STATUS,
+  captainPlanningStages,
   CAPTAIN_PROFILE_COMMAND,
   CAPTAIN_RETURNING_TRAVELLER_WELCOME,
   CAPTAIN_TRIP_COMMAND,
@@ -192,6 +194,26 @@ describe("Captain progress copy", () => {
     expect(CAPTAIN_PLANNING_STATUS[0]).toBe("Reading the route and dates…");
     expect(CAPTAIN_PLANNING_STATUS.slice(1)).toEqual([...CAPTAIN_HOLDING_STATUS]);
     expect(new Set(CAPTAIN_PLANNING_STATUS).size).toBe(CAPTAIN_PLANNING_STATUS.length);
+  });
+
+  it("blames a provider only where one is actually being waited on", () => {
+    // A holding line advances on a timer that knows nothing about what is
+    // running. The default set therefore cannot claim anyone else is slow —
+    // it used to, and said so while Captain was reading a date.
+    for (const line of CAPTAIN_HOLDING_STATUS) {
+      expect(line).not.toMatch(/provider|airline|slow/iu);
+    }
+    expect(CAPTAIN_PROVIDER_HOLDING_STATUS.some((line) => /airlines/iu.test(line))).toBe(true);
+  });
+
+  it("wires an opening acknowledgement into every turn's stages", () => {
+    // This is the assertion that was missing when the opening was dropped in
+    // 16020b8: the copy stayed tested and stopped being used.
+    const stages = captainPlanningStages("Lagos to London in September", "message-1");
+    expect(stages.opening).toContain("Lagos to London");
+    expect(stages.lines).toEqual([...CAPTAIN_HOLDING_STATUS]);
+    expect(captainPlanningStages("find me something cheap", "message-2").opening)
+      .toMatch(/…$/u);
   });
 });
 

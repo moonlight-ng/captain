@@ -358,7 +358,7 @@ describe("Captain trip planning", () => {
     }
     expect(originQuestion.prompt).toContain("Nairobi → Entebbe → London → Lagos");
     expect(originQuestion.prompt).toContain("Where will you be flying from to Nairobi?");
-    expect(originQuestion.prompt).not.toContain("Replace it");
+    expect(originQuestion.prompt).not.toContain("swap it for this one");
     expect(originQuestion.draft.confirmationSnapshot).toBeNull();
     expect(originQuestion.draft.state).toMatchObject({
       tripType: "multi_city",
@@ -414,8 +414,8 @@ describe("Captain trip planning", () => {
     if (!replacement || replacement.status !== "needs_input") {
       throw new Error("Expected replacement consent");
     }
-    expect(replacement.prompt).toContain("Replace it");
-    expect(replacement.prompt).toContain("/feedback");
+    expect(replacement.prompt).toContain("should I swap it for this one?");
+    expect(replacement.prompt).not.toContain("/feedback");
     // The recap and the question are two turns. Bundled into one message the
     // question lands under a dozen dated bullets, where it is least likely to
     // be read and answered.
@@ -423,9 +423,9 @@ describe("Captain trip planning", () => {
     const [recap, question] = replacement.promptParts!;
     expect(recap).toContain("I mapped the flights as:");
     expect(recap).toContain("→");
-    expect(recap).not.toContain("Replace it");
-    expect(question).toContain("Replace it");
-    expect(question).toContain("/feedback");
+    expect(recap).not.toContain("swap it for this one");
+    expect(question).toContain("should I swap it for this one?");
+    expect(question).not.toContain("/feedback");
     expect(question).not.toContain("I mapped the flights as:");
     // `prompt` stays the single canonical string for anything that needs one.
     expect(replacement.prompt).toBe(`${recap}\n\n${question}`);
@@ -745,6 +745,246 @@ describe("Captain trip planning", () => {
       { originAirports: ["LON"], destinationAirports: ["NYC"] },
       { originAirports: ["NYC"], destinationAirports: ["LON"] }
     ]);
+  });
+
+  /**
+   * The whole reported failure in one assertion block. A traveller gave four
+   * cities and got three: Marseille was in no catalog, resolved to nothing,
+   * and the remaining codes still chained into a contiguous route that passed
+   * every check. "No return." then bought them a flight home.
+   */
+  it("keeps every city of the four-leg London–Paris–Marseille–New York–Lagos itinerary", async () => {
+    const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+    const result = await planning.prepare(
+      user.id,
+      "London to Paris on Nov 4, Paris to Marseille on Nov 8, "
+      + "Marseille to New York on Dec 9, New York to Lagos on Dec 20. No return. Just me."
+    );
+
+    expect(result.status).toBe("awaiting_confirmation");
+    if (result.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(result.draft.state.tripType).toBe("multi_city");
+    expect(result.draft.state.legs.map((leg) => [
+      leg.originAirports, leg.destinationAirports
+    ])).toEqual([
+      [["LON"], ["PAR"]],
+      [["PAR"], ["MRS"]],
+      [["MRS"], ["NYC"]],
+      [["NYC"], ["LOS"]]
+    ]);
+
+    const snapshot = result.draft.confirmationSnapshot!;
+    expect(snapshot.input.brief.legs).toHaveLength(4);
+    expect(snapshot.input.brief.destinationAirports).toEqual(["LOS"]);
+    expect(snapshot.input.brief.stayNights).toBeNull();
+    expect(snapshot.returnDate).toBeNull();
+    expect(snapshot.input.brief.legs!.some((leg) =>
+      leg.destinationAirports.includes("LON")
+    )).toBe(false);
+
+    expect(result.confirmation).toContain("PAR → MRS");
+    expect(result.confirmation).toContain("MRS → NYC");
+    expect(result.confirmation).toContain("4 Nov 2026");
+    expect(result.confirmation).toContain("8 Nov 2026");
+    expect(result.confirmation).toContain("9 Dec 2026");
+    expect(result.confirmation).toContain("20 Dec 2026");
+    expect(result.confirmation).not.toContain("/feedback");
+  });
+
+  describe("an itinerary handed over as legs", () => {
+    const legs = [
+      { origin: "London", destination: "Paris", departureDate: "2026-11-04" },
+      { origin: "Paris", destination: "Marseille", departureDate: "2026-11-08" },
+      { origin: "Marseille", destination: "New York", departureDate: "2026-12-09" },
+      { origin: "New York", destination: "Lagos", departureDate: "2026-12-20" }
+    ];
+
+    // The two paths must not drift: a confirmation that differs by a word is
+    // a second product nobody is maintaining.
+    it("reaches the same confirmation the prose path does", async () => {
+      const prose = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const spoken = await prose.planning.prepare(
+        prose.user.id,
+        "London to Paris on Nov 4, Paris to Marseille on Nov 8, "
+        + "Marseille to New York on Dec 9, New York to Lagos on Dec 20. No return. Just me."
+      );
+      const structured = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const handed = await structured.planning.prepareStructured(structured.user.id, {
+        request: "Four-city run, one adult, no return.",
+        legs
+      });
+
+      expect(spoken.status).toBe("awaiting_confirmation");
+      expect(handed.status).toBe("awaiting_confirmation");
+      if (spoken.status !== "awaiting_confirmation" || handed.status !== "awaiting_confirmation") {
+        throw new Error("Expected both paths to reach confirmation");
+      }
+      expect(handed.confirmation).toBe(spoken.confirmation);
+      expect(handed.draft.confirmationSnapshot!.input.brief)
+        .toEqual(spoken.draft.confirmationSnapshot!.input.brief);
+    });
+
+    it("names the leg and field when a place resolves to nothing", async () => {
+      const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const result = await planning.prepareStructured(user.id, {
+        request: "Four-city run",
+        legs: [
+          { origin: "London", destination: "Paris", departureDate: "2026-11-04" },
+          { origin: "Paris", destination: "Xanadu", departureDate: "2026-11-08" }
+        ]
+      });
+      expect(result.status).toBe("invalid_legs");
+      if (result.status !== "invalid_legs") throw new Error("Expected a validation report");
+      expect(result.errors).toEqual([{
+        legIndex: 2,
+        field: "destination",
+        message: expect.stringContaining("Xanadu")
+      }]);
+      // Told to go and look, not to hand the problem back to the traveller.
+      expect(result.errors[0]!.message).toContain("Search for the airport");
+    });
+
+    it("refuses a chain with a hole in it", async () => {
+      const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const result = await planning.prepareStructured(user.id, {
+        request: "Two flights",
+        legs: [
+          { origin: "London", destination: "Paris", departureDate: "2026-11-04" },
+          { origin: "Marseille", destination: "New York", departureDate: "2026-12-09" }
+        ]
+      });
+      expect(result.status).toBe("invalid_legs");
+      if (result.status !== "invalid_legs") throw new Error("Expected a validation report");
+      expect(result.errors[0]).toMatchObject({ legIndex: 2, field: "origin" });
+      expect(result.errors[0]!.message).toContain("Add the leg in between");
+    });
+
+    it("refuses legs flown out of order", async () => {
+      const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const result = await planning.prepareStructured(user.id, {
+        request: "Two flights",
+        legs: [
+          { origin: "London", destination: "Paris", departureDate: "2026-12-09" },
+          { origin: "Paris", destination: "Lagos", departureDate: "2026-11-04" }
+        ]
+      });
+      expect(result.status).toBe("invalid_legs");
+      if (result.status !== "invalid_legs") throw new Error("Expected a validation report");
+      expect(result.errors[0]!.message).toContain("the order they are flown");
+    });
+
+    it("saves nothing when the legs do not describe a journey", async () => {
+      const { planning, user, trips } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      await planning.prepareStructured(user.id, {
+        request: "Two flights",
+        legs: [
+          { origin: "London", destination: "Paris", departureDate: "2026-11-04" },
+          { origin: "Marseille", destination: "New York", departureDate: "2026-12-09" }
+        ]
+      });
+      expect(await planning.findOpen(user.id)).toBeNull();
+      expect(await trips.list(user.id)).toHaveLength(0);
+    });
+  });
+
+  describe("a city Captain cannot place", () => {
+    const itinerary = (middle: string): string =>
+      `London to Paris on Nov 4, Paris to ${middle} on Nov 8, `
+      + `${middle} to New York on Dec 9. Just me.`;
+
+    it("offers the city a typo probably meant", async () => {
+      const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const result = await planning.prepare(user.id, itinerary("Marsielle"));
+      expect(result.status).toBe("needs_input");
+      if (result.status !== "needs_input") throw new Error("Expected a question");
+      expect(result.prompt).toBe(
+        "I don’t have an airport under “Marsielle” — did you mean Marseille (MRS)?"
+      );
+    });
+
+    it("asks for the nearest airport when nothing comes close", async () => {
+      const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const result = await planning.prepare(user.id, itinerary("Xanadu"));
+      expect(result.status).toBe("needs_input");
+      if (result.status !== "needs_input") throw new Error("Expected a question");
+      expect(result.prompt).toContain("Xanadu");
+      expect(result.prompt).toContain("nearest city");
+    });
+
+    // The failure this whole change exists for: the unplaceable city used to
+    // vanish and the two either side of it joined up, so a four-city trip
+    // became a plausible three-city one nobody had asked for.
+    it("builds no route at all rather than a shorter one", async () => {
+      const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const result = await planning.prepare(user.id, itinerary("Xanadu"));
+      if (result.status !== "needs_input") throw new Error("Expected a question");
+      expect(result.draft.state.legs).toEqual([]);
+      expect(result.draft.confirmationSnapshot).toBeNull();
+    });
+
+    it("completes the trip once the traveller settles it", async () => {
+      const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const asked = await planning.prepare(user.id, itinerary("Xanadu"));
+      if (asked.status !== "needs_input") throw new Error("Expected a question");
+      const settled = await planning.prepare(
+        user.id,
+        itinerary("Marseille"),
+        null,
+        asked.draft.id
+      );
+      // Answering a clarification is consent, so the corrected trip saves
+      // rather than going back for another Create/Cancel.
+      expect(settled.status).toBe("started");
+      if (settled.status !== "started") throw new Error("Expected the trip to save");
+      expect(settled.draft.state.legs.map((leg) => leg.destinationAirports)).toEqual([
+        ["PAR"], ["MRS"], ["NYC"]
+      ]);
+    });
+  });
+
+  // The traveller wrote "No return." and got a flight home anyway: the words
+  // set tripType to round_trip, which outranked the leg count, collapsed the
+  // itinerary to its first flight, and had the reducer mirror it.
+  it("does not invent a flight home for a one-way multi-city trip", async () => {
+    const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+    const result = await planning.prepare(
+      user.id,
+      "London to Paris on Nov 4, Paris to New York on Dec 9, "
+      + "New York to Lagos on Dec 20. No return. Just me."
+    );
+    expect(result.status).toBe("awaiting_confirmation");
+    if (result.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+
+    expect(result.draft.state.tripType).toBe("multi_city");
+    expect(result.draft.state.legs.map((leg) => [
+      leg.originAirports, leg.destinationAirports
+    ])).toEqual([
+      [["LON"], ["PAR"]],
+      [["PAR"], ["NYC"]],
+      [["NYC"], ["LOS"]]
+    ]);
+
+    const brief = result.draft.confirmationSnapshot!.input.brief;
+    expect(brief.tripType).toBe("multi_city");
+    expect(brief.legs).toHaveLength(3);
+    expect(brief.destinationAirports).toEqual(["LOS"]);
+    expect(brief.stayNights).toBeNull();
+    // Nothing flies back to where the traveller started.
+    expect(brief.legs!.some((leg) => leg.destinationAirports.includes("LON"))).toBe(false);
+    expect(result.draft.confirmationSnapshot!.returnDate).toBeNull();
+  });
+
+  it("reads a genuine there-and-back pair as a round trip", async () => {
+    const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+    const result = await planning.prepare(
+      user.id,
+      "Round trip from Lagos to New York departing 17 September 2026 "
+      + "and returning 24 September 2026 for one adult."
+    );
+    expect(result.status).toBe("awaiting_confirmation");
+    if (result.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(result.draft.confirmationSnapshot!.input.brief.tripType).toBe("round_trip");
+    expect(result.draft.confirmationSnapshot!.returnDate).toBe("2026-09-24");
   });
 
   it("scopes a follow-up to the pending return leg without overwriting departure", async () => {
@@ -1096,8 +1336,8 @@ describe("Captain trip planning", () => {
     expect(blocked.status).toBe("needs_input");
     if (blocked.status !== "needs_input") throw new Error("Expected the trip limit prompt");
     expect(blocked.prompt).toContain("Existing London trip");
-    expect(blocked.prompt).toContain("Replace it");
-    expect(blocked.prompt).toContain("/feedback");
+    expect(blocked.prompt).toContain("should I swap it for this one?");
+    expect(blocked.prompt).not.toContain("/feedback");
     expect(blocked.draft.confirmationSnapshot).toMatchObject({
       input: { brief: { originAirports: ["LOS"], destinationAirports: ["NYC"] } }
     });

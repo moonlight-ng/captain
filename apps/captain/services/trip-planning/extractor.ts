@@ -37,6 +37,44 @@ const extractionSchema = z.object({
 
 export type TripFactExtraction = z.infer<typeof extractionSchema>;
 
+/**
+ * "back", "return" and "returning" only mean a return flight in particular
+ * shapes. A bare match reads "No return." and "I'll be back in Lagos for
+ * Christmas" as round trips, which then collapses a four-city itinerary to its
+ * first leg and appends a flight home nobody asked for.
+ */
+const RETURN_INTENT_PATTERN =
+  /\bround[ -]?trip\b|\breturn(?:ing)?\s+(?:on|to|by|the|home|flight)\b|\bcoming\s+back\b|\bback\s+(?:on|by|to)\b|\band\s+back\b|\bthere\s+and\s+back\b|\breturn\s+leg\b/iu;
+/** Wins outright: an explicit refusal is stronger evidence than any hint. */
+const NO_RETURN_PATTERN =
+  /\bone[ -]?way\b|\bno\s+return\b|\bnot\s+return(?:ing)?\b|\bwithout\s+a\s+return\b|\bno\s+need\s+to\s+(?:come|fly|go)\s+back\b|\bdon'?t\s+need\s+a\s+return\b/iu;
+
+/**
+ * Whether the traveller asked to come back. `false` for silence and for an
+ * explicit refusal alike — a caller wanting the difference tests
+ * {@link refusesReturnFlight} too.
+ */
+export function requestsReturnFlight(request: string): boolean {
+  if (NO_RETURN_PATTERN.test(request)) return false;
+  return RETURN_INTENT_PATTERN.test(request);
+}
+
+export function refusesReturnFlight(request: string): boolean {
+  return NO_RETURN_PATTERN.test(request);
+}
+
+/**
+ * Whether a date in this message belongs to the return leg rather than the
+ * departure. Looser than {@link requestsReturnFlight} — "Return August 10"
+ * names no preposition — but narrower in one way that matters: "round trip"
+ * says a return exists without saying this date is it, and reading it as one
+ * put the outbound date on the flight home.
+ */
+export function datesTheReturnLeg(request: string): boolean {
+  if (NO_RETURN_PATTERN.test(request)) return false;
+  return /\b(?:return|returning|back)\b/iu.test(request);
+}
+
 export function fallbackTripFactExtraction(
   request: string,
   prior: TripDraftState = EMPTY_TRIP_DRAFT_STATE
@@ -91,13 +129,18 @@ export function fallbackTripFactExtraction(
   const travellers = /\b(?:just|only)\s+me\b|\bsolo\b|\bmyself\b/iu.test(lower)
     ? { adults: 1, childrenAges: [], infants: 0 }
     : travellerCount(normalized);
-  const tripType = legs.length > 0
+  // A chain of cities outranks any return hint: "London to Paris to Lagos and
+  // back to work on Monday" is still a multi-city trip. Three named places
+  // that do not end where they began is such a chain even when the sentence
+  // never says "from" — which is how most people write an itinerary.
+  const namesAChain = route.length >= 3 && route[0] !== route.at(-1);
+  const tripType = legs.length > 0 || namesAChain
     ? "multi_city" as const
-    : /\bone[ -]?way\b/iu.test(lower)
-    ? "one_way" as const
-    : /\bround[ -]?trip\b|\breturn(?:ing)?\b|\bback\b/iu.test(lower)
-      ? "round_trip" as const
-      : null;
+    : refusesReturnFlight(normalized)
+      ? "one_way" as const
+      : requestsReturnFlight(normalized)
+        ? "round_trip" as const
+        : null;
   const cabin = /\bpremium economy\b/iu.test(lower)
     ? "premium_economy" as const
     : /\bbusiness\b/iu.test(lower)
@@ -186,13 +229,21 @@ export function sanitizeModelAirportExtraction(
   const allowed = allowedModelAirportCodes(request);
   const safeCodes = (codes: string[]): string[] =>
     unique(codes.filter((code) => allowed.has(code)));
+  const legs = extraction.legs.map((leg) => ({
+    originAirports: safeCodes(leg.originAirports),
+    destinationAirports: safeCodes(leg.destinationAirports)
+  }));
+  // Dropping the legs that used a code the traveller never gave leaves the
+  // survivors looking like the whole itinerary, and they join up: strike one
+  // city out of four and the remaining three still read as a journey. So an
+  // unusable leg voids the route rather than shortening it.
+  const usable = legs.every((leg) =>
+    leg.originAirports.length > 0 && leg.destinationAirports.length > 0
+  );
   return extractionSchema.parse({
     ...extraction,
     originAirports: safeCodes(extraction.originAirports),
     destinationAirports: safeCodes(extraction.destinationAirports),
-    legs: extraction.legs.map((leg) => ({
-      originAirports: safeCodes(leg.originAirports),
-      destinationAirports: safeCodes(leg.destinationAirports)
-    })).filter((leg) => leg.originAirports.length > 0 && leg.destinationAirports.length > 0)
+    legs: usable ? legs : []
   });
 }

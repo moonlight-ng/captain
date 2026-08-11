@@ -136,10 +136,17 @@ export class TelegramProgressTracker {
     return progress;
   }
 
+  /**
+   * Moves to a named step. `holdingLines` replaces what this step says while
+   * it outstays its welcome, so only a step that really is waiting on someone
+   * else can say so — a timer cannot know that, and one that claimed it
+   * anyway told travellers the providers were slow while Captain was thinking.
+   */
   async setStatus(
     sessionId: string,
     turnId: string,
-    statusText: string
+    statusText: string,
+    holdingLines?: readonly string[]
   ): Promise<TelegramTurnProgress | undefined> {
     const progress = this.#bySession.get(sessionId);
     if (!progress || progress.turnId !== turnId) return undefined;
@@ -148,6 +155,7 @@ export class TelegramProgressTracker {
     if (progress.statusText === statusText) return progress;
     progress.statusText = statusText;
     progress.holdingIndex = -1;
+    if (holdingLines) progress.holdingLines = holdingLines;
     // A scheduled or in-flight post picks up the latest text by itself.
     if (progress.showTimer || progress.posting) return progress;
     if (!progress.messageId) {

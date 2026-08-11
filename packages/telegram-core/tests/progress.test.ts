@@ -118,6 +118,60 @@ describe("Telegram progress copy", () => {
     expect(onDiscard).toHaveBeenCalledWith("99");
   });
 
+  // A holding line runs on a timer with no idea what is happening, so only a
+  // step that really is waiting on someone else may say so. The generic set
+  // used to claim slow providers over work that made no provider call.
+  it("lets a step carry its own holding lines", async () => {
+    vi.useFakeTimers();
+    const tracker = new TelegramProgressTracker();
+    const { onShow, onEdit, onDiscard } = trackerCallbacks();
+    tracker.start({
+      sessionId: "session-1",
+      chatId: "42",
+      turnId: "turn-1",
+      holdingLines: ["Still on it…"],
+      holdingIntervalMs: 1_000,
+      onShow,
+      onEdit,
+      onDiscard
+    });
+
+    await tracker.setStatus(
+      "session-1",
+      "turn-1",
+      "Checking verified fares…",
+      ["The airlines are being slow to answer. Still checking…"]
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onShow).toHaveBeenCalledWith("Checking verified fares…");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onEdit).toHaveBeenCalledWith(
+      "99",
+      "The airlines are being slow to answer. Still checking…"
+    );
+  });
+
+  it("keeps the turn's own holding lines when a step supplies none", async () => {
+    vi.useFakeTimers();
+    const tracker = new TelegramProgressTracker();
+    const { onShow, onEdit, onDiscard } = trackerCallbacks();
+    tracker.start({
+      sessionId: "session-1",
+      chatId: "42",
+      turnId: "turn-1",
+      holdingLines: ["Still on it…"],
+      holdingIntervalMs: 1_000,
+      onShow,
+      onEdit,
+      onDiscard
+    });
+
+    await tracker.setStatus("session-1", "turn-1", "Reading the route and dates…");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(onEdit).toHaveBeenCalledWith("99", "Still on it…");
+  });
+
   it("ignores steps reported for a stale turn", async () => {
     vi.useFakeTimers();
     const tracker = new TelegramProgressTracker();
