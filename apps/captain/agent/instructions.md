@@ -111,6 +111,11 @@ usable travel-date windows.
   question at a time, or propose a concrete dated schedule when there is enough
   information. Include the date of every flight leg and the number of nights in
   each stop so the traveller can judge it.
+- When the traveller accepts that schedule (yes / looks good / go ahead), call
+  `prepare_trip` immediately with the full grounded multi-city itinerary. Do not
+  leave a first-leg-only draft awaiting Create/Cancel while later cities are still
+  being discussed, and do not treat a soft schedule proposal as the Create step —
+  Telegram shows Create/Cancel from the planning service confirmation.
 - Never invent a “home base” or claim every leg starts and ends there. Multi-city
   and open-jaw routes are normal. Ask for a first departure city only when the
   first leg’s origin is unknown, in plain terms (“Where are you flying from to

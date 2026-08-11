@@ -28,7 +28,8 @@ import {
   formatActiveTripList,
   formatActiveTripLocation,
   formatTripCreationReceipt,
-  formatTripPlanConfirmation
+  formatTripPlanConfirmation,
+  isExplicitPlanConsentPrompt
 } from "./format.js";
 import { suggestedMaxStops, suggestedTripCurrency } from "./currency.js";
 import {
@@ -633,13 +634,32 @@ export class TripPlanningService {
     }
     const canonical = formatTripPlanConfirmation(draft);
     if (message.trim() === canonical.trim()) return message;
-    if (countBulletLines(message) < MIN_PLAN_RESTATEMENT_BULLETS) return message;
+    // Soft schedule proposals while Create/Cancel is pending are restatements
+    // of the plan. Leaving them through is how “Does that schedule work?” then
+    // “Yes” created a partial trip instead of showing the confirmation card.
+    if (
+      countBulletLines(message) < MIN_PLAN_RESTATEMENT_BULLETS
+      && !looksLikeScheduleProposal(message)
+    ) {
+      return message;
+    }
     console.info(JSON.stringify({
       event: "captain.trip_plan_paraphrase_replaced",
       draft_id: draft.id,
       revision: draft.revision
     }));
     return canonical;
+  }
+
+  async lastAssistantAskedForPlanConsent(userId: string): Promise<boolean> {
+    const conversation = await this.#store.getConversation(userId, 8);
+    const lastAssistant = [...conversation.recentMessages]
+      .reverse()
+      .find((entry) => entry.role === "assistant");
+    // Channel button delivery and unit tests may confirm without a stored
+    // assistant turn. Only block when the latest spoken turn was a soft ask.
+    if (!lastAssistant) return true;
+    return isExplicitPlanConsentPrompt(lastAssistant.content);
   }
 
   /**
@@ -678,6 +698,11 @@ export class TripPlanningService {
         };
       }
       if (REPLACE_CONSENT_PATTERN.test(request.trim())) {
+        // Same trap as Create/Cancel: “Yes” to a soft schedule must not archive
+        // the active trip. Only an explicit replace-consent prompt counts.
+        if (!(await this.lastAssistantAskedForPlanConsent(userId))) {
+          return null;
+        }
         const activeTrip = await this.#store.getActiveTrip(userId);
         if (activeTrip) {
           await this.#store.archiveTripForReplacement(userId, activeTrip.id, this.#now());
@@ -686,6 +711,9 @@ export class TripPlanningService {
       }
     }
     if (draft.status === "awaiting_confirmation" && isTripConfirmationText(request)) {
+      if (!(await this.lastAssistantAskedForPlanConsent(userId))) {
+        return null;
+      }
       return this.confirm(userId, draft.id, draft.revision);
     }
     // Captain's own date guesses are declinable wherever they appear, now that
@@ -716,6 +744,22 @@ export class TripPlanningService {
     }
     const decision = await this.#draftDecision(draft, userId, request, sourceMessageId);
     if (decision) return decision;
+    // Soft “Yes” after a schedule proposal must not revise or create against the
+    // open draft here — Telegram hands that turn to the agent so prepare_trip
+    // can receive the full grounded itinerary.
+    if (
+      (
+        (draft.status === "awaiting_confirmation" && isTripConfirmationText(request))
+        || (
+          draft.status === "collecting"
+          && draft.confirmationSnapshot
+          && REPLACE_CONSENT_PATTERN.test(request.trim())
+        )
+      )
+      && !(await this.lastAssistantAskedForPlanConsent(userId))
+    ) {
+      return null;
+    }
     // There is nothing to confirm on a draft that is still being collected, and
     // no proposal for a “yes” to land on. Saying so and re-asking beats revising
     // the draft into the identical question the traveller is already looking at.
@@ -832,6 +876,15 @@ function countBulletLines(message: string): number {
     .split("\n")
     .filter((line) => /^\s*[•*-]\s+\S/u.test(line))
     .length;
+}
+
+function looksLikeScheduleProposal(message: string): boolean {
+  const text = message.trim();
+  if (/does that schedule work/iu.test(text)) return true;
+  if (/before I (?:price|search|book)/iu.test(text)) return true;
+  const numberedLegs = text.match(/^\s*\d+\.\s+.+/gmu) ?? [];
+  return numberedLegs.length >= 2
+    && /(?:→|->|\bto\b)/iu.test(text);
 }
 
 /**

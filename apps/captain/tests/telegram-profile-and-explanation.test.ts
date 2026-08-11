@@ -73,7 +73,7 @@ describe("Telegram profile onboarding", () => {
   });
 
   it("welcomes a returning traveller back to an existing trip", () => {
-    const trip = "Your trip is saved and ready to search.\n\n• LOS → LHR\n\nOpen trip: https://captain.example/trip";
+    const trip = "LOS → LHR\nSunday, 6 Sep 2026 · Draft\n\nOpen trip: https://captain.example/trip";
     const welcome = returningTravellerWelcome(trip);
     expect(welcome).toBe(`Welcome back. Here’s your saved trip.\n\n${trip}`);
     expect(welcome).not.toContain("Where to next?");

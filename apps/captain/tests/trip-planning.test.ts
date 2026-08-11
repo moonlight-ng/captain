@@ -22,6 +22,7 @@ import type { TripDraftReadinessAssessor } from "../services/trip-planning/draft
 import {
   formatActiveTripList,
   formatTripPlanConfirmation,
+  isExplicitPlanConsentPrompt,
   telegramDashboardMessage,
   type ActiveTripFormatInput
 } from "../services/trip-planning/format.js";
@@ -1170,10 +1171,8 @@ describe("Captain trip planning", () => {
     const started = await planning.handleOpenDraftText(user.id, "Yes", null);
     expect(started?.status).toBe("started");
     expect(await planning.activeTripLocation(user.id)).toBe(
-      "Your trip is saved and ready to search.\n\n"
-      + "• LOS → NYC\n"
-      + "• Depart: Sunday, 17 Aug 2025\n"
-      + "• 1 traveller, Economy, At most 2 stops, USD\n\n"
+      "LOS → NYC\n"
+      + "Sunday, 17 Aug 2025 · Draft\n\n"
       + `Open trip: https://captain.example/t#test-${started?.status === "started" ? started.receipt.tripId : ""}`
     );
 
@@ -1200,6 +1199,47 @@ describe("Captain trip planning", () => {
     expect(cancelled.status).toBe("cancelled");
   });
 
+  it("does not treat Yes to a soft schedule as Create/Cancel consent", async () => {
+    const { planning, store, user } = await setup();
+    const ready = await planning.prepare(
+      user.id,
+      "Create a one-way trip from London to Paris on November 4 2026 for one adult."
+    );
+    expect(ready.status).toBe("awaiting_confirmation");
+    if (ready.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+
+    await store.appendMessage(
+      user.id,
+      "assistant",
+      [
+        "Here's the shape of it:",
+        "",
+        "1. Nov 4: London → Paris",
+        "2. Nov 8: Paris → Marseille",
+        "",
+        "Does that schedule work, or do you want to shift any of those dates before I price it out?"
+      ].join("\n"),
+      now
+    );
+
+    const softYes = await planning.handleDraftDecision(user.id, "Yes", null);
+    expect(softYes).toBeNull();
+    expect(await store.getActiveTrip(user.id)).toBeNull();
+    expect(await planning.findOpen(user.id)).toMatchObject({
+      status: "awaiting_confirmation",
+      id: ready.draft.id
+    });
+
+    expect(isExplicitPlanConsentPrompt(ready.confirmation)).toBe(true);
+    expect(isExplicitPlanConsentPrompt(
+      "Does that schedule work, or do you want to shift any of those dates?"
+    )).toBe(false);
+
+    await store.appendMessage(user.id, "assistant", ready.confirmation, now);
+    const started = await planning.handleDraftDecision(user.id, "Yes", null);
+    expect(started?.status).toBe("started");
+  });
+
   it("points Telegram at the traveller's one active trip", async () => {
     const { planning, trips, user } = await setup();
     const anambra = await trips.create(user.id, {
@@ -1213,8 +1253,11 @@ describe("Captain trip planning", () => {
     });
 
     const message = await planning.activeTripsLocation(user.id);
-    expect(message).toContain("Your trip is saved and ready to search.");
-    expect(message).toContain("• LOS → ANA");
+    expect(message).toBe(
+      "LOS → ANA\n"
+      + "Friday, 1 Aug 2025 – Friday, 8 Aug 2025 · Draft\n\n"
+      + `Open trip: https://captain.example/t#test-${anambra.trip.id}`
+    );
     const rendered = telegramDashboardMessage(message!);
     expect(rendered.links).toEqual([
       {
@@ -1463,6 +1506,19 @@ describe("Captain trip planning", () => {
       const enforced = await planning.enforceVerbatimPlanText(user.id, paraphrase);
       expect(enforced).toBe(canonical);
       expect(enforced).toContain("(default)");
+    });
+
+    it("replaces a soft schedule proposal with Create/Cancel wording", async () => {
+      const { planning, user, canonical } = await awaitingConfirmation();
+      const schedule = [
+        "Here's the shape of it, all one-stop-max flights:",
+        "",
+        "1. Nov 4: London → Paris (4 nights)",
+        "2. Nov 8: Paris → Marseille (6 nights)",
+        "",
+        "Does that schedule work, or do you want to shift any of those dates before I price it out?"
+      ].join("\n");
+      expect(await planning.enforceVerbatimPlanText(user.id, schedule)).toBe(canonical);
     });
 
     it("leaves prose about the plan alone", async () => {

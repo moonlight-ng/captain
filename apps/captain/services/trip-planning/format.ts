@@ -138,9 +138,8 @@ export type ActiveTripFormatInput = {
 
 export function formatActiveTripLocation(input: ActiveTripFormatInput): string {
   return [
-    activeTripStatusLine(input.status),
-    "",
-    ...formatTripSummaryLines(input),
+    formatActiveTripRoute(input),
+    `${formatActiveTripDates(input)} · ${label(input.status)}`,
     "",
     `Open trip: ${input.dashboardUrl}`
   ].join("\n");
@@ -151,16 +150,58 @@ export function formatActiveTripList(inputs: ActiveTripFormatInput[]): string {
     `You have ${inputs.length} saved trips:`,
     "",
     ...inputs.flatMap((input) => {
-      const route = input.legs && input.legs.length >= 2
-        ? formatLegRoute(input.legs)
-        : `${input.originAirports.join("/")} → ${input.destinationAirports.join("/")}`;
+      const route = formatActiveTripRoute(input);
       return [
         `• ${route}`,
-        `  ${formatCalendarDate(input.departureDate)} · ${label(input.status)}`,
+        `  ${formatActiveTripDates(input)} · ${label(input.status)}`,
         `Open ${route}: ${input.dashboardUrl}`
       ];
     })
   ].join("\n");
+}
+
+/**
+ * Bare “Yes” must only settle Create/Cancel or replace-consent. Soft schedule
+ * proposals (“Does that schedule work?”) are not consent — treating them as
+ * such creates a partial trip and then trips the one-trip replace prompt.
+ */
+export function isExplicitPlanConsentPrompt(message: string): boolean {
+  const text = message.trim();
+  if (!text) return false;
+  if (/^Ready to create this trip:/imu.test(text)) return true;
+  if (/Tap Create or Cancel below/iu.test(text)) return true;
+  if (/^Itinerary ready to confirm\./imu.test(text)) return true;
+  if (/Replace it with this (?:one|new\b)/iu.test(text)) return true;
+  if (/already have .+ as your active trip/iu.test(text) && /\breplace\b/iu.test(text)) {
+    return true;
+  }
+  if (/already have an active trip/iu.test(text) && /\breplace\b/iu.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+function formatActiveTripRoute(input: ActiveTripFormatInput): string {
+  return input.legs && input.legs.length >= 2
+    ? formatLegRoute(input.legs)
+    : `${input.originAirports.join("/")} → ${input.destinationAirports.join("/")}`;
+}
+
+function formatActiveTripDates(input: ActiveTripFormatInput): string {
+  const legs = input.legs ?? [];
+  if (legs.length >= 2) {
+    const start = legs[0]!.departureWindow?.start ?? legs[0]!.departureDate;
+    const end = legs.at(-1)!.departureWindow?.end
+      ?? legs.at(-1)!.departureWindow?.start
+      ?? legs.at(-1)!.departureDate;
+    return start === end
+      ? formatCalendarDate(start)
+      : `${formatCalendarDate(start)} – ${formatCalendarDate(end)}`;
+  }
+  if (input.returnDate) {
+    return `${formatCalendarDate(input.departureDate)} – ${formatCalendarDate(input.returnDate)}`;
+  }
+  return formatCalendarDate(input.departureDate);
 }
 
 export function telegramDashboardMessage(message: string): {
@@ -193,53 +234,6 @@ function stopLabel(maxStops: number): string {
 
 function label(value: string): string {
   return value.replaceAll("_", " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
-}
-
-function activeTripStatusLine(status: TripStatus): string {
-  if (status === "recommended") return "I’ve found some flights for your trip.";
-  if (status === "draft") return "Your trip is saved and ready to search.";
-  return `Your trip is ${label(status).toLowerCase()}.`;
-}
-
-function formatTripSummaryLines(input: {
-  originAirports: string[];
-  destinationAirports: string[];
-  legs?: Array<{
-    originAirports: string[];
-    destinationAirports: string[];
-    departureDate: string;
-    departureWindow?: { start: string; end: string } | undefined;
-  }> | undefined;
-  departureDate: string;
-  returnDate: string | null;
-  stayNights: number | null;
-  travellers: number;
-  cabin: TripCreationReceipt["cabin"];
-  maxStops: number;
-  currency: string;
-}): string[] {
-  const travellers = `${input.travellers} traveller${input.travellers === 1 ? "" : "s"}`;
-  const legs = input.legs ?? [];
-  const isMultiCity = legs.length >= 2;
-  return [
-    `• ${isMultiCity ? formatLegRoute(legs) : `${input.originAirports.join("/")} → ${input.destinationAirports.join("/")}`}`,
-    ...(isMultiCity
-      ? legs.map((leg, index) =>
-          `• Leg ${index + 1}: ${leg.originAirports.join("/")} → ${leg.destinationAirports.join("/")} · ${
-            leg.departureWindow
-              ? formatDateWindow(leg.departureWindow)
-              : formatCalendarDate(leg.departureDate)
-          }`
-        )
-      : [`• Depart: ${formatCalendarDate(input.departureDate)}`]),
-    ...(!isMultiCity && input.returnDate
-      ? [
-          `• Return: ${formatCalendarDate(input.returnDate)}`,
-          `• Stay: ${input.stayNights} night${input.stayNights === 1 ? "" : "s"}`
-        ]
-      : []),
-    `• ${travellers}, ${label(input.cabin)}, ${stopLabel(input.maxStops)}, ${input.currency}`
-  ];
 }
 
 function formatTripItineraryLines(input: {

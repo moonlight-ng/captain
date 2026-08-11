@@ -373,7 +373,11 @@ export default telegramChannel({
           return { kind: "trip_plan" as const, result: decision };
         }
         const activeTrip = await services.platformStore.getActiveTrip(user.id);
-        if (activeTrip?.status === "draft" && isTripConfirmationText(content)) {
+        if (
+          activeTrip?.status === "draft"
+          && isTripConfirmationText(content)
+          && await services.tripPlanning.lastAssistantAskedForPlanConsent(user.id)
+        ) {
           await services.trips.action(user.id, activeTrip.id, {
             type: "track",
             expectedVersion: activeTrip.version
@@ -383,7 +387,14 @@ export default telegramChannel({
         return null;
       });
       if (reply) {
-        if (reply.kind === "trip_confirmation_accepted") return null;
+        if (reply.kind === "trip_confirmation_accepted") {
+          const summary = await services.tripPlanning.activeTripsLocation(user.id);
+          if (summary) {
+            await services.platformStore.appendMessage(user.id, "assistant", summary, new Date());
+            await postTelegramDashboardMessage(ctx, summary);
+          }
+          return null;
+        }
         await postTripPlanResult(ctx, user.id, reply.result, {
           acknowledgeVoice: voiceTranscript !== null
         });
@@ -504,6 +515,11 @@ export default telegramChannel({
           expectedVersion: trip.status === "draft" ? trip.version : action.version
         });
         await clearCallbackButtons(ctx, query);
+        const summary = await services.tripPlanning.activeTripsLocation(user.id);
+        if (summary) {
+          await services.platformStore.appendMessage(user.id, "assistant", summary, new Date());
+          await postTelegramDashboardMessage(ctx, summary);
+        }
         return;
       }
       if (action.type === "edit") {
