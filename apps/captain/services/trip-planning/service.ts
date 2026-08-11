@@ -992,6 +992,13 @@ function completePlan(
   if (!first || !last || !departureDate || (tripType === "round_trip" && !returnDate)) {
     throw new Error("Cannot complete a trip with unresolved fields");
   }
+  // Below, only a multi-city brief carries `legs`. Reaching here with a
+  // several-leg itinerary typed as anything else silently kept leg one and
+  // dropped the rest, which is how a Marseille stop disappeared into a
+  // London–Paris trip. `effectiveTripType` guarantees it; this says so.
+  if (state.legs.length > 1 && tripType !== "multi_city" && !isReturnPair(state.legs)) {
+    throw new Error("Cannot complete a multi-leg trip as a single-leg brief");
+  }
   const travellers = state.travellers ?? { adults: 1 as const, childrenAges: [], infants: 0 as const };
   const cabin = state.cabin ?? "economy";
   const maxStops = state.maxStops ?? suggestedMaxStops(state);
@@ -1129,7 +1136,15 @@ function fillDateAssumptions(
       first.proposedDeparture = null;
     }
     const departure = selectionWindow(first)?.start ?? today;
-    if (state.legs.length < 2 && first.originAirports.length && first.destinationAirports.length) {
+    // Only a trip the traveller actually typed as a return gets a flight home
+    // invented for it. `effectiveTripType` can read round_trip off a genuine
+    // there-and-back pair, and that pair already has both legs.
+    if (
+      state.tripType === "round_trip"
+      && state.legs.length < 2
+      && first.originAirports.length
+      && first.destinationAirports.length
+    ) {
       state.legs.push({
         originAirports: [...first.destinationAirports],
         destinationAirports: [...first.originAirports],
@@ -1252,8 +1267,37 @@ function activeQuestionFor(missingFields: string[]): TripPlannerQuestion {
   return null;
 }
 
+/**
+ * The legs are the itinerary; a stated trip type is a hint about them. A
+ * `round_trip` inferred from one stray word used to outrank four legs and
+ * collapse the trip to its first flight, so a stated type only survives when
+ * the legs actually agree with it: two legs, the second reversing the first.
+ */
 function effectiveTripType(state: TripDraftState): "one_way" | "round_trip" | "multi_city" {
-  return state.tripType ?? (state.legs.length > 1 ? "multi_city" : "one_way");
+  if (state.legs.length > 1) {
+    return state.tripType === "round_trip" && isReturnPair(state.legs)
+      ? "round_trip"
+      : "multi_city";
+  }
+  return state.tripType === "multi_city" ? "one_way" : state.tripType ?? "one_way";
+}
+
+/**
+ * Two legs that are the same flight in both directions. A draft is still being
+ * filled in while this runs, so a side nobody has named yet is unknown rather
+ * than contradictory — the return leg of "Lagos to New York, back on the 24th"
+ * has no destination until the origin city arrives.
+ */
+function isReturnPair(legs: TripDraftState["legs"]): boolean {
+  if (legs.length !== 2) return false;
+  const [outbound, inbound] = legs as [typeof legs[number], typeof legs[number]];
+  return mirrors(outbound.originAirports, inbound.destinationAirports)
+    && mirrors(outbound.destinationAirports, inbound.originAirports);
+}
+
+function mirrors(left: string[], right: string[]): boolean {
+  if (left.length === 0 || right.length === 0) return true;
+  return left.length === right.length && left.every((code) => right.includes(code));
 }
 
 function exactDate(

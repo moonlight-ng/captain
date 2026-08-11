@@ -43,10 +43,15 @@ export function applyTripTurnPatch(input: {
   const patch = tripTurnPatchSchema.parse(input.patch);
   const candidate = structuredClone(prior);
   let issue: string | null = null;
+  // A route naming several legs is a claim about a whole journey and has to
+  // hold together. A single leg is a correction to one flight — mid-edit the
+  // chain is allowed to be briefly broken.
+  let statedWholeRoute = false;
 
   for (const operation of patch.operations) {
     if (operation.type === "set_route") {
       applyRoute(candidate, operation.legs);
+      statedWholeRoute ||= operation.legs.length > 1;
       continue;
     }
     if (operation.type === "set_date") {
@@ -62,6 +67,13 @@ export function applyTripTurnPatch(input: {
   }
 
   if (!issue) issue = validateStateDates(candidate, input.now, input.timeZone);
+  if (!issue && statedWholeRoute) {
+    const breaks = routeDiscontinuities(candidate.legs);
+    if (breaks.length > 0) {
+      issue = `I lost track of the route at ${breaks.join(" and ")}.`
+        + " Tell me which city comes in between and I'll rebuild it.";
+    }
+  }
   if (issue) {
     return { state: structuredClone(prior), appliedOperations: [], issue };
   }
@@ -77,6 +89,15 @@ export function emptyTripDraftState(): TripDraftState {
   return structuredClone(EMPTY_TRIP_DRAFT_STATE);
 }
 
+/**
+ * A route operation can add legs and rewrite the ones it names, but never
+ * removes one — a sloppy partial route would otherwise delete a flight the
+ * traveller had already given. Only `clear: route` empties the itinerary.
+ *
+ * Dates follow the *flight*, not the position. Inserting a city mid-itinerary
+ * shifts every later leg along by one, and matching by index then slid each
+ * date onto the wrong flight.
+ */
 function applyRoute(
   state: TripDraftState,
   legs: Array<{ originAirports: string[]; destinationAirports: string[] }>
@@ -84,23 +105,72 @@ function applyRoute(
   const prior = state.legs;
   const length = Math.max(prior.length, legs.length);
   state.legs = Array.from({ length }, (_, index) => {
-    const existing = prior[index];
+    const positional = prior[index];
     const proposed = legs[index];
-    if (!proposed && existing) return structuredClone(existing);
+    if (!proposed && positional) return structuredClone(positional);
+    // An empty value in a set operation means "not supplied", not "clear".
+    const originAirports = proposed!.originAirports.length > 0
+      ? unique(proposed!.originAirports)
+      : [...(positional?.originAirports ?? [])];
+    const destinationAirports = proposed!.destinationAirports.length > 0
+      ? unique(proposed!.destinationAirports)
+      : [...(positional?.destinationAirports ?? [])];
+    const existing = prior.find((leg) => sameFlight(leg, originAirports, destinationAirports))
+      ?? positional;
     return {
-      // An empty value in a set operation means "not supplied", not "clear".
-      originAirports: proposed!.originAirports.length > 0
-        ? unique(proposed!.originAirports)
-        : [...(existing?.originAirports ?? [])],
-      destinationAirports: proposed!.destinationAirports.length > 0
-        ? unique(proposed!.destinationAirports)
-        : [...(existing?.destinationAirports ?? [])],
+      originAirports,
+      destinationAirports,
       // A route operation cannot clear or change a date.
       departure: existing?.departure ?? null,
       arriveBy: existing?.arriveBy ?? null,
       feasibleDepartureWindow: existing?.feasibleDepartureWindow ?? null,
       proposedDeparture: existing?.proposedDeparture ?? null
     };
+  });
+}
+
+/**
+ * Whether a leg already in the draft is this same flight. A side nobody has
+ * named yet is unknown rather than different, so naming the origin of a leg
+ * that only had a destination finds it — but at least one side has to be
+ * known and agree, or every empty leg would match everything.
+ */
+function sameFlight(
+  leg: TripDraftState["legs"][number],
+  originAirports: string[],
+  destinationAirports: string[]
+): boolean {
+  const originKnown = leg.originAirports.length > 0;
+  const destinationKnown = leg.destinationAirports.length > 0;
+  if (!originKnown && !destinationKnown) return false;
+  if (originKnown && !sameAirports(leg.originAirports, originAirports)) return false;
+  if (destinationKnown && !sameAirports(leg.destinationAirports, destinationAirports)) return false;
+  return true;
+}
+
+/** Both sides known and equal. An unknown side matches nothing. */
+function sameAirports(left: string[], right: string[]): boolean {
+  return left.length > 0
+    && left.length === right.length
+    && left.every((code) => right.includes(code));
+}
+
+/**
+ * Names the seams where a route stops being a journey — a leg that departs
+ * from somewhere the previous one never reached. `validateMultiCityBrief`
+ * catches this when a trip is finally built; catching it in the draft is what
+ * stops a silently dropped city from passing as a shorter itinerary.
+ */
+function routeDiscontinuities(legs: TripDraftState["legs"]): string[] {
+  return legs.flatMap((leg, index) => {
+    const next = legs[index + 1];
+    if (!next || leg.destinationAirports.length === 0 || next.originAirports.length === 0) {
+      return [];
+    }
+    const landed = new Set(leg.destinationAirports);
+    return next.originAirports.some((code) => landed.has(code))
+      ? []
+      : [`${leg.destinationAirports.join("/")} → ${next.originAirports.join("/")}`];
   });
 }
 
@@ -391,10 +461,16 @@ function legIndexForTarget(state: TripDraftState, target: DateTarget): number {
   return Math.max(1, state.legs.length - 1);
 }
 
+/**
+ * Grows the leg list to reach `index`. The second leg of a round trip is the
+ * first one reversed, so it can be created from what is already known — but
+ * only when the traveller asked for a return. Mirroring on any date that
+ * mentioned "back" is what put a flight home on the end of a one-way trip.
+ */
 function ensureLeg(state: TripDraftState, index: number): void {
   while (state.legs.length <= index) {
     const first = state.legs[0];
-    state.legs.push(index === 1 && first
+    state.legs.push(index === 1 && first && state.tripType === "round_trip"
       ? {
           originAirports: [...first.destinationAirports],
           destinationAirports: [...first.originAirports],

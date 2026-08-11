@@ -15,7 +15,11 @@ import {
   allowedModelAirportCodes,
   orderedAirportCodesFromText
 } from "./airport-catalog.js";
-import { fallbackTripFactExtraction } from "./extractor.js";
+import {
+  datesTheReturnLeg,
+  fallbackTripFactExtraction,
+  requestsReturnFlight
+} from "./extractor.js";
 
 const WEEKDAYS = [
   "sunday",
@@ -282,7 +286,7 @@ function deterministicRoute(
 ): RoutePatchLeg[] {
   const codes = orderedAirportCodesFromText(request);
   const previous = state.legs;
-  const hasReturn = /\b(?:round[ -]?trip|return(?:ing)?|back)\b/iu.test(request);
+  const hasReturn = requestsReturnFlight(request);
   if (codes.length >= 3) {
     return codes.slice(0, 6).slice(0, -1).map((origin, index) => ({
       originAirports: [origin],
@@ -626,7 +630,10 @@ function targetForRequest(
   question: TripPlannerQuestion,
   fallbackLeg: number
 ): DateTarget {
-  if (/\b(?:return|returning|back)\b/iu.test(request) && !/\bdepart(?:ing|ure)?\b/iu.test(request)) {
+  // A date only belongs to the return leg when the traveller asked for one.
+  // Matching "back" or "return" bare sent "No return" here, and the reducer
+  // then built the mirror leg it was pointing at.
+  if (datesTheReturnLeg(request) && !/\bdepart(?:ing|ure)?\b/iu.test(request)) {
     return { field: "return" };
   }
   return targetFor(question, fallbackLeg);

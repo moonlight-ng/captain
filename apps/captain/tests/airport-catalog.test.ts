@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { METROPOLITAN_AIRPORT_GROUPS } from "@agents/flight-domain";
 
 import {
   airportCodeAtStart,
   airportCodeForLocation,
   allowedModelAirportCodes,
   countryAirportGuess,
+  knownAirportCodes,
   orderedAirportCodesFromText,
   orderedAirportMentionsFromText
 } from "../services/trip-planning/airport-catalog.js";
 import { TripPlanningService } from "../services/trip-planning/service.js";
+import { isNarrativeItineraryRequest } from "../services/trip-planning/itinerary-constraints.js";
 import {
   sanitizeModelAirportExtraction,
   type TripFactExtraction
@@ -115,5 +118,128 @@ describe("country resolution", () => {
     expect(TripPlanningService.needsItineraryPlanningConversation(
       "I loved my time in France and Japan"
     )).toBe(false);
+  });
+});
+
+/**
+ * Presence dates are bound to cities by source offset before any leg exists,
+ * so a mention that cannot be sliced back out of the original text silently
+ * attaches the wrong dates to the wrong stop.
+ */
+describe("mention source offsets", () => {
+  const sentences = [
+    "Paris in November for a wedding, then New York on December 10.",
+    "  Lagos   to    Abuja  next Saturday",
+    "I’ll be in São Paulo, then Zürich, then back to London.",
+    "from LAGOS to accra to Nairobi",
+    "Tokyo — then Singapore (two nights) — then Cape Town."
+  ];
+
+  it("returns evidence that slices back out of the original text", () => {
+    for (const sentence of sentences) {
+      for (const mention of orderedAirportMentionsFromText(sentence)) {
+        expect(sentence.slice(mention.index, mention.index + mention.evidence.length))
+          .toBe(mention.evidence);
+      }
+    }
+  });
+
+  it("returns mentions in ascending source order", () => {
+    for (const sentence of sentences) {
+      const indexes = orderedAirportMentionsFromText(sentence).map((m) => m.index);
+      expect(indexes).toEqual([...indexes].sort((left, right) => left - right));
+    }
+  });
+
+  it("keeps evidence non-empty and inside the text", () => {
+    for (const sentence of sentences) {
+      for (const mention of orderedAirportMentionsFromText(sentence)) {
+        expect(mention.evidence.length).toBeGreaterThan(0);
+        expect(mention.index).toBeGreaterThanOrEqual(0);
+        expect(mention.index + mention.evidence.length).toBeLessThanOrEqual(sentence.length);
+      }
+    }
+  });
+});
+
+/**
+ * Ordinary conversation must not resolve to airports. A false positive here
+ * does not shorten an itinerary — it hijacks a whole turn into trip planning,
+ * because the same mention counter gates all three routing predicates.
+ */
+describe("ordinary conversation is not a route", () => {
+  const conversation = [
+    "Works",
+    "Yes, that's right",
+    "Nice, thanks",
+    "That's a nice option",
+    "Let's split the difference",
+    "Same as before",
+    "Of course",
+    "Best I can do",
+    "Reading through it now",
+    "Can you split that into two messages?",
+    "What's the price range looking like?",
+    "That's a lot of stops",
+    "Cancel it please",
+    "How does the tracking work?",
+    "Sounds good to me",
+    "No return needed",
+    "I'd rather fly in the morning",
+    "Economy is fine",
+    "Just me",
+    "Make it business class",
+    "Can I change the currency?",
+    "Why is it so expensive?",
+    "Let me think about it",
+    "Send me the link again",
+    "What airlines did you check?",
+    "Is there anything cheaper?",
+    "Thanks, that's helpful",
+    "Not this time",
+    "Hold on",
+    "Try again"
+  ];
+
+  it("finds no airports in it", () => {
+    for (const message of conversation) {
+      expect({ message, codes: orderedAirportCodesFromText(message) })
+        .toEqual({ message, codes: [] });
+    }
+  });
+
+  it("does not route it into trip planning", () => {
+    for (const message of conversation) {
+      expect({ message, planning: TripPlanningService.isTripPlanningRequest(message) })
+        .toEqual({ message, planning: false });
+      expect({ message, itinerary: TripPlanningService.needsItineraryPlanningConversation(message) })
+        .toEqual({ message, itinerary: false });
+      expect({ message, narrative: isNarrativeItineraryRequest(message) })
+        .toEqual({ message, narrative: false });
+    }
+  });
+});
+
+/**
+ * A city-level code is not bookable. `airportCodeMatches` accepts a provider
+ * offer only when the requested code is the airport itself or a metropolitan
+ * code with a group, so any metro code the catalog learns without a matching
+ * group entry makes every offer for that city fail and reads as "no fares".
+ */
+describe("metropolitan overlay", () => {
+  it("keeps every metropolitan group resolvable by the catalog", () => {
+    const codes = knownAirportCodes();
+    for (const code of Object.keys(METROPOLITAN_AIRPORT_GROUPS)) {
+      expect({ code, known: codes.has(code) }).toEqual({ code, known: true });
+    }
+  });
+
+  it("emits no city-level code the providers cannot match", () => {
+    // Adding a metro code to the catalog means adding its group too. This list
+    // is the tripwire: change it only alongside METROPOLITAN_AIRPORT_GROUPS.
+    const metropolitan = [...knownAirportCodes()]
+      .filter((code) => code in METROPOLITAN_AIRPORT_GROUPS)
+      .sort();
+    expect(metropolitan).toEqual(["LON", "NYC", "PAR", "TYO"]);
   });
 });

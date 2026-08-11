@@ -747,6 +747,51 @@ describe("Captain trip planning", () => {
     ]);
   });
 
+  // The traveller wrote "No return." and got a flight home anyway: the words
+  // set tripType to round_trip, which outranked the leg count, collapsed the
+  // itinerary to its first flight, and had the reducer mirror it.
+  it("does not invent a flight home for a one-way multi-city trip", async () => {
+    const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+    const result = await planning.prepare(
+      user.id,
+      "London to Paris on Nov 4, Paris to New York on Dec 9, "
+      + "New York to Lagos on Dec 20. No return. Just me."
+    );
+    expect(result.status).toBe("awaiting_confirmation");
+    if (result.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+
+    expect(result.draft.state.tripType).toBe("multi_city");
+    expect(result.draft.state.legs.map((leg) => [
+      leg.originAirports, leg.destinationAirports
+    ])).toEqual([
+      [["LON"], ["PAR"]],
+      [["PAR"], ["NYC"]],
+      [["NYC"], ["LOS"]]
+    ]);
+
+    const brief = result.draft.confirmationSnapshot!.input.brief;
+    expect(brief.tripType).toBe("multi_city");
+    expect(brief.legs).toHaveLength(3);
+    expect(brief.destinationAirports).toEqual(["LOS"]);
+    expect(brief.stayNights).toBeNull();
+    // Nothing flies back to where the traveller started.
+    expect(brief.legs!.some((leg) => leg.destinationAirports.includes("LON"))).toBe(false);
+    expect(result.draft.confirmationSnapshot!.returnDate).toBeNull();
+  });
+
+  it("reads a genuine there-and-back pair as a round trip", async () => {
+    const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+    const result = await planning.prepare(
+      user.id,
+      "Round trip from Lagos to New York departing 17 September 2026 "
+      + "and returning 24 September 2026 for one adult."
+    );
+    expect(result.status).toBe("awaiting_confirmation");
+    if (result.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(result.draft.confirmationSnapshot!.input.brief.tripType).toBe("round_trip");
+    expect(result.draft.confirmationSnapshot!.returnDate).toBe("2026-09-24");
+  });
+
   it("scopes a follow-up to the pending return leg without overwriting departure", async () => {
     const { planning, user } = await setup();
     const first = await planning.prepare(

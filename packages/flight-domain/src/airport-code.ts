@@ -1,4 +1,11 @@
-const METROPOLITAN_AIRPORTS: Readonly<Record<string, readonly string[]>> = {
+/**
+ * Metropolitan codes are a curated overlay on real airports, not data. Every
+ * code Captain's catalog can emit that is not itself an airport must appear
+ * here: `airportCodeMatches` is the gate every provider uses to accept an
+ * offer, so a metro code without a group silently discards every result for
+ * that city and the traveller is told there are no fares.
+ */
+export const METROPOLITAN_AIRPORT_GROUPS: Readonly<Record<string, readonly string[]>> = {
   NYC: ["JFK", "EWR", "LGA", "NYC"],
   LON: ["LHR", "LGW", "STN", "LCY", "LTN", "LON"],
   PAR: ["CDG", "ORY", "PAR"],
@@ -19,7 +26,7 @@ export function airportCodeMatches(
   return requestedCodes.some((requestedCode) => {
     const requested = requestedCode.trim().toUpperCase();
     if (requested === actual) return true;
-    const requestedGroup = METROPOLITAN_AIRPORTS[requested];
+    const requestedGroup = METROPOLITAN_AIRPORT_GROUPS[requested];
     if (requestedGroup?.includes(actual)) return true;
     return false;
   });

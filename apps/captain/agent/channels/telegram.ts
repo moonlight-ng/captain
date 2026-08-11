@@ -55,6 +55,7 @@ import {
 } from "../../services/trip-planning/format.js";
 import { tripRouteEcho } from "../../services/trip-planning/route-echo.js";
 import { explainNotification } from "../../services/trips/explain.js";
+import { clearPrepareTripTurn } from "../tools/prepare_trip.js";
 
 const MAX_VOICE_BYTES = 20 * 1024 * 1024;
 const credentials = {
@@ -714,9 +715,11 @@ export default telegramChannel({
       await postTelegramAssistantMessage(channel.telegram, message, reviewTrip);
     },
     async "turn.completed"(_data, _channel, ctx) {
+      clearPrepareTripTurn(ctx.session.id, ctx.session.turn.id);
       await clearAgentProgress(ctx.session.id);
     },
     async "turn.failed"(_data, channel, ctx) {
+      clearPrepareTripTurn(ctx.session.id, ctx.session.turn.id);
       await clearAgentProgress(ctx.session.id);
       await channel.telegram.post(PROCESSING_FAILURE_TEXT);
     }

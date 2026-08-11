@@ -213,6 +213,15 @@ export function airportMarket(code: string): AirportMarket | null {
   return airport ? { code: normalized, ...airport } : null;
 }
 
+/**
+ * Every code this catalog can resolve a traveller's words to. Exposed so the
+ * metropolitan-overlay invariant can be asserted: a city-level code that no
+ * provider recognises passes planning and then discards every offer.
+ */
+export function knownAirportCodes(): ReadonlySet<string> {
+  return new Set([...Object.keys(AIRPORTS), ...Object.values(ALL_LOCATION_CODES)]);
+}
+
 export function airportCodeForLocation(value: string): string | null {
   const trimmed = value.trim();
   if (/^[A-Z]{3}$/u.test(trimmed)) return trimmed;
