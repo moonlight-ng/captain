@@ -569,7 +569,14 @@ export class TripPlanningService {
     userId: string,
     message: string
   ): Promise<{ message: string; createdTrip: boolean }> {
-    if (!CREATION_SUCCESS_PATTERNS.some((pattern) => pattern.test(message))) {
+    // Exact receipt copy matches CREATION_SUCCESS_PATTERNS. Wrapped or lightly
+    // edited receipts still start from "Itinerary ready to confirm." somewhere
+    // in the body and name the trip id in the dashboard URL.
+    const itineraryReceipt = /(?:^|\n)Itinerary ready to confirm\./iu.test(message);
+    if (
+      !CREATION_SUCCESS_PATTERNS.some((pattern) => pattern.test(message))
+      && !itineraryReceipt
+    ) {
       return { message, createdTrip: false };
     }
     const tripId = UUID_PATTERN.exec(message)?.[0] ?? null;
@@ -602,6 +609,9 @@ export class TripPlanningService {
     const trimmed = message.trim();
     if (trimmed === createdMessage) return { message, createdTrip: true };
     if (trimmed === reusedMessage) return { message, createdTrip: false };
+    if (itineraryReceipt && trimmed.includes(trip.id)) {
+      return { message: createdMessage, createdTrip: true };
+    }
     return { message: UNGROUNDED_CREATION_MESSAGE, createdTrip: false };
   }
 

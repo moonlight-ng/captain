@@ -556,6 +556,10 @@ describe("Captain trip planning", () => {
       .resolves.toEqual({ message: started.message, createdTrip: true });
     await expect(planning.groundAssistantMessage(
       user.id,
+      `All set!\n\n${started.message}\n\nAnything else?`
+    )).resolves.toEqual({ message: started.message, createdTrip: true });
+    await expect(planning.groundAssistantMessage(
+      user.id,
       `Your trip has been set up. trip reference: ${started.receipt.tripId}`
     )).resolves.toEqual({
       message: "I couldn’t verify a trip-creation receipt. Send /trip to check your trip.",

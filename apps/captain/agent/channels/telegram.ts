@@ -692,23 +692,10 @@ export default telegramChannel({
         }
         await services.platformStore.appendMessage(userId, "assistant", message, new Date());
       }
-      if (reviewTrip) {
-        const rendered = telegramDashboardMessage(message);
-        const dashboardUrl = rendered.links[0]?.url;
-        if (dashboardUrl) {
-          await channel.telegram.post({
-            text: rendered.text,
-            reply_markup: tripPlanReviewReplyMarkup({
-              tripId: reviewTrip.id,
-              version: reviewTrip.version,
-              status: reviewTrip.status,
-              dashboardUrl
-            })
-          });
-          return;
-        }
-      }
-      await channel.telegram.post(message);
+      // Receipt and /trip-style replies carry dashboard URLs in the body. Always
+      // lift those into buttons — a plain post leaves "Open trip: https://…"
+      // visible and skips Confirm/Review when the createdTrip gate misses.
+      await postTelegramAssistantMessage(channel.telegram, message, reviewTrip);
     },
     async "turn.completed"(_data, _channel, ctx) {
       await clearAgentProgress(ctx.session.id);
@@ -1006,21 +993,62 @@ async function postTelegramDashboardMessage(
   ctx: TelegramContext,
   message: string
 ): Promise<void> {
-  const rendered = telegramDashboardMessage(message);
-  if (rendered.links.length === 0) {
-    await ctx.telegram.post(message);
+  await postTelegramAssistantMessage(ctx.telegram, message, null);
+}
+
+async function postTelegramAssistantMessage(
+  telegram: Pick<TelegramContext["telegram"], "post">,
+  message: string,
+  reviewTrip: Pick<Trip, "id" | "version" | "status"> | null
+): Promise<void> {
+  const rendered = renderTelegramAssistantMessage(message, reviewTrip);
+  if (!rendered.replyMarkup) {
+    await telegram.post(rendered.text);
     return;
   }
-  await ctx.telegram.post({
+  await telegram.post({
     text: rendered.text,
     link_preview_options: { is_disabled: true },
-    reply_markup: {
-      inline_keyboard: rendered.links.map((link) => [{
-        text: link.text,
-        url: link.url
-      }])
-    }
+    reply_markup: rendered.replyMarkup
   });
+}
+
+/**
+ * Turns dashboard URLs embedded in assistant copy into Telegram buttons.
+ * Draft creation receipts get Confirm + Review; everything else with an
+ * Open-trip link gets a URL button and the raw link is stripped from the text.
+ */
+export function renderTelegramAssistantMessage(
+  message: string,
+  reviewTrip: Pick<Trip, "id" | "version" | "status"> | null
+): {
+  text: string;
+  replyMarkup: ReturnType<typeof tripPlanReviewReplyMarkup> | {
+    inline_keyboard: Array<Array<{ text: string; url: string }>>;
+  } | null;
+} {
+  const rendered = telegramDashboardMessage(message);
+  if (rendered.links.length === 0) {
+    return { text: message, replyMarkup: null };
+  }
+  const dashboardUrl = rendered.links[0]!.url;
+  if (reviewTrip?.status === "draft") {
+    return {
+      text: rendered.text,
+      replyMarkup: tripPlanReviewReplyMarkup({
+        tripId: reviewTrip.id,
+        version: reviewTrip.version,
+        status: reviewTrip.status,
+        dashboardUrl
+      })
+    };
+  }
+  return {
+    text: rendered.text,
+    replyMarkup: {
+      inline_keyboard: rendered.links.map((link) => [{ text: link.text, url: link.url }])
+    }
+  };
 }
 
 /**

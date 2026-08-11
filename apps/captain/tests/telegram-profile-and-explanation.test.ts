@@ -19,9 +19,11 @@ import {
   CAPTAIN_TRIPS_COMMAND,
   CAPTAIN_VOICE_TURN_CONTEXT,
   promoteVoiceTranscriptToTelegramTurn,
+  renderTelegramAssistantMessage,
   repliedToTelegramMessageId,
   returningTravellerWelcome,
-  telegramCommandName
+  telegramCommandName,
+  tripPlanReviewReplyMarkup
 } from "../agent/channels/telegram.js";
 import {
   explainNotification,
@@ -98,6 +100,51 @@ describe("Telegram profile onboarding", () => {
     expect(telegramCommandName("/trips please")).toBeNull();
     expect(telegramCommandName("show /trips")).toBeNull();
     expect(telegramCommandName("September 6")).toBeNull();
+  });
+
+  it("lifts Open trip links into buttons even without a draft review trip", () => {
+    const message = [
+      "Itinerary ready to confirm.",
+      "",
+      "LON → PAR → TYO → NYC",
+      "Leg 1 · LON → PAR · Sunday, 1 Nov 2026",
+      "",
+      "Open trip: https://captain.example/trip/2d50a766-f60d-464e-8643-974ff50be8fe#access=v1.token"
+    ].join("\n");
+    expect(renderTelegramAssistantMessage(message, null)).toEqual({
+      text: [
+        "Itinerary ready to confirm.",
+        "",
+        "LON → PAR → TYO → NYC",
+        "Leg 1 · LON → PAR · Sunday, 1 Nov 2026",
+        ""
+      ].join("\n").trimEnd(),
+      replyMarkup: {
+        inline_keyboard: [[{
+          text: "Open trip",
+          url: "https://captain.example/trip/2d50a766-f60d-464e-8643-974ff50be8fe#access=v1.token"
+        }]]
+      }
+    });
+  });
+
+  it("uses Confirm and Review for a draft creation receipt", () => {
+    const tripId = "2d50a766-f60d-464e-8643-974ff50be8fe";
+    const dashboardUrl = `https://captain.example/trip/${tripId}#access=v1.token`;
+    const message = `Itinerary ready to confirm.\n\nLON → PAR\n\nOpen trip: ${dashboardUrl}`;
+    expect(renderTelegramAssistantMessage(message, {
+      id: tripId,
+      version: 1,
+      status: "draft"
+    })).toEqual({
+      text: "Itinerary ready to confirm.\n\nLON → PAR",
+      replyMarkup: tripPlanReviewReplyMarkup({
+        tripId,
+        version: 1,
+        status: "draft",
+        dashboardUrl
+      })
+    });
   });
 
   it("uses profile as the single user-facing account command", () => {
