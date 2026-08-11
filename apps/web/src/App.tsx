@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, Fragment, type Dispatch, type Set
 
 import {
   ApiError,
-  canonicalFlightHref,
   getProfile,
   getSession,
   getTripLegSearch,
@@ -22,10 +21,10 @@ import {
   type BrowsePreferences,
   type LegSearchSnapshot,
   type RankingMode,
-  type Segment,
   type TravellerProfile,
   type TrackedPriceHistory,
   type TripPayload,
+  type TripCity,
   type TripCityLeg,
   type VerifiedOffer,
   type Watch
@@ -38,7 +37,6 @@ import {
   dateLabel,
   duration,
   filterChips,
-  formatDurationSeconds,
   formatMoney,
   isMixed,
   label,
@@ -54,6 +52,7 @@ import {
 } from "./format";
 import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./components/icons";
 import { FilterSheet } from "./components/FilterSheet";
+import { FlightTimeline } from "./components/FlightTimeline";
 import { PriceChart, TrackedFlightCard } from "./components/TrackedFlight";
 import { feedPostsFromActivity, withFeedUpdateAction } from "./feed-posts";
 import { CaptainFeedPosts } from "./components/CaptainFeedPosts";
@@ -321,21 +320,6 @@ export function App() {
     };
   }, [trip?.id, legSearchPollKey]);
 
-  // A legacy nested flight link can become canonical once its itinerary key
-  // is present in a graph-backed leg snapshot. Replace the URL so copied links
-  // no longer carry private trip identity.
-  useEffect(() => {
-    if (!watchlistFocus || !tripData?.latestSearches) return;
-    const canonical = Object.values(tripData.latestSearches).some((snapshot) =>
-      snapshot.flights.some((flight) => flight.key === watchlistFocus.itineraryKey)
-    );
-    if (!canonical) return;
-    const href = canonicalFlightHref(watchlistFocus.itineraryKey);
-    window.history.replaceState(null, "", href);
-    setWatchlistFocus(null);
-    setPage("flight");
-  }, [tripData?.latestSearches, watchlistFocus?.itineraryKey]);
-
   useEffect(() => {
     if ((!searching && watch?.status !== "active") || !trip) return;
     let cancelled = false;
@@ -504,6 +488,31 @@ export function App() {
       <CanonicalFlightPage
         flightKey={flightKey}
         onNavigate={navigate}
+        onSelected={(legId, selectedFlightKey) => {
+          const selectedAt = new Date().toISOString();
+          setTripData((current) => current ? {
+            ...current,
+            legs: (current.legs ?? []).map((item) => item.id === legId
+              ? { ...item, selectedFlightKey }
+              : item),
+            activity: [
+              {
+                id: `local-leg-select-${legId}-${selectedAt}`,
+                eventType: "trip_leg_flight_selected",
+                payload: { legId, flightKey: selectedFlightKey },
+                createdAt: selectedAt,
+                body: null,
+                channel: "web",
+                notificationId: null,
+                sourceMessageId: null
+              },
+              ...(current.activity ?? []).filter((item) =>
+                !(item.eventType === "trip_leg_flight_selected"
+                  && item.payload.legId === legId)
+              )
+            ]
+          } : current);
+        }}
         onBack={() => {
           if ((window.history.state as { captainNavigation?: boolean } | null)?.captainNavigation) {
             window.history.back();
@@ -600,6 +609,67 @@ export function App() {
         />
       </main>
     );
+  }
+
+  if (trip && multiCityShared && watchlistFocus?.view === "detail") {
+    const flightKey = watchlistFocus.itineraryKey;
+    const tripFlightContext = tripLegFlightContext(
+      trip.id,
+      multiCityShared.cities,
+      multiCityShared.legs,
+      multiCityShared.latestSearches,
+      flightKey
+    );
+    const knownMultiCityFlight = Boolean(tripFlightContext) || Object.values(multiCityShared.latestSearches)
+      .some((snapshot) => snapshot.flights.some((flight) => flight.key === flightKey));
+    if (knownMultiCityFlight) {
+      return (
+        <CanonicalFlightPage
+          flightKey={flightKey}
+          tripContext={tripFlightContext}
+          onNavigate={navigate}
+          onSelected={(legId, selectedFlightKey) => {
+            const selectedAt = new Date().toISOString();
+            setTripData((current) => current ? {
+              ...current,
+              legs: (current.legs ?? []).map((item) => item.id === legId
+                ? { ...item, selectedFlightKey }
+                : item),
+              activity: [
+                {
+                  id: `local-leg-select-${legId}-${selectedAt}`,
+                  eventType: "trip_leg_flight_selected",
+                  payload: { legId, flightKey: selectedFlightKey },
+                  createdAt: selectedAt,
+                  body: null,
+                  channel: "web",
+                  notificationId: null,
+                  sourceMessageId: null
+                },
+                ...(current.activity ?? []).filter((item) =>
+                  !(item.eventType === "trip_leg_flight_selected"
+                    && item.payload.legId === legId)
+                )
+              ]
+            } : current);
+            navigate(tripHref(trip.id));
+            setTab("flights");
+          }}
+          onBack={() => {
+            if (
+              (window.history.state as { captainNavigation?: boolean; captainFlight?: boolean } | null)
+                ?.captainNavigation
+              || (window.history.state as { captainFlight?: boolean } | null)?.captainFlight
+            ) {
+              window.history.back();
+              return;
+            }
+            window.history.replaceState(null, "", tripHref(trip.id));
+            setWatchlistFocus(null);
+          }}
+        />
+      );
+    }
   }
 
   const emptySearch = {
@@ -797,6 +867,7 @@ export function App() {
                   {multiCityShared ? (
                     <>
                       <MultiCityPlanSummary
+                        trip={multiCityShared.trip}
                         cities={multiCityShared.cities}
                         legs={multiCityShared.legs}
                       />
@@ -1215,52 +1286,6 @@ function BookHandoff({
   );
 }
 
-function FlightTimeline({ segments }: { segments: Segment[] }) {
-  return (
-    <ol className="flight-timeline">
-      {segments.map((segment, index) => {
-        const next = segments[index + 1];
-        const travelSeconds = Math.max(
-          0,
-          (Date.parse(segment.arrival) - Date.parse(segment.departure)) / 1000
-        );
-        const layoverMs = next
-          ? Date.parse(next.departure) - Date.parse(segment.arrival)
-          : null;
-        const showLayover = layoverMs !== null && Number.isFinite(layoverMs) && layoverMs > 0;
-        return (
-          <li key={`${segment.flightNumber}-${segment.departure}`} className="timeline-leg">
-            <div className="timeline-node">
-              <strong>{clockLabel(segment.departure)}</strong>
-              <span className="timeline-dot" aria-hidden="true" />
-              <div className="timeline-node-body">
-                <b>{segment.origin}</b>
-              </div>
-            </div>
-            <div className="timeline-rail">
-              <span className="timeline-rail-line" aria-hidden="true" />
-              <p className="timeline-travel">Travel {formatDurationSeconds(travelSeconds)}</p>
-            </div>
-            <div className="timeline-node">
-              <strong>{clockLabel(segment.arrival)}</strong>
-              <span className="timeline-dot" aria-hidden="true" />
-              <div className="timeline-node-body">
-                <b>{segment.destination}</b>
-                <small>{segment.airline} · {segment.flightNumber}</small>
-              </div>
-            </div>
-            {showLayover && (
-              <p className="timeline-layover">
-                {formatDurationSeconds(layoverMs / 1000)} layover · {segment.destination}
-              </p>
-            )}
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
-
 function PeerPricePlot({
   comparison,
   currency
@@ -1623,4 +1648,33 @@ function writeWatchedOfferCache(tripId: string, cache: Record<string, VerifiedOf
   } catch {
     /* ignore quota / private mode failures */
   }
+}
+
+/** Resolve which trip leg a flight belongs to when opening `/trip/:id/flight/:key`. */
+function tripLegFlightContext(
+  tripId: string,
+  cities: TripCity[],
+  legs: TripCityLeg[],
+  latestSearches: Record<string, LegSearchSnapshot>,
+  flightKey: string
+): {
+  tripId: string;
+  legId: string;
+  routeLabel: string;
+  selected: boolean;
+} | null {
+  const selectedLeg = legs.find((leg) => leg.selectedFlightKey === flightKey) ?? null;
+  const leg = selectedLeg ?? legs.find((candidate) =>
+    latestSearches[candidate.id]?.flights.some((flight) => flight.key === flightKey)
+  ) ?? null;
+  if (!leg) return null;
+  const origin = cities.find((city) => city.id === leg.originCityId);
+  const destination = cities.find((city) => city.id === leg.destinationCityId);
+  if (!origin || !destination) return null;
+  return {
+    tripId,
+    legId: leg.id,
+    routeLabel: `${origin.label} → ${destination.label}`,
+    selected: leg.selectedFlightKey === flightKey
+  };
 }

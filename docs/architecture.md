@@ -133,8 +133,12 @@ even if older rows exist.
 `captain_update` (exact outbound text + `notification_id`) for chat history.
 The traveller feed shows lifecycle trip events only — not the Telegram message
 bodies. Immediate checkpoint acknowledgements wake the worker through the shared
-PostgreSQL notification channel. Conversational tool turns keep ownership of
-their own Telegram reply and therefore skip the second outbox acknowledgement.
+PostgreSQL notification channel and are delivered **before** the worker starts
+provider search work in the same tick, so the traveller gets content as soon as
+a job begins rather than after the first search finishes. Conversational tool
+turns keep ownership of their own Telegram reply and therefore skip the second
+outbox acknowledgement. When Captain needs to go do work, it leaves a response
+first so the traveller is never staring at silence while a job runs.
 `messages` remains the conversation
 transcript and is never mirrored wholesale into `trip_events`. Material brief
 changes write `trip_plan_changed` (not every cosmetic patch). Ops kinds such as

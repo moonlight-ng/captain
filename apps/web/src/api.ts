@@ -25,13 +25,14 @@ export function initializeAccessToken(): boolean {
 /**
  * One flight inside a trip. Keyed by itinerary rather than offer id so the link
  * survives the re-checks that mint fresh offer ids for the same flight.
+ * Multi-city results open here so Select & watch stays tied to the trip slot.
  */
 export function flightHref(tripId: string, itineraryKey: string, mode?: string): string {
   const path = `/trip/${encodeURIComponent(tripId)}/flight/${encodeURIComponent(itineraryKey)}`;
   return withAccess(mode ? `${path}?${new URLSearchParams({ mode }).toString()}` : path);
 }
 
-/** The canonical flight URL contains no private trip identity. */
+/** The public share URL contains no private trip identity. */
 export function canonicalFlightHref(flightKey: string): string {
   // Never carry a legacy bearer fragment onto a URL intended for sharing.
   return `/flight/${encodeURIComponent(flightKey)}`;

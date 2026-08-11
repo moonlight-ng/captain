@@ -7,9 +7,10 @@ import { requireCaptainUser } from "../lib/principal.js";
 export default defineTool({
   description: [
     "Create the exact confirmed trip draft once.",
-    "Call only after the traveller confirms the latest revision.",
+    "Call only after the traveller confirms the latest awaiting_confirmation revision",
+    "(Create button, or a clear yes/confirm reply).",
     "A successful result contains a persisted trip receipt; return its message verbatim.",
-    "Never claim creation without that receipt."
+    "Never claim creation without that receipt, and never call this to skip Create/Cancel."
   ].join(" "),
   inputSchema: z.object({
     draftId: z.uuid(),

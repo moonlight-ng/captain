@@ -673,6 +673,19 @@ export default telegramChannel({
           grounded.message
         );
         message = reviewCaptainMessage(verbatim);
+        // Agent path for prepare_trip: attach Create/Cancel only when this turn
+        // is the plan review itself. An open awaiting draft must not decorate
+        // an unrelated follow-up question with those buttons.
+        if (draft?.status === "awaiting_confirmation" && draft.confirmationSnapshot) {
+          const confirmation = formatTripPlanConfirmation(draft);
+          if (
+            message.trim() === confirmation.trim()
+            || hasSameTripConfirmationFacts(confirmation, message)
+          ) {
+            await postTripConfirmationOnce(channel.telegram, userId, draft, message);
+            return;
+          }
+        }
         const activeTrip = await services.platformStore.getActiveTrip(userId);
         if (activeTrip?.status === "draft" && grounded.createdTrip) {
           reviewTrip = activeTrip;
@@ -866,12 +879,9 @@ async function postTripPlanResult(
   }
   parts = parts.map(reviewCaptainMessage);
   if (result.status === "awaiting_confirmation") {
-    const saved = await services.tripPlanning.confirm(
-      userId,
-      result.draft.id,
-      result.draft.revision
-    );
-    await postTripPlanResult(ctx, userId, saved, options);
+    // Create/Cancel is the consent step. Auto-creating here skipped the command
+    // buttons and jumped straight to a bare receipt link.
+    await postTripConfirmationOnce(ctx.telegram, userId, result.draft, parts[0]!);
     return;
   }
   for (const part of parts) {
@@ -903,14 +913,14 @@ async function recoverUndeliveredTripConfirmation(
   const services = await getCaptainServices();
   const draft = await services.tripPlanning.findOpen(userId);
   if (draft?.status !== "awaiting_confirmation") return;
-  const saved = await services.tripPlanning.confirm(userId, draft.id, draft.revision);
-  if (saved.status !== "started") return;
-  const rendered = telegramDashboardMessage(saved.message);
-  await telegram.post({
-    text: rendered.text,
-    reply_markup: tripPlanReviewReplyMarkup(saved.receipt)
-  });
-  await services.platformStore.appendMessage(userId, "assistant", saved.message, new Date());
+  // Re-deliver Create/Cancel — do not silently create the trip because a
+  // session-limit interrupt ate the confirmation turn.
+  await postTripConfirmationOnce(
+    telegram,
+    userId,
+    draft,
+    formatTripPlanConfirmation(draft)
+  );
 }
 
 async function postTripConfirmationOnce(

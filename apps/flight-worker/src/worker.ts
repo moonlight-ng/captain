@@ -74,6 +74,10 @@ export class FlightWorker {
       }
       this.#lastTickHadDueWork = true;
       const maintenance = await this.#store.maintainTracking(now);
+      // Progress acks (plan confirmed, pause/resume, …) must leave the chat
+      // before provider search work starts. Otherwise the traveller waits the
+      // full first-search latency for the message that says work has begun.
+      let notified = await this.#deliverPending(now);
       const scheduled = this.#trackingEnabled
         ? await this.#store.scheduleDueSearchRuns(now, this.#freshnessMs, 100)
         : 0;
@@ -92,12 +96,8 @@ export class FlightWorker {
           processed += runs.length;
         }
       }
-      const deliveryNow = new Date(Math.max(now.getTime(), Date.now()));
-      const notifications = await this.#store.listPendingNotifications(deliveryNow, 20);
-      let notified = 0;
-      for (const notification of notifications) {
-        if (await this.#deliver(notification, deliveryNow)) notified += 1;
-      }
+      // Search completion may enqueue results digests; deliver those after work.
+      notified += await this.#deliverPending(now);
       logEvent("info", "flight_worker.tick_completed", {
         scheduled,
         processed,
@@ -225,6 +225,16 @@ export class FlightWorker {
         duration_ms: Date.now() - startedAt
       });
     }
+  }
+
+  async #deliverPending(now: Date): Promise<number> {
+    const deliveryNow = new Date(Math.max(now.getTime(), Date.now()));
+    const notifications = await this.#store.listPendingNotifications(deliveryNow, 20);
+    let notified = 0;
+    for (const notification of notifications) {
+      if (await this.#deliver(notification, deliveryNow)) notified += 1;
+    }
+    return notified;
   }
 
   async #deliver(notification: CaptainNotification, now: Date): Promise<boolean> {

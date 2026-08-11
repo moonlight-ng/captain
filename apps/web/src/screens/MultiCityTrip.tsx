@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode, type UIEvent } from "react";
 
-import { canonicalFlightHref, tripLegHref } from "../api";
+import { flightHref, tripLegHref } from "../api";
+import { airlineLabel as catalogAirlineName } from "../airline-catalog";
 import { CaptainFeedPosts } from "../components/CaptainFeedPosts";
 import { ChevronRightIcon, FilterIcon, RefreshIcon } from "../components/icons";
 import {
@@ -18,11 +19,14 @@ import {
 } from "../domain";
 import { activityFeedLine, feedPostsFromActivity, withFeedUpdateAction } from "../feed-posts";
 import {
+  calendarDayOffset,
+  clockLabel,
   countFilters,
   dateLabel,
   dateRangeLabel,
   filterChips,
   formatMoney,
+  label,
   sortLabel
 } from "../format";
 import {
@@ -97,14 +101,15 @@ export function MultiCityTripOverview(props: SharedTripProps) {
 
 export function MultiCityPlanSummary({
   cities: unsortedCities,
-  legs: unsortedLegs
-}: Pick<SharedTripProps, "cities" | "legs">) {
+  legs: unsortedLegs,
+  trip
+}: Pick<SharedTripProps, "cities" | "legs" | "trip">) {
   const cities = sort(unsortedCities);
   const legs = sort(unsortedLegs);
 
   return (
     <header className="plan-summary">
-      <p>Confirm date</p>
+      <p>{label(trip.status)}</p>
       <p>
         {cities.length} {cities.length === 1 ? "city" : "cities"}
         {" · "}
@@ -224,7 +229,7 @@ export function MultiCityFeed(props: FeedTripProps) {
     recommendationFlight
       ? {
         label: "Open flight",
-        onClick: () => props.onNavigate(canonicalFlightHref(recommendationFlight.key))
+        onClick: () => props.onNavigate(flightHref(props.trip.id, recommendationFlight.key))
       }
       : undefined
   );
@@ -245,7 +250,7 @@ export function MultiCityFeed(props: FeedTripProps) {
           {watching.length > 0 ? (
             <WatchingFeed
               items={watching}
-              onOpen={(flightKey) => props.onNavigate(canonicalFlightHref(flightKey))}
+              onOpen={(flightKey) => props.onNavigate(flightHref(props.trip.id, flightKey))}
             />
           ) : null}
 
@@ -306,32 +311,53 @@ function WatchingFeed({
         aria-label={carousel ? "Watched flights" : "Watched flight"}
         onScroll={carousel ? onScroll : undefined}
       >
-        {items.map(({ leg, flight, offer, origin, destination }) => (
-          <button
-            type="button"
-            className="recommendation-card feed-watching-card"
-            key={leg.id}
-            onClick={() => onOpen(flight.key)}
-          >
-            <div className="card-top">
-              <span className="mode-label">
-                {origin?.label ?? "Origin"} → {destination?.label ?? "Destination"}
-              </span>
-              <span className="pill">Watching</span>
-            </div>
-            <strong className="price">
-              {offer ? formatMoney(Number(offer.priceAmount), offer.currency) : "Fare unavailable"}
-            </strong>
-            <div className="metrics">
-              <span>{flight.primaryAirlineCode}</span>
-              <span className="metrics-emphasis">{stopLabel(flight.stops)}</span>
-              <span className="metrics-emphasis">{dateLabel(flight.departureDate)}</span>
-            </div>
-            <div className="metrics">
-              <span>{flightSchedule(flight)}</span>
-            </div>
-          </button>
-        ))}
+        {items.map(({ leg, flight, offer, origin, destination }) => {
+          const first = flight.segments[0];
+          const last = flight.segments.at(-1);
+          const dayOffset = first && last ? calendarDayOffset(first.departure, last.arrival) : 0;
+          return (
+            <button
+              type="button"
+              className="recommendation-card feed-watching-card"
+              key={leg.id}
+              onClick={() => onOpen(flight.key)}
+            >
+              <div className="card-top">
+                <span className="mode-label">
+                  {origin?.label ?? "Origin"} → {destination?.label ?? "Destination"}
+                </span>
+                <span className="feed-watching-price">
+                  {offer ? formatMoney(Number(offer.priceAmount), offer.currency) : "—"}
+                </span>
+              </div>
+              <div
+                className="feed-watching-route"
+                aria-label={`${first?.origin ?? flight.origin} to ${last?.destination ?? flight.destination}`}
+              >
+                <div className="flight-card-endpoint">
+                  <strong>{first ? clockLabel(first.departure) : "—"}</strong>
+                  <span>{first?.origin ?? flight.origin}</span>
+                </div>
+                <div className="flight-card-path" aria-hidden="true">
+                  <span>{durationLabel(flight.durationMinutes)}</span>
+                  <i />
+                  <span>{stopLabel(flight.stops)}</span>
+                </div>
+                <div className="flight-card-endpoint is-arrival">
+                  <strong>
+                    {last ? clockLabel(last.arrival) : "—"}
+                    {dayOffset > 0 ? <sup>+{dayOffset}</sup> : null}
+                  </strong>
+                  <span>{last?.destination ?? flight.destination}</span>
+                </div>
+              </div>
+              <div className="feed-watching-footer">
+                <span>{flight.primaryAirlineCode} · {dateLabel(flight.departureDate)}</span>
+                <span className="pill">Watching</span>
+              </div>
+            </button>
+          );
+        })}
       </div>
       {carousel ? (
         <div className="feed-watching-dots" role="tablist" aria-label="Watched flight pages">
@@ -421,7 +447,12 @@ function LegCard({
           )}
         </button>
 
-        {result ? (
+        {leg.selectedFlightKey && result ? (
+          <p className="leg-coverage">
+            Tracking
+            {result.analysis.observedAt ? ` · ${observedLabel(result.analysis.observedAt)}` : ""}
+          </p>
+        ) : result ? (
           <p className="leg-coverage">
             {result.analysis.optionsChecked} verified option{result.analysis.optionsChecked === 1 ? "" : "s"}
             {result.analysis.observedAt ? ` · ${observedLabel(result.analysis.observedAt)}` : ""}
@@ -430,6 +461,8 @@ function LegCard({
           <p className="leg-coverage">
             {progress.analysis.optionsChecked} verified option{progress.analysis.optionsChecked === 1 ? "" : "s"} so far
           </p>
+        ) : leg.selectedFlightKey ? (
+          <p className="leg-coverage">Tracking</p>
         ) : null}
         {error ? <p className="leg-inline-error">{error}</p> : null}
       </div>
@@ -578,7 +611,7 @@ export function TripLegResults({
                   offer={bestOffer(flight.key, displaySnapshot.offers)}
                   snapshot={displaySnapshot}
                   selected={leg.selectedFlightKey === flight.key}
-                  onOpen={() => props.onNavigate(canonicalFlightHref(flight.key))}
+                  onOpen={() => props.onNavigate(flightHref(props.trip.id, flight.key))}
                 />
               ))}
             </div>
@@ -756,11 +789,19 @@ function LegFlightCard({
   selected: boolean;
   onOpen: () => void;
 }) {
+  const first = flight.segments[0];
+  const last = flight.segments.at(-1);
+  const dayOffset = first && last ? calendarDayOffset(first.departure, last.arrival) : 0;
+  const airlineName = first?.marketingAirline.trim() ?? "";
+  const airline = airlineName && !/^[A-Z0-9]{2,3}$/u.test(airlineName)
+    ? airlineName
+    : catalogAirlineName(flight.primaryAirlineCode);
   const tags = [
     snapshot.analysis.cheapest?.flightKey === flight.key ? "Lowest" : null,
     snapshot.analysis.fastest?.flightKey === flight.key ? "Fastest" : null,
     snapshot.analysis.balanced?.flightKey === flight.key ? "Captain’s pick" : null
   ].filter((tag): tag is string => Boolean(tag));
+
   return (
     <button
       type="button"
@@ -768,15 +809,40 @@ function LegFlightCard({
       onClick={onOpen}
       aria-pressed={selected}
     >
-      <div className="flight-card-topline">
-        <span>{flight.segments[0]?.marketingAirline ?? flight.primaryAirlineCode}</span>
-        <strong>{offer ? formatMoney(Number(offer.priceAmount), offer.currency) : "Fare unavailable"}</strong>
+      {tags.length > 0 ? (
+        <div className="flight-card-tags">
+          {tags.map((tag) => <span key={tag}>{tag}</span>)}
+        </div>
+      ) : null}
+      <div className="flight-card-main">
+        <div
+          className="flight-card-route"
+          aria-label={`${first?.origin ?? flight.origin} to ${last?.destination ?? flight.destination}`}
+        >
+          <div className="flight-card-endpoint">
+            <strong>{first ? clockLabel(first.departure) : "—"}</strong>
+            <span>{first?.origin ?? flight.origin}</span>
+          </div>
+          <div className="flight-card-path" aria-hidden="true">
+            <span>{durationLabel(flight.durationMinutes)}</span>
+            <i />
+            <span>{stopLabel(flight.stops)}</span>
+          </div>
+          <div className="flight-card-endpoint is-arrival">
+            <strong>
+              {last ? clockLabel(last.arrival) : "—"}
+              {dayOffset > 0 ? <sup>+{dayOffset}</sup> : null}
+            </strong>
+            <span>{last?.destination ?? flight.destination}</span>
+          </div>
+        </div>
+        <strong className="flight-card-price">
+          {offer ? formatMoney(Number(offer.priceAmount), offer.currency) : "—"}
+        </strong>
       </div>
-      <div className="flight-card-schedule">
-        <strong>{flightSchedule(flight)}</strong>
-        <span>{durationLabel(flight.durationMinutes)} · {stopLabel(flight.stops)}</span>
+      <div className="flight-card-meta">
+        <span>{airline}{selected ? " · Selected" : ""}</span>
       </div>
-      {tags.length > 0 ? <div className="flight-tags">{tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
     </button>
   );
 }

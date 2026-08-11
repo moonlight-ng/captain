@@ -180,6 +180,94 @@ describe("flight worker orchestration", () => {
     })).toBe("Plan confirmed. Now checking flights…");
   });
 
+  it("delivers the tracking-started ack before the first provider search runs", async () => {
+    const now = new Date("2026-08-01T12:00:00Z");
+    const store = new MemoryCaptainPlatformStore();
+    const user = await store.ensureTelegramUser({
+      telegramUserId: 11, telegramChatId: 11, username: null, firstName: "Ada", lastName: null
+    }, now);
+    await store.updateProfile(user.id, { quietHoursEnabled: false }, now);
+    const input: CreateTripInput = {
+      title: "Lagos to London",
+      brief: {
+        originAirports: ["LOS"], destinationAirports: ["LON"], tripType: "one_way",
+        departureWindow: { start: "2026-10-29", end: "2026-10-29" }, stayNights: null,
+        legs: [], travellers: { adults: 1, childrenAges: [], infants: 0 }, cabin: "economy",
+        maxStops: 2, currency: "USD", maximumPrice: null,
+        preferredAirlines: [], excludedAirlines: [], context: ""
+      }
+    };
+    const specs = buildSearchSpecs(input.brief);
+    const created = await store.createTrip(user.id, input, specs, now);
+    await store.startTripTracking(user.id, created.trip.id, created.trip.version, specs, now);
+
+    const order: string[] = [];
+    const search = vi.fn(async () => {
+      order.push("search");
+      return {
+        provider: "official_duffel" as const,
+        requestId: "request-los-lon",
+        discoveryResponseId: "request-los-lon",
+        verificationResponseId: "request-los-lon",
+        model: "duffel",
+        promptVersion: "test",
+        rejectionCounts: {},
+        offers: [{
+          itineraryKey: "flight-los-lon",
+          providerOfferId: "offer-los-lon",
+          priceAmount: "500.00",
+          currency: "USD",
+          fareBasis: "one_adult_total" as const,
+          cabin: "economy" as const,
+          slices: [{
+            origin: "LOS",
+            destination: "LON",
+            departureDate: "2026-10-29",
+            segments: [{
+              marketingAirlineCode: "BA",
+              marketingAirline: "British Airways",
+              flightNumber: "BA75",
+              origin: "LOS",
+              destination: "LON",
+              departure: "2026-10-29T09:00:00+00:00",
+              arrival: "2026-10-29T15:00:00+00:00"
+            }]
+          }],
+          primaryAirlineCode: "BA",
+          participatingAirlineCodes: ["BA"],
+          evidence: [{ url: "https://ba.com/fare", title: "Verified fare", domain: "ba.com" }]
+        }]
+      };
+    });
+    vi.stubGlobal("fetch", vi.fn(async (_url, init?: RequestInit) => {
+      const body = String(init?.body ?? "");
+      if (body.includes("Plan confirmed. Now checking flights")) {
+        order.push("tracking_started");
+      }
+      return new Response(
+        JSON.stringify({ ok: true, result: { message_id: order.length } }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }));
+    const worker = new FlightWorker({
+      store,
+      provider: { provider: "official_duffel", search } as FlightSearchProvider,
+      telegramBotToken: "test",
+      captainPublicUrl: "https://captain.example.com",
+      trackingEnabled: true,
+      workerId: "worker-1",
+      leaseMs: 240_000,
+      freshnessMs: 0,
+      claimLimit: 1
+    });
+
+    await worker.tick(now);
+    expect(order).toContain("tracking_started");
+    expect(order).toContain("search");
+    expect(order.indexOf("tracking_started")).toBeLessThan(order.indexOf("search"));
+    vi.unstubAllGlobals();
+  });
+
   it("acks checkpoint pause and plan-change notifications", () => {
     expect(notificationText({
       id: "paused",

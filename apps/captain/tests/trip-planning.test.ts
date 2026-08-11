@@ -196,6 +196,23 @@ describe("Captain trip planning", () => {
     expect(parseTripPlanCallback(`captain-trip:start:${id}:0`)).toBeNull();
   });
 
+  it("keeps prepare_trip on awaiting_confirmation instead of auto-creating", async () => {
+    const { agentFacingPrepareResult } = await import("../agent/tools/prepare_trip.js");
+    const draft = confirmableDraft();
+    const confirmation = formatTripPlanConfirmation(draft);
+    const result = agentFacingPrepareResult({
+      status: "awaiting_confirmation",
+      draft,
+      confirmation
+    });
+    expect(result).toMatchObject({
+      status: "awaiting_confirmation",
+      confirmation,
+      message: confirmation
+    });
+    expect(result).not.toHaveProperty("receipt");
+  });
+
   it("binds Review and Confirm to the saved trip version", () => {
     const id = "11111111-1111-4111-8111-111111111111";
     expect(tripPlanReviewReplyMarkup({

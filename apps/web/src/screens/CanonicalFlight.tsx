@@ -1,30 +1,44 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { ApiError, getCanonicalFlight, homeHref, selectTripLegFlight, tripLegHref } from "../api";
-import type { CanonicalFlightPayload, FlightOfferSnapshot } from "../domain";
-import { formatMoney } from "../format";
+import { ApiError, getCanonicalFlight, homeHref, selectTripLegFlight } from "../api";
+import type { CanonicalFlightPayload } from "../domain";
+import { calendarDayOffset, formatMoney } from "../format";
 import { inPageLink } from "../navigation";
+
+type TripFlightContext = {
+  tripId: string;
+  legId: string;
+  routeLabel: string;
+  selected: boolean;
+};
 
 export function CanonicalFlightPage({
   flightKey,
+  tripContext = null,
   onNavigate,
-  onBack
+  onBack,
+  onSelected
 }: {
   flightKey: string;
+  /** When opening via `/trip/:id/flight/:key`, the trip slot is known from the URL. */
+  tripContext?: TripFlightContext | null;
   onNavigate: (href: string) => void;
   onBack: () => void;
+  onSelected?: (legId: string, flightKey: string) => void;
 }) {
   const [payload, setPayload] = useState<CanonicalFlightPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selecting, setSelecting] = useState(false);
   const [selectError, setSelectError] = useState("");
+  const [selectedOverride, setSelectedOverride] = useState<boolean | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError("");
     setSelectError("");
+    setSelectedOverride(null);
     void getCanonicalFlight(flightKey)
       .then((next) => {
         if (!cancelled) setPayload(next);
@@ -47,25 +61,21 @@ export function CanonicalFlightPage({
     [payload?.offers]
   );
 
-  function goToLeg() {
-    const context = payload?.context;
-    if (context) {
-      onNavigate(tripLegHref(context.tripId, context.legId));
-      return;
-    }
-    onBack();
-  }
+  const context = useMemo((): TripFlightContext | null => {
+    const base = tripContext ?? payload?.context ?? null;
+    if (!base) return null;
+    if (selectedOverride === null) return base;
+    return { ...base, selected: selectedOverride };
+  }, [tripContext, payload?.context, selectedOverride]);
 
   async function chooseFlight() {
-    const context = payload?.context;
     if (!context || context.selected || selecting) return;
     setSelecting(true);
     setSelectError("");
     try {
       await selectTripLegFlight(context.legId, flightKey);
-      setPayload((current) => current?.context
-        ? { ...current, context: { ...current.context, selected: true } }
-        : current);
+      setSelectedOverride(true);
+      onSelected?.(context.legId, flightKey);
     } catch {
       setSelectError("Couldn’t select that flight. Try again.");
     } finally {
@@ -76,9 +86,10 @@ export function CanonicalFlightPage({
   if (loading) return <CanonicalState title="Loading flight…" detail="Checking the latest verified details." />;
   if (!payload) return <CanonicalState title="Flight unavailable" detail={error} onBack={onBack} />;
 
-  const { flight, context } = payload;
+  const { flight } = payload;
   const first = flight.segments[0]!;
   const last = flight.segments.at(-1)!;
+  const dayOffset = calendarDayOffset(first.departure, last.arrival);
   const canSelect = Boolean(context && !context.selected && offers.length > 0);
   return (
     <main className="shell canonical-flight-shell">
@@ -86,7 +97,7 @@ export function CanonicalFlightPage({
         <a className="brand" href={homeHref()} onClick={inPageLink(homeHref(), onNavigate)} aria-label="Captain home">
           <span className="brand-mark">C</span><span>Captain</span>
         </a>
-        <button type="button" className="quiet-link" onClick={goToLeg}>Back</button>
+        <button type="button" className="quiet-link" onClick={onBack}>Back</button>
       </header>
 
       <section className="canonical-flight-page">
@@ -96,19 +107,15 @@ export function CanonicalFlightPage({
         </header>
 
         {context ? (
-          <a
-            className="flight-context"
-            href={tripLegHref(context.tripId, context.legId)}
-            onClick={inPageLink(tripLegHref(context.tripId, context.legId), onNavigate)}
-          >
-            <span>{context.selected ? "Selected for" : "Option for"}</span>
-            <strong>{context.routeLabel}</strong>
-            <em>View leg →</em>
-          </a>
-        ) : null}
-
-        {context ? (
-          <div className="canonical-flight-action">
+          <section className={`flight-select-card${context.selected ? " is-watching" : ""}`}>
+            <div className="flight-select-copy">
+              <span>{context.selected ? "Watching for" : "Add to trip"}</span>
+              <p>
+                {context.selected
+                  ? "Captain is tracking this fare for the slot."
+                  : "Select this flight into the slot to start watching its price."}
+              </p>
+            </div>
             <button
               type="button"
               className={`primary-action${context.selected ? " selected" : ""}`}
@@ -121,18 +128,34 @@ export function CanonicalFlightPage({
             {!context.selected && offers.length === 0
               ? <p className="canonical-select-hint">A verified price is required before Captain can watch this flight.</p>
               : null}
-          </div>
+          </section>
         ) : null}
 
         <section className="canonical-schedule" aria-labelledby="flight-schedule-heading">
           <div className="section-title-row">
             <h2 id="flight-schedule-heading">Flight schedule</h2>
-            <span>{flight.primaryAirlineCode}</span>
+            <span>{flight.primaryAirlineCode} · {stopLabel(flight.stops)}</span>
           </div>
-          <div className="canonical-summary-time">
-            <strong>{clock(first.departure)} <small>{first.origin}</small></strong>
-            <span>{durationLabel(flight.durationMinutes)}</span>
-            <strong>{clock(last.arrival)} <small>{last.destination}</small></strong>
+          <div
+            className="canonical-route"
+            aria-label={`${first.origin} to ${last.destination}`}
+          >
+            <div className="flight-card-endpoint">
+              <strong>{clock(first.departure)}</strong>
+              <span>{first.origin}</span>
+            </div>
+            <div className="flight-card-path" aria-hidden="true">
+              <span>{durationLabel(flight.durationMinutes)}</span>
+              <i />
+              <span>{stopLabel(flight.stops)}</span>
+            </div>
+            <div className="flight-card-endpoint is-arrival">
+              <strong>
+                {clock(last.arrival)}
+                {dayOffset > 0 ? <sup>+{dayOffset}</sup> : null}
+              </strong>
+              <span>{last.destination}</span>
+            </div>
           </div>
           <ol className="canonical-segments">
             {flight.segments.map((segment, index) => (
@@ -149,35 +172,30 @@ export function CanonicalFlightPage({
         </section>
 
         <section className="canonical-offers" aria-labelledby="verified-prices-heading">
-          <div className="section-title-row">
-            <h2 id="verified-prices-heading">Verified prices</h2>
-            <span>{offers.length} seller{offers.length === 1 ? "" : "s"}</span>
-          </div>
-          {offers.length > 0 ? offers.map((offer) => <OfferSource key={offer.offerId} offer={offer} />) : (
+          <h2 id="verified-prices-heading">Verified prices</h2>
+          {offers.length > 0 ? (
+            <ul className="canonical-offer-list">
+              {offers.map((offer) => {
+                const expired = offer.expiresAt !== null && Date.parse(offer.expiresAt) <= Date.now();
+                return (
+                  <li className={expired ? "expired" : undefined} key={offer.offerId}>
+                    <strong>{formatMoney(Number(offer.priceAmount), offer.currency)}</strong>
+                    <span>{providerLabel(offer.provider)}{expired ? " · Expired" : ""}</span>
+                    <time dateTime={offer.observedAt}>{dateTime(offer.observedAt)}</time>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
             <p className="canonical-no-offers">No current seller price is available for this schedule.</p>
           )}
         </section>
 
-        <p className="canonical-privacy">This shared page contains flight and seller information only. Personal trip details are never included.</p>
+        {!tripContext ? (
+          <p className="canonical-privacy">This shared page contains flight and seller information only. Personal trip details are never included.</p>
+        ) : null}
       </section>
     </main>
-  );
-}
-
-function OfferSource({ offer }: { offer: FlightOfferSnapshot }) {
-  const source = offer.evidence[0];
-  const expired = offer.expiresAt !== null && Date.parse(offer.expiresAt) <= Date.now();
-  return (
-    <article className={`canonical-offer${expired ? " expired" : ""}`}>
-      <div>
-        <strong>{formatMoney(Number(offer.priceAmount), offer.currency)}</strong>
-        <span>{providerLabel(offer.provider)}{expired ? " · Expired" : ""}</span>
-      </div>
-      <div>
-        <small>Observed {dateTime(offer.observedAt)}</small>
-        {source ? <a href={source.url} target="_blank" rel="noreferrer">View evidence ↗</a> : null}
-      </div>
-    </article>
   );
 }
 
