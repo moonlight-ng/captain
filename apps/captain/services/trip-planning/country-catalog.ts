@@ -53,6 +53,39 @@ export const COUNTRY_PRIMARY_AIRPORTS: Readonly<Record<string, CountryAirport>> 
   japan: { code: "TYO", label: "Japan" }
 };
 
+/**
+ * The other cities to offer when Captain guessed a country's airport. Written
+ * by hand for the same reason the country list above is: ranked off the
+ * dataset these came out as Aomori and Makinohara Shimada for Japan, because
+ * nothing in it says which airport a traveller has heard of. Every code must
+ * exist in the catalog, which the airport-catalog test asserts.
+ */
+export const COUNTRY_ALTERNATIVE_CITIES: Readonly<Record<string, readonly string[]>> = {
+  NG: ["ABV", "PHC", "ENU"],
+  GH: ["KMS", "TML"],
+  CI: [],
+  SN: [],
+  CM: ["NSI"],
+  KE: ["MBA"],
+  TZ: ["JRO", "ZNZ"],
+  ZA: ["CPT", "DUR"],
+  ET: [],
+  RW: [],
+  UG: [],
+  EG: ["HRG", "SSH"],
+  MA: ["RAK", "TNG"],
+  GB: ["MAN", "EDI", "BHX"],
+  US: ["LAX", "ORD", "SFO"],
+  CA: ["YVR", "YUL"],
+  FR: ["NCE", "LYS", "MRS"],
+  DE: ["MUC", "BER", "HAM"],
+  NL: ["EIN"],
+  ES: ["BCN", "AGP", "VLC"],
+  PT: ["OPO", "FAO"],
+  IT: ["MXP", "VCE", "NAP"],
+  JP: ["KIX", "FUK", "CTS"]
+};
+
 export const COUNTRY_ALIASES: ReadonlySet<string> = new Set(
   Object.keys(COUNTRY_PRIMARY_AIRPORTS)
 );

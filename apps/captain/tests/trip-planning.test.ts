@@ -747,6 +747,50 @@ describe("Captain trip planning", () => {
     ]);
   });
 
+  /**
+   * The whole reported failure in one assertion block. A traveller gave four
+   * cities and got three: Marseille was in no catalog, resolved to nothing,
+   * and the remaining codes still chained into a contiguous route that passed
+   * every check. "No return." then bought them a flight home.
+   */
+  it("keeps every city of the four-leg London–Paris–Marseille–New York–Lagos itinerary", async () => {
+    const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+    const result = await planning.prepare(
+      user.id,
+      "London to Paris on Nov 4, Paris to Marseille on Nov 8, "
+      + "Marseille to New York on Dec 9, New York to Lagos on Dec 20. No return. Just me."
+    );
+
+    expect(result.status).toBe("awaiting_confirmation");
+    if (result.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(result.draft.state.tripType).toBe("multi_city");
+    expect(result.draft.state.legs.map((leg) => [
+      leg.originAirports, leg.destinationAirports
+    ])).toEqual([
+      [["LON"], ["PAR"]],
+      [["PAR"], ["MRS"]],
+      [["MRS"], ["NYC"]],
+      [["NYC"], ["LOS"]]
+    ]);
+
+    const snapshot = result.draft.confirmationSnapshot!;
+    expect(snapshot.input.brief.legs).toHaveLength(4);
+    expect(snapshot.input.brief.destinationAirports).toEqual(["LOS"]);
+    expect(snapshot.input.brief.stayNights).toBeNull();
+    expect(snapshot.returnDate).toBeNull();
+    expect(snapshot.input.brief.legs!.some((leg) =>
+      leg.destinationAirports.includes("LON")
+    )).toBe(false);
+
+    expect(result.confirmation).toContain("PAR → MRS");
+    expect(result.confirmation).toContain("MRS → NYC");
+    expect(result.confirmation).toContain("4 Nov 2026");
+    expect(result.confirmation).toContain("8 Nov 2026");
+    expect(result.confirmation).toContain("9 Dec 2026");
+    expect(result.confirmation).toContain("20 Dec 2026");
+    expect(result.confirmation).not.toContain("/feedback");
+  });
+
   // The traveller wrote "No return." and got a flight home anyway: the words
   // set tripType to round_trip, which outranked the leg count, collapsed the
   // itinerary to its first flight, and had the reducer mirror it.

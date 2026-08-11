@@ -5,6 +5,7 @@ import {
   airportCodeAtStart,
   airportCodeForLocation,
   allowedModelAirportCodes,
+  airportMarket,
   countryAirportGuess,
   knownAirportCodes,
   orderedAirportCodesFromText,
@@ -65,6 +66,47 @@ describe("deterministic airport resolution", () => {
     expect([...allowedModelAirportCodes("Fly from LOS to DXB")])
       .toEqual(["LOS", "DXB"]);
     expect(airportCodeForLocation("ans")).toBeNull();
+    // Shaped like a code is not the same as being one.
+    expect(airportCodeForLocation("USD")).toBeNull();
+    expect([...allowedModelAirportCodes("Keep it under 500 USD")]).toEqual([]);
+  });
+
+  it("resolves a city the hand-written catalog never held", () => {
+    // Marseille was in no table, so it produced no mention at all — and the
+    // codes either side of it chained into a route that looked complete.
+    expect(airportCodeForLocation("Marseille")).toBe("MRS");
+    expect(airportMarket("MRS")).toEqual({
+      code: "MRS", label: "Marseille", country: "FR", currency: "EUR"
+    });
+    expect(orderedAirportCodesFromText(
+      "London to Paris on Nov 4, Paris to Marseille on Nov 8, "
+      + "Marseille to New York on Dec 9, New York to Lagos on Dec 20."
+    )).toEqual(["LON", "PAR", "MRS", "NYC", "LOS"]);
+  });
+
+  it("reads a city off the front of a message when the route says it is one", () => {
+    // No preposition in front and a capital that only means "new sentence" —
+    // but "X to somewhere" is a route whichever end you start from.
+    expect(orderedAirportCodesFromText("Marseille to New York on Dec 9"))
+      .toEqual(["MRS", "NYC"]);
+  });
+
+  it("keeps a holiday out of the itinerary", () => {
+    // "Christmas in Lagos" used to route through Christmas Island.
+    expect(orderedAirportCodesFromText("I want to spend Christmas in Lagos"))
+      .toEqual(["LOS"]);
+  });
+
+  it.each<[string, string[]]>([
+    ["Lagos to London in September", ["LOS", "LON"]],
+    ["I'm flying from Accra to Nairobi next month", ["ACC", "NBO"]],
+    ["Paris then Marseille then Nice", ["PAR", "MRS", "NCE"]],
+    ["Book me Chicago to Rome", ["ORD", "FCO"]],
+    ["Barcelona for the weekend", ["BCN"]],
+    ["Milan to Zurich on the 4th", ["MXP", "ZRH"]],
+    ["Wedding in New York on December 10", ["NYC"]]
+  ])("reads the route in %j", (message, expected) => {
+    expect(orderedAirportCodesFromText(message)).toEqual(expected);
   });
 });
 
@@ -91,13 +133,13 @@ describe("country resolution", () => {
   });
 
   it("offers only cities the catalog can actually search", () => {
-    // Every Japanese airport in the catalog is Tokyo, so there is no honest
-    // alternative to offer — better silence than suggesting an Osaka Captain
-    // cannot search.
+    // Japan used to return no alternatives at all: Tokyo was the only Japanese
+    // city Captain held, so offering Osaka would have promised a search it
+    // could not run. It can run that search now.
     expect(countryAirportGuess("japan")).toEqual({
       code: "TYO",
       countryLabel: "Japan",
-      alternatives: []
+      alternatives: ["Osaka", "Fukuoka", "Sapporo"]
     });
     expect(countryAirportGuess("south africa")).toEqual({
       code: "JNB",
@@ -198,7 +240,27 @@ describe("ordinary conversation is not a route", () => {
     "Thanks, that's helpful",
     "Not this time",
     "Hold on",
-    "Try again"
+    "Try again",
+    "Can you check the return flight prices again?",
+    "I need to be there before the wedding starts",
+    "What's the best time to book?",
+    "Are there any direct options?",
+    "My budget is around 800 pounds",
+    "Can we look at a different week?",
+    "Actually let me change the date",
+    "How many stops does that have?",
+    "I'd prefer a morning departure",
+    "Show me the cheapest option",
+    "What about the week after?",
+    "Sounds expensive, anything else?",
+    "Remind me what we agreed",
+    "Nothing under 400?",
+    "The first leg looks fine",
+    "Let me sleep on it",
+    "Any chance of an upgrade?",
+    "I have a meeting that morning",
+    "Push it back a day",
+    "What airlines fly that route?"
   ];
 
   it("finds no airports in it", () => {
@@ -209,7 +271,11 @@ describe("ordinary conversation is not a route", () => {
   });
 
   it("does not route it into trip planning", () => {
-    for (const message of conversation) {
+    // Event words route to planning on their own — naming a wedding is how
+    // most people open an itinerary — so those lines are held to the airport
+    // assertion above and not to these predicates.
+    const eventWords = /\b(?:wedding|birthday|christmas|conference|meeting|event)\b/iu;
+    for (const message of conversation.filter((line) => !eventWords.test(line))) {
       expect({ message, planning: TripPlanningService.isTripPlanningRequest(message) })
         .toEqual({ message, planning: false });
       expect({ message, itinerary: TripPlanningService.needsItineraryPlanningConversation(message) })
