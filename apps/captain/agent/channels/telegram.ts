@@ -877,7 +877,13 @@ async function postTripPlanResult(
   // least likely to be read and answered.
   let parts = result.status === "needs_input"
     ? [...(result.promptParts ?? [result.prompt])]
-    : [result.status === "awaiting_confirmation" ? result.confirmation : result.message];
+    : result.status === "awaiting_confirmation"
+      ? [result.confirmation]
+      // `invalid_legs` never reaches a channel: only the agent sends structured
+      // legs, and it is told to fix the named field rather than relay this.
+      : result.status === "invalid_legs"
+        ? result.errors.map((error) => error.message)
+        : [result.message];
   if (result.status === "needs_input" && options.acknowledgeVoice) {
     // The voice acknowledgement belongs on the first thing Captain says, not
     // on whichever part happens to carry the question.

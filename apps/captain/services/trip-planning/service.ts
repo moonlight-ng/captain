@@ -14,6 +14,7 @@ import {
   type Trip,
   type TripCreationReceipt,
   type TripDraftState,
+  type StructuredTripLeg,
   type TripPlanDraft,
   type TripPlanConfirmationSnapshot,
   type TripPlanResult
@@ -33,6 +34,7 @@ import {
 } from "./format.js";
 import { suggestedMaxStops, suggestedTripCurrency } from "./currency.js";
 import {
+  airportCodeForLocation,
   airportMarket,
   orderedAirportCodesFromText,
   orderedAirportMentionsFromText
@@ -148,17 +150,67 @@ export class TripPlanningService {
     return result;
   }
 
+  /**
+   * Plans from an itinerary that is already an itinerary.
+   *
+   * The prose path exists because a traveller writes prose. A caller that has
+   * already agreed a dated schedule has no reason to write it back out as a
+   * sentence for a parser to take apart again — that round trip is where a
+   * city goes missing. Structured legs skip all three interpretation passes
+   * and rejoin the same validation, confirmation and storage the prose path
+   * ends in, so both produce the same trip.
+   */
+  async prepareStructured(
+    userId: string,
+    input: { request: string; legs: readonly StructuredTripLeg[]; tripType?: TripDraftState["tripType"] },
+    sourceMessageId: string | null = null,
+    draftId?: string
+  ): Promise<TripPlanResult> {
+    const now = this.#now();
+    const user = await this.#store.getUser(userId);
+    const timeZone = user?.timezone ?? "UTC";
+    const resolved = resolveStructuredLegs(input.legs, localIsoDate(now, timeZone));
+    if ("errors" in resolved) return { status: "invalid_legs", errors: resolved.errors };
+    const facts = fallbackTripFactExtraction(input.request);
+    const state: TripDraftState = {
+      ...structuredClone(EMPTY_TRIP_DRAFT_STATE),
+      tripType: input.tripType
+        ?? (resolved.legs.length > 1 ? "multi_city" : facts.tripType ?? "one_way"),
+      legs: resolved.legs,
+      travellers: facts.travellers,
+      cabin: facts.cabin,
+      maxStops: facts.maxStops,
+      currency: facts.currency,
+      maximumPrice: facts.maximumPrice,
+      preferredAirlines: facts.preferredAirlines,
+      excludedAirlines: facts.excludedAirlines
+    };
+    const result = await this.#prepareTurn(
+      userId,
+      input.request,
+      sourceMessageId,
+      draftId,
+      false,
+      state
+    );
+    if (!result) throw new Error("A structured trip-planning request was not handled");
+    return result;
+  }
+
   async #prepareTurn(
     userId: string,
     request: string,
     sourceMessageId: string | null,
     draftId: string | undefined,
-    allowUnhandled: boolean
+    allowUnhandled: boolean,
+    structuredState?: TripDraftState
   ): Promise<TripPlanResult | null> {
     const now = this.#now();
     const user = await this.#store.getUser(userId);
     const timeZone = user?.timezone ?? "UTC";
-    const constraintSet = await this.#interpretItineraryConstraints({ userId, request, now, timeZone });
+    const constraintSet = structuredState
+      ? null
+      : await this.#interpretItineraryConstraints({ userId, request, now, timeZone });
     const compiledConstraints = constraintSet
       ? compileItineraryConstraints(constraintSet, now, timeZone)
       : null;
@@ -190,7 +242,7 @@ export class TripPlanningService {
     const declineProposedWindows = !compiledConstraints
       && canAcceptProposedWindows(draft.state)
       && DECLINE_PROPOSAL_PATTERN.test(request.trim());
-    const turn = compiledConstraints || acceptProposedWindows || declineProposedWindows
+    const turn = structuredState || compiledConstraints || acceptProposedWindows || declineProposedWindows
       ? null
       : await this.#interpret({
         userId,
@@ -223,7 +275,9 @@ export class TripPlanningService {
       }
     }
     const beforeHash = stableJson(draft.state);
-    const reduced = compiledConstraints
+    const reduced = structuredState
+      ? { state: structuredClone(structuredState), appliedOperations: [], issue: null }
+      : compiledConstraints
       ? {
           state: applyNarrativeOptions(compiledConstraints.state, request),
           appliedOperations: [],
@@ -406,14 +460,18 @@ export class TripPlanningService {
       readiness_approved: readinessApproved,
       clarification_ceiling_reached: clarificationCeilingReached,
       date_conflict: Boolean(reduced.issue),
-      turn_intent: compiledConstraints
+      turn_intent: structuredState
+        ? "structured_legs"
+        : compiledConstraints
         ? "compile_constraints"
         : acceptProposedWindows
           ? "accept_proposed_search_windows"
           : declineProposedWindows
             ? "decline_proposed_search_windows"
           : turn!.intent,
-      operation_types: compiledConstraints
+      operation_types: structuredState
+        ? ["set_structured_legs"]
+        : compiledConstraints
         ? ["compile_city_presence_constraints"]
         : acceptProposedWindows
           ? ["accept_proposed_search_windows"]
@@ -1134,6 +1192,115 @@ function clarificationPrompt(missingFields: string[], state: TripDraftState): st
     return "What departure window should I use for the next flight leg?";
   }
   return "What should I add to the trip?";
+}
+
+type StructuredLegError = { legIndex: number | null; field: string; message: string };
+
+/**
+ * Turns stated legs into draft legs, or says exactly what is wrong with them.
+ *
+ * Every message here is written for a caller to act on rather than to report:
+ * a place that resolves to nothing says to go and find its airport, because
+ * asking the traveller to name a city they already named is the behaviour
+ * this replaced.
+ */
+function resolveStructuredLegs(
+  legs: readonly StructuredTripLeg[],
+  today: string
+): { legs: TripDraftState["legs"] } | { errors: StructuredLegError[] } {
+  const errors: StructuredLegError[] = [];
+  const resolved = legs.map((leg, index) => {
+    const legIndex = index + 1;
+    const place = (value: string, field: "origin" | "destination"): string | null => {
+      const code = airportCodeForLocation(value) ?? airportCodeForLocation(value.toUpperCase());
+      if (!code) {
+        errors.push({
+          legIndex,
+          field,
+          message: `Leg ${legIndex} ${field} “${value}” resolved to no airport. `
+            + "Search for the airport serving it and call again with the IATA code; "
+            + "ask the traveller only if the search is inconclusive."
+        });
+      }
+      return code;
+    };
+    const origin = place(leg.origin, "origin");
+    const destination = place(leg.destination, "destination");
+    if (origin && destination && origin === destination) {
+      errors.push({
+        legIndex,
+        field: "destination",
+        message: `Leg ${legIndex} departs and arrives at ${origin}. Give the city it actually flies to.`
+      });
+    }
+    const window = leg.departureDate
+      ? { start: leg.departureDate, end: leg.departureDate }
+      : leg.departureWindow!;
+    if (daysBetween(window.start, window.end) < 0) {
+      errors.push({
+        legIndex,
+        field: "departureWindow",
+        message: `Leg ${legIndex} has a departure window that ends before it starts.`
+      });
+    }
+    if (daysBetween(today, window.start) < 0) {
+      errors.push({
+        legIndex,
+        field: "departureDate",
+        message: `Leg ${legIndex} departs ${window.start}, which is in the past. Today is ${today}.`
+      });
+    }
+    if (leg.arriveBy && daysBetween(window.end, leg.arriveBy) < 0) {
+      errors.push({
+        legIndex,
+        field: "arriveBy",
+        message: `Leg ${legIndex} must arrive by ${leg.arriveBy} but cannot depart until ${window.end}.`
+      });
+    }
+    return {
+      originAirports: origin ? [origin] : [],
+      destinationAirports: destination ? [destination] : [],
+      departure: leg.departureDate
+        ? { kind: "exact" as const, date: leg.departureDate }
+        : {
+            kind: "window" as const,
+            start: window.start,
+            end: window.end,
+            source: "the window you agreed"
+          },
+      ...(leg.arriveBy ? { arriveBy: leg.arriveBy } : {})
+    };
+  });
+
+  resolved.forEach((leg, index) => {
+    const next = resolved[index + 1];
+    if (!next || leg.destinationAirports.length === 0 || next.originAirports.length === 0) return;
+    if (!next.originAirports.some((code) => leg.destinationAirports.includes(code))) {
+      errors.push({
+        legIndex: index + 2,
+        field: "origin",
+        message: `Leg ${index + 2} departs from ${next.originAirports.join("/")} but leg ${index + 1} `
+          + `lands at ${leg.destinationAirports.join("/")}. Add the leg in between, or fix the city.`
+      });
+    }
+    const previousStart = legStart(leg);
+    const nextStart = legStart(next);
+    if (previousStart && nextStart && daysBetween(previousStart, nextStart) < 0) {
+      errors.push({
+        legIndex: index + 2,
+        field: "departureDate",
+        message: `Leg ${index + 2} departs before leg ${index + 1}. Put the legs in the order they are flown.`
+      });
+    }
+  });
+
+  return errors.length > 0 ? { errors } : { legs: resolved };
+}
+
+function legStart(leg: TripDraftState["legs"][number]): string | null {
+  const selection = leg.departure;
+  if (!selection) return null;
+  return selection.kind === "exact" ? selection.date : selection.start;
 }
 
 /**

@@ -186,7 +186,47 @@ export type TripPlanResult =
   | {
       status: "no_trip_change";
       trip: import("./trip.js").Trip;
+    }
+  /**
+   * An itinerary handed over as structured legs did not describe a journey.
+   * Reported rather than thrown so the caller can fix the named field: an
+   * error message is something to work around, a named field is something to
+   * correct.
+   */
+  | {
+      status: "invalid_legs";
+      errors: ReadonlyArray<{
+        /** 1-based, as the traveller counts legs. Null for the whole route. */
+        legIndex: number | null;
+        field: string;
+        message: string;
+      }>;
     };
+
+/**
+ * An itinerary stated as legs rather than prose. Places are free text and are
+ * resolved by the planning service — the caller has no airport catalog, and
+ * asking it for IATA codes is how a made-up code reaches a search.
+ */
+export const structuredTripLegSchema = z.object({
+  origin: z.string().trim().min(2).max(60),
+  destination: z.string().trim().min(2).max(60),
+  departureDate: z.iso.date().optional(),
+  departureWindow: z.object({
+    start: z.iso.date(),
+    end: z.iso.date()
+  }).strict().optional(),
+  arriveBy: z.iso.date().optional()
+}).strict().superRefine((leg, context) => {
+  if (Boolean(leg.departureDate) === Boolean(leg.departureWindow)) {
+    context.addIssue({
+      code: "custom",
+      path: ["departureDate"],
+      message: "Give a leg either an exact departure date or a departure window"
+    });
+  }
+});
+export type StructuredTripLeg = z.infer<typeof structuredTripLegSchema>;
 
 export type TripPlanDraftRevision = {
   status: Extract<TripPlanDraftStatus, "collecting" | "awaiting_confirmation">;

@@ -791,6 +791,102 @@ describe("Captain trip planning", () => {
     expect(result.confirmation).not.toContain("/feedback");
   });
 
+  describe("an itinerary handed over as legs", () => {
+    const legs = [
+      { origin: "London", destination: "Paris", departureDate: "2026-11-04" },
+      { origin: "Paris", destination: "Marseille", departureDate: "2026-11-08" },
+      { origin: "Marseille", destination: "New York", departureDate: "2026-12-09" },
+      { origin: "New York", destination: "Lagos", departureDate: "2026-12-20" }
+    ];
+
+    // The two paths must not drift: a confirmation that differs by a word is
+    // a second product nobody is maintaining.
+    it("reaches the same confirmation the prose path does", async () => {
+      const prose = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const spoken = await prose.planning.prepare(
+        prose.user.id,
+        "London to Paris on Nov 4, Paris to Marseille on Nov 8, "
+        + "Marseille to New York on Dec 9, New York to Lagos on Dec 20. No return. Just me."
+      );
+      const structured = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const handed = await structured.planning.prepareStructured(structured.user.id, {
+        request: "Four-city run, one adult, no return.",
+        legs
+      });
+
+      expect(spoken.status).toBe("awaiting_confirmation");
+      expect(handed.status).toBe("awaiting_confirmation");
+      if (spoken.status !== "awaiting_confirmation" || handed.status !== "awaiting_confirmation") {
+        throw new Error("Expected both paths to reach confirmation");
+      }
+      expect(handed.confirmation).toBe(spoken.confirmation);
+      expect(handed.draft.confirmationSnapshot!.input.brief)
+        .toEqual(spoken.draft.confirmationSnapshot!.input.brief);
+    });
+
+    it("names the leg and field when a place resolves to nothing", async () => {
+      const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const result = await planning.prepareStructured(user.id, {
+        request: "Four-city run",
+        legs: [
+          { origin: "London", destination: "Paris", departureDate: "2026-11-04" },
+          { origin: "Paris", destination: "Xanadu", departureDate: "2026-11-08" }
+        ]
+      });
+      expect(result.status).toBe("invalid_legs");
+      if (result.status !== "invalid_legs") throw new Error("Expected a validation report");
+      expect(result.errors).toEqual([{
+        legIndex: 2,
+        field: "destination",
+        message: expect.stringContaining("Xanadu")
+      }]);
+      // Told to go and look, not to hand the problem back to the traveller.
+      expect(result.errors[0]!.message).toContain("Search for the airport");
+    });
+
+    it("refuses a chain with a hole in it", async () => {
+      const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const result = await planning.prepareStructured(user.id, {
+        request: "Two flights",
+        legs: [
+          { origin: "London", destination: "Paris", departureDate: "2026-11-04" },
+          { origin: "Marseille", destination: "New York", departureDate: "2026-12-09" }
+        ]
+      });
+      expect(result.status).toBe("invalid_legs");
+      if (result.status !== "invalid_legs") throw new Error("Expected a validation report");
+      expect(result.errors[0]).toMatchObject({ legIndex: 2, field: "origin" });
+      expect(result.errors[0]!.message).toContain("Add the leg in between");
+    });
+
+    it("refuses legs flown out of order", async () => {
+      const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const result = await planning.prepareStructured(user.id, {
+        request: "Two flights",
+        legs: [
+          { origin: "London", destination: "Paris", departureDate: "2026-12-09" },
+          { origin: "Paris", destination: "Lagos", departureDate: "2026-11-04" }
+        ]
+      });
+      expect(result.status).toBe("invalid_legs");
+      if (result.status !== "invalid_legs") throw new Error("Expected a validation report");
+      expect(result.errors[0]!.message).toContain("the order they are flown");
+    });
+
+    it("saves nothing when the legs do not describe a journey", async () => {
+      const { planning, user, trips } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      await planning.prepareStructured(user.id, {
+        request: "Two flights",
+        legs: [
+          { origin: "London", destination: "Paris", departureDate: "2026-11-04" },
+          { origin: "Marseille", destination: "New York", departureDate: "2026-12-09" }
+        ]
+      });
+      expect(await planning.findOpen(user.id)).toBeNull();
+      expect(await trips.list(user.id)).toHaveLength(0);
+    });
+  });
+
   describe("a city Captain cannot place", () => {
     const itinerary = (middle: string): string =>
       `London to Paris on Nov 4, Paris to ${middle} on Nov 8, `

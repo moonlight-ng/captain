@@ -4,19 +4,24 @@ const USER_ID = "11111111-1111-4111-8111-111111111111";
 
 const state = vi.hoisted(() => ({
   prepare: null as unknown,
-  handleOpenDraftText: null as unknown
+  handleOpenDraftText: null as unknown,
+  prepareStructured: null as unknown
 }));
 
 vi.mock("../services/app/services.js", () => ({
   getCaptainServices: async () => ({
     tripPlanning: {
       prepare: state.prepare,
-      handleOpenDraftText: state.handleOpenDraftText
+      handleOpenDraftText: state.handleOpenDraftText,
+      prepareStructured: state.prepareStructured
     }
   })
 }));
 
-import prepareTripTool, { clearPrepareTripTurn } from "../agent/tools/prepare_trip.js";
+import prepareTripTool, {
+  clearPrepareTripTurn,
+  prepareTripInputSchema
+} from "../agent/tools/prepare_trip.js";
 
 type ToolResult = { status: string; guidance?: string };
 
@@ -115,6 +120,75 @@ describe("prepare_trip declined turns", () => {
     const result = await call("Lagos to Nairobi on 12 September", "turn-g");
     expect(result.status).toBe("needs_input");
     expect(state.prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands stated legs straight to the structured path", async () => {
+    state.prepareStructured = vi.fn(async () => ({
+      status: "awaiting_confirmation",
+      draft: { id: "draft-1", revision: 1 },
+      confirmation: "Ready to create this trip:"
+    }));
+    const result = await prepareTripTool.execute({
+      request: "Four-city run, one adult, no return.",
+      legs: [
+        { origin: "London", destination: "Paris", departureDate: "2026-11-04" },
+        { origin: "Paris", destination: "Marseille", departureDate: "2026-11-08" }
+      ]
+    }, toolContext("turn-i") as never) as ToolResult;
+
+    expect(result.status).toBe("awaiting_confirmation");
+    expect(state.prepareStructured).toHaveBeenCalledTimes(1);
+    // The prose parser never sees an itinerary that arrived already parsed.
+    expect(state.prepare).not.toHaveBeenCalled();
+    expect(state.handleOpenDraftText).not.toHaveBeenCalled();
+  });
+
+  // Shape is the framework's job, so these are asserted on the schema rather
+  // than through execute, which only ever sees input that already passed.
+  it("rejects a single structured leg, which prose already handles", () => {
+    expect(prepareTripInputSchema.safeParse({
+      request: "One flight",
+      legs: [{ origin: "London", destination: "Paris", departureDate: "2026-11-04" }]
+    }).success).toBe(false);
+  });
+
+  it("rejects a leg with neither a date nor a window", () => {
+    expect(prepareTripInputSchema.safeParse({
+      request: "Two flights",
+      legs: [
+        { origin: "London", destination: "Paris" },
+        { origin: "Paris", destination: "Lagos" }
+      ]
+    }).success).toBe(false);
+  });
+
+  it("rejects a leg carrying both a date and a window", () => {
+    expect(prepareTripInputSchema.safeParse({
+      request: "Two flights",
+      legs: [
+        {
+          origin: "London",
+          destination: "Paris",
+          departureDate: "2026-11-04",
+          departureWindow: { start: "2026-11-04", end: "2026-11-06" }
+        },
+        { origin: "Paris", destination: "Lagos", departureDate: "2026-11-08" }
+      ]
+    }).success).toBe(false);
+  });
+
+  it("accepts a window in place of an exact date", () => {
+    expect(prepareTripInputSchema.safeParse({
+      request: "Two flights",
+      legs: [
+        {
+          origin: "London",
+          destination: "Paris",
+          departureWindow: { start: "2026-11-04", end: "2026-11-06" }
+        },
+        { origin: "Paris", destination: "Lagos", departureDate: "2026-11-08" }
+      ]
+    }).success).toBe(true);
   });
 
   it("returns the decision when the service handled it", async () => {
