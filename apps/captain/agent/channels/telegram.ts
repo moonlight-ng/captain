@@ -30,7 +30,6 @@ import {
   type OfferSnapshot,
   type Trip,
   type TripCreationReceipt,
-  type TripPlanDraft,
   type TripPlanResult
 } from "@agents/flight-domain";
 import {
@@ -51,6 +50,9 @@ import {
 import {
   formatTripPlanConfirmation,
   hasSameTripConfirmationFacts,
+  isTripPlanRestatement,
+  looksLikeTripCreationReceipt,
+  looksLikeTripPlanConfirmation,
   telegramDashboardMessage
 } from "../../services/trip-planning/format.js";
 import { tripRouteEcho } from "../../services/trip-planning/route-echo.js";
@@ -79,6 +81,29 @@ const pendingTurnContent = new Map<string, { content: string; key: string }>();
 const turnMessagesSent = new Map<string, Set<string>>();
 
 const turnsWithPreface = new Set<string>();
+
+/**
+ * Plans already restated this turn, kept as text so the next step is compared
+ * on its facts and not its bytes — a model retyping its own plan changes a
+ * quote mark, never the route. `message.completed` fires once per step, so a
+ * turn that showed the Create/Cancel card and then created the trip sent the
+ * same itinerary once per step and the traveller read their route three times.
+ */
+const turnPlansSent = new Map<string, string[]>();
+
+/** Records this plan for the turn and reports whether it is new to it. */
+export function claimTurnPlanRestatement(turnId: string, message: string): boolean {
+  if (!isTripPlanRestatement(message)) return true;
+  const sent = turnPlansSent.get(turnId) ?? [];
+  if (sent.some((earlier) => hasSameTripConfirmationFacts(message, earlier))) return false;
+  turnPlansSent.set(turnId, [...sent, message]);
+  while (turnPlansSent.size > 64) {
+    const oldest = turnPlansSent.keys().next();
+    if (oldest.done) break;
+    turnPlansSent.delete(oldest.value);
+  }
+  return true;
+}
 
 function claimTurnPreface(turnId: string): boolean {
   if (turnsWithPreface.has(turnId)) return false;
@@ -115,7 +140,6 @@ function rememberTurnContent(chatId: string, content: string, key: string): void
   }
 }
 const agentProgress = new TelegramProgressTracker();
-const pendingConfirmationPosts = new Set<string>();
 // Only steps a traveller would recognise as work belong here. Tools left out
 // —reading recent context, for one—run under the typing indicator alone.
 const CAPTAIN_TOOL_STATUS: Readonly<Record<string, string>> = {
@@ -784,13 +808,18 @@ export default telegramChannel({
         const preface = reviewCaptainMessage(data.message).trim();
         const userId = authUserId(ctx.session.auth.current?.attributes.captain_user_id);
         if (!preface || !userId) return;
+        // A plan is never a preface, whatever state the draft is in. This used
+        // to be checked only against an awaiting draft, so the step that
+        // created the trip could narrate the plan on its way past — the same
+        // itinerary the traveller had just been shown for Create/Cancel.
+        if (isTripPlanRestatement(preface) || looksLikeTripPlanConfirmation(preface)) return;
         // One only. A turn that reaches for four tools should not narrate all
         // four — "I've tried six different phrasings" is what that reads like.
         if (!claimTurnPreface(ctx.session.turn.id)) return;
         if (!claimTurnMessage(ctx.session.turn.id, preface)) return;
         const services = await getCaptainServices();
-        // A plan or a claim about a trip is never a preface — those belong to
-        // the end of the turn, where they are checked against what was saved.
+        // A claim about a trip belongs to the end of the turn too, where it is
+        // checked against what was saved.
         const draft = await services.tripPlanning.findOpen(userId);
         if (draft?.status === "awaiting_confirmation") return;
         if (preface !== await services.tripPlanning.groundAssistantMessage(userId, preface)
@@ -807,42 +836,37 @@ export default telegramChannel({
       let reviewTrip: Trip | null = null;
       if (userId) {
         const services = await getCaptainServices();
-        const draft = await services.tripPlanning.findOpen(userId);
-        if (draft?.status === "awaiting_confirmation") {
-          const confirmation = formatTripPlanConfirmation(draft);
-          const conversation = await services.platformStore.getConversation(userId, 8);
-          if (isDuplicateTripConfirmationReply(
-            draft,
-            confirmation,
-            message,
-            conversation.recentMessages
-          )) {
-            console.info(JSON.stringify({
-              event: "captain.telegram_duplicate_trip_confirmation_suppressed",
-              draft_id: draft.id,
-              revision: draft.revision
-            }));
-            return;
-          }
-        }
         const grounded = await services.tripPlanning.groundAssistantMessage(userId, message);
         const verbatim = await services.tripPlanning.enforceVerbatimPlanText(
           userId,
           grounded.message
         );
         message = reviewCaptainMessage(verbatim);
-        // Agent path for prepare_trip: attach Create/Cancel only when this turn
-        // is the plan review itself. An open awaiting draft must not decorate
-        // an unrelated follow-up question with those buttons.
-        if (draft?.status === "awaiting_confirmation" && draft.confirmationSnapshot) {
-          const confirmation = formatTripPlanConfirmation(draft);
-          if (
-            message.trim() === confirmation.trim()
-            || hasSameTripConfirmationFacts(confirmation, message)
-          ) {
-            await postTripConfirmationOnce(channel.telegram, userId, draft, message);
-            return;
-          }
+        // Both checks read the message as it would be sent, after verbatim
+        // enforcement: that step replaces a bulleted paraphrase with the
+        // canonical plan text, so it can put the card wording in a message that
+        // did not arrive carrying it.
+        //
+        // Create/Cancel is not a step any more — a finished plan is saved and
+        // sent as its Confirm/Review receipt — so this wording offers a tap that
+        // exists nowhere. Unless the receipt is in the same message, where the
+        // receipt is the point and dropping it would take the trip link with it.
+        if (looksLikeTripPlanConfirmation(message) && !looksLikeTripCreationReceipt(message)) {
+          console.info(JSON.stringify({
+            event: "captain.telegram_stale_trip_confirmation_suppressed",
+            turn_id: ctx.session.turn.id
+          }));
+          return;
+        }
+        // Checked before the store keeps it: a plan the traveller has already
+        // read this turn must not reach them again, and must not land in the
+        // conversation history as a confirmation Captain delivered.
+        if (!claimTurnPlanRestatement(ctx.session.turn.id, message)) {
+          console.info(JSON.stringify({
+            event: "captain.telegram_repeated_plan_restatement_suppressed",
+            turn_id: ctx.session.turn.id
+          }));
+          return;
         }
         const activeTrip = await services.platformStore.getActiveTrip(userId);
         if (activeTrip?.status === "draft" && grounded.createdTrip) {
@@ -856,15 +880,17 @@ export default telegramChannel({
       if (!claimTurnMessage(ctx.session.turn.id, message.trim())) return;
       await postTelegramAssistantMessage(channel.telegram, message, reviewTrip);
     },
-    async "turn.completed"(_data, _channel, ctx) {
+    async "turn.completed"(_data, channel, ctx) {
       clearPrepareTripTurn(ctx.session.id, ctx.session.turn.id);
       turnMessagesSent.delete(ctx.session.turn.id);
+      turnPlansSent.delete(ctx.session.turn.id);
       turnsWithPreface.delete(ctx.session.turn.id);
       await clearAgentProgress(ctx.session.id);
     },
     async "turn.failed"(_data, channel, ctx) {
       clearPrepareTripTurn(ctx.session.id, ctx.session.turn.id);
       turnMessagesSent.delete(ctx.session.turn.id);
+      turnPlansSent.delete(ctx.session.turn.id);
       turnsWithPreface.delete(ctx.session.turn.id);
       await clearAgentProgress(ctx.session.id);
       await channel.telegram.post(PROCESSING_FAILURE_TEXT);
@@ -1011,10 +1037,17 @@ function required(name: string): string {
 async function postTripPlanResult(
   ctx: TelegramContext,
   userId: string,
-  result: TripPlanResult,
+  planResult: TripPlanResult,
   options: { acknowledgeVoice?: boolean } = {}
 ): Promise<void> {
   const services = await getCaptainServices();
+  // A finished plan is saved and sent as its Confirm/Review receipt. Chat used
+  // to get a Create/Cancel card first, which asked for the same consent one
+  // message earlier on a plan nothing had saved — so the traveller read the
+  // itinerary twice and confirmed it twice.
+  const result = planResult.status === "awaiting_confirmation"
+    ? await services.tripPlanning.saveReviewableDraft(userId, planResult)
+    : planResult;
   // Nothing about the trip changed, so there is nothing for the channel to
   // announce. The agent answers the question the traveller actually asked.
   if (result.status === "no_trip_change") return;
@@ -1023,25 +1056,17 @@ async function postTripPlanResult(
   // least likely to be read and answered.
   let parts = result.status === "needs_input"
     ? [...(result.promptParts ?? [result.prompt])]
-    : result.status === "awaiting_confirmation"
-      ? [result.confirmation]
-      // `invalid_legs` never reaches a channel: only the agent sends structured
-      // legs, and it is told to fix the named field rather than relay this.
-      : result.status === "invalid_legs"
-        ? result.errors.map((error) => error.message)
-        : [result.message];
+    // `invalid_legs` never reaches a channel: only the agent sends structured
+    // legs, and it is told to fix the named field rather than relay this.
+    : result.status === "invalid_legs"
+      ? result.errors.map((error) => error.message)
+      : [result.message];
   if (result.status === "needs_input" && options.acknowledgeVoice) {
     // The voice acknowledgement belongs on the first thing Captain says, not
     // on whichever part happens to carry the question.
     parts[0] = acknowledgeVoiceClarification(parts[0]!);
   }
   parts = parts.map(reviewCaptainMessage);
-  if (result.status === "awaiting_confirmation") {
-    // Create/Cancel is the consent step. Auto-creating here skipped the command
-    // buttons and jumped straight to a bare receipt link.
-    await postTripConfirmationOnce(ctx.telegram, userId, result.draft, parts[0]!);
-    return;
-  }
   for (const part of parts) {
     await services.platformStore.appendMessage(userId, "assistant", part, new Date());
     if (result.status === "started") {
@@ -1062,6 +1087,12 @@ export function acknowledgeVoiceClarification(prompt: string): string {
   return `I understood your voice note as a trip request. ${prompt}`;
 }
 
+/**
+ * A plan left unsaved because a session-limit interrupt ate the turn that would
+ * have saved it. Delivered as the receipt the turn owed the traveller — the
+ * draft is theirs either way, and leaving it unsaved is how a planned trip
+ * disappears between two sessions.
+ */
 async function recoverUndeliveredTripConfirmation(
   telegram: Pick<TelegramContext["telegram"], "post">,
   attributes: Record<string, unknown> | undefined
@@ -1070,52 +1101,20 @@ async function recoverUndeliveredTripConfirmation(
   if (!userId) return;
   const services = await getCaptainServices();
   const draft = await services.tripPlanning.findOpen(userId);
-  if (draft?.status !== "awaiting_confirmation") return;
-  // Re-deliver Create/Cancel — do not silently create the trip because a
-  // session-limit interrupt ate the confirmation turn.
-  await postTripConfirmationOnce(
-    telegram,
-    userId,
+  if (draft?.status !== "awaiting_confirmation" || !draft.confirmationSnapshot) return;
+  const started = await services.tripPlanning.saveReviewableDraft(userId, {
+    status: "awaiting_confirmation",
     draft,
-    formatTripPlanConfirmation(draft)
-  );
-}
-
-async function postTripConfirmationOnce(
-  telegram: Pick<TelegramContext["telegram"], "post">,
-  userId: string,
-  draft: TripPlanDraft,
-  message: string
-): Promise<void> {
-  const key = `${draft.id}:${draft.revision}`;
-  if (pendingConfirmationPosts.has(key)) return;
-  pendingConfirmationPosts.add(key);
-  try {
-    const services = await getCaptainServices();
-    const conversation = await services.platformStore.getConversation(userId, 8);
-    if (hasDeliveredTripConfirmation(draft, message, conversation.recentMessages)) return;
-    await telegram.post({
-      text: message,
-      reply_markup: tripPlanConfirmationReplyMarkup(draft)
-    });
-    await services.platformStore.appendMessage(userId, "assistant", message, new Date());
-  } finally {
-    pendingConfirmationPosts.delete(key);
-  }
-}
-
-export function tripPlanConfirmationReplyMarkup(
-  draft: Pick<TripPlanDraft, "id" | "revision">
-) {
-  return {
-    inline_keyboard: [[{
-      text: "Create",
-      callback_data: `captain-trip:start:${draft.id}:${draft.revision}`
-    }, {
-      text: "Cancel",
-      callback_data: `captain-trip:cancel:${draft.id}:${draft.revision}`
-    }]]
-  };
+    confirmation: formatTripPlanConfirmation(draft)
+  });
+  const rendered = telegramDashboardMessage(started.message);
+  await telegram.post({
+    text: rendered.text,
+    reply_markup: started.receipt.status === "draft"
+      ? tripPlanReviewReplyMarkup(started.receipt)
+      : { inline_keyboard: rendered.links.map((link) => [{ text: link.text, url: link.url }]) }
+  });
+  await services.platformStore.appendMessage(userId, "assistant", started.message, new Date());
 }
 
 export function tripPlanReviewReplyMarkup(
@@ -1130,34 +1129,6 @@ export function tripPlanReviewReplyMarkup(
       url: receipt.dashboardUrl
     }]]
   };
-}
-
-export function hasDeliveredTripConfirmation(
-  draft: Pick<TripPlanDraft, "updatedAt">,
-  message: string,
-  recentMessages: Array<{ role: "user" | "assistant"; content: string; createdAt: string }>
-): boolean {
-  const updatedAt = Date.parse(draft.updatedAt);
-  return recentMessages.some((candidate) =>
-    candidate.role === "assistant"
-    && candidate.content === message
-    && Date.parse(candidate.createdAt) >= updatedAt
-  );
-}
-
-export function isDuplicateTripConfirmationReply(
-  draft: Pick<TripPlanDraft, "updatedAt">,
-  confirmation: string,
-  candidate: string,
-  recentMessages: Array<{ role: "user" | "assistant"; content: string; createdAt: string }>
-): boolean {
-  if (!hasSameTripConfirmationFacts(confirmation, candidate)) return false;
-  const updatedAt = Date.parse(draft.updatedAt);
-  return recentMessages.some((recent) =>
-    recent.role === "assistant"
-    && Date.parse(recent.createdAt) >= updatedAt
-    && hasSameTripConfirmationFacts(confirmation, recent.content)
-  );
 }
 
 async function postTelegramDashboardMessage(

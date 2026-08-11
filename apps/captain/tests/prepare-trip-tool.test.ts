@@ -5,7 +5,8 @@ const USER_ID = "11111111-1111-4111-8111-111111111111";
 const state = vi.hoisted(() => ({
   prepare: null as unknown,
   handleOpenDraftText: null as unknown,
-  prepareStructured: null as unknown
+  prepareStructured: null as unknown,
+  saveReviewableDraft: null as unknown
 }));
 
 vi.mock("../services/app/services.js", () => ({
@@ -13,7 +14,8 @@ vi.mock("../services/app/services.js", () => ({
     tripPlanning: {
       prepare: state.prepare,
       handleOpenDraftText: state.handleOpenDraftText,
-      prepareStructured: state.prepareStructured
+      prepareStructured: state.prepareStructured,
+      saveReviewableDraft: state.saveReviewableDraft
     }
   })
 }));
@@ -51,6 +53,12 @@ async function call(request: string, turnId: string, sessionId?: string): Promis
 
 describe("prepare_trip turn ceiling", () => {
   beforeEach(() => {
+    state.saveReviewableDraft = vi.fn(async () => ({
+      status: "started",
+      draft: { id: "draft-1", revision: 1 },
+      receipt: { tripId: "trip-1", status: "draft" },
+      message: "Itinerary ready to confirm."
+    }));
     state.handleOpenDraftText = vi.fn(async () => null);
     state.prepare = vi.fn(async () => ({
       status: "needs_input",
@@ -98,6 +106,12 @@ describe("prepare_trip turn ceiling", () => {
 
 describe("prepare_trip declined turns", () => {
   beforeEach(() => {
+    state.saveReviewableDraft = vi.fn(async () => ({
+      status: "started",
+      draft: { id: "draft-1", revision: 1 },
+      receipt: { tripId: "trip-1", status: "draft" },
+      message: "Itinerary ready to confirm."
+    }));
     state.handleOpenDraftText = vi.fn(async () => null);
     state.prepare = vi.fn(async () => ({
       status: "needs_input",
@@ -123,11 +137,12 @@ describe("prepare_trip declined turns", () => {
   });
 
   it("hands stated legs straight to the structured path", async () => {
-    state.prepareStructured = vi.fn(async () => ({
+    const prepared = {
       status: "awaiting_confirmation",
       draft: { id: "draft-1", revision: 1 },
       confirmation: "Ready to create this trip:"
-    }));
+    };
+    state.prepareStructured = vi.fn(async () => prepared);
     const result = await prepareTripTool.execute({
       request: "Four-city run, one adult, no return.",
       legs: [
@@ -136,7 +151,10 @@ describe("prepare_trip declined turns", () => {
       ]
     }, toolContext("turn-i") as never) as ToolResult;
 
-    expect(result.status).toBe("awaiting_confirmation");
+    // A finished plan is saved before the agent sees it: what comes back is the
+    // receipt the traveller confirms, not a card asking them to create it.
+    expect(result.status).toBe("started");
+    expect(state.saveReviewableDraft).toHaveBeenCalledWith(USER_ID, prepared);
     expect(state.prepareStructured).toHaveBeenCalledTimes(1);
     // The prose parser never sees an itinerary that arrived already parsed.
     expect(state.prepare).not.toHaveBeenCalled();

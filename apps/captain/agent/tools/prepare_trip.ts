@@ -2,7 +2,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { structuredTripLegSchema, type TripPlanResult } from "@agents/flight-domain";
 
-import { getCaptainServices } from "../../services/app/services.js";
+import { getCaptainServices, type CaptainServices } from "../../services/app/services.js";
 import { TripPlanningService } from "../../services/trip-planning/service.js";
 import { requireCaptainUser } from "../lib/principal.js";
 import { reportingFailures } from "../lib/tool-failure.js";
@@ -52,23 +52,21 @@ export const prepareTripInputSchema = z.object({
 }).strict();
 
 /**
- * Shape a planning-service result for the agent. Awaiting confirmation must
- * stay awaiting — auto-confirming here skipped Create/Cancel and jumped to a
- * bare dashboard link.
+ * Shape a planning-service result for the agent. A finished plan is saved and
+ * handed back as its receipt: the traveller's Confirm and Review sit on the
+ * saved trip, so there is no Create/Cancel step for the agent to stop at.
  */
-export function agentFacingPrepareResult(result: TripPlanResult): TripPlanResult | (Extract<
-  TripPlanResult,
-  { status: "awaiting_confirmation" }
-> & { message: string }) {
+export async function agentFacingPrepareResult(
+  services: Pick<CaptainServices, "tripPlanning">,
+  userId: string,
+  result: TripPlanResult
+): Promise<TripPlanResult> {
   if (result.status === "needs_input" && result.promptParts) {
     const { promptParts, ...rest } = result;
     return rest;
   }
   if (result.status === "awaiting_confirmation") {
-    return {
-      ...result,
-      message: result.confirmation
-    };
+    return services.tripPlanning.saveReviewableDraft(userId, result);
   }
   return result;
 }
@@ -76,10 +74,10 @@ export function agentFacingPrepareResult(result: TripPlanResult): TripPlanResult
 export default defineTool({
   description: [
     "Prepare or revise one durable, GUI-editable trip draft from the traveller's itinerary.",
-    "Ask at most the service-provided two ambiguity questions; after that Captain uses safe best-fit date windows and presents the plan for Create/Cancel review without starting fare tracking.",
+    "Ask at most the service-provided two ambiguity questions; after that Captain uses safe best-fit date windows and saves the plan without starting fare tracking.",
     "Use this immediately for both straightforward requests and uncertain itineraries; the traveller reviews the Plan page and changes route or timing details in Trip Settings.",
-    "Return the service prompt or confirmation verbatim; do not add questions, recalculate dates, or rewrite defaults.",
-    "When status is awaiting_confirmation, stop and return that confirmation — do not call start_prepared_trip until the traveller confirms.",
+    "Return the service prompt or receipt verbatim; do not add questions, recalculate dates, or rewrite defaults.",
+    "A started status is a saved trip: return its receipt and stop. The traveller confirms or reviews it from that message, so do not ask them to create it and do not call start_prepared_trip.",
     "A no_trip_change status means the request carried no route or date and the traveller already has a trip:",
     "nothing was created or altered, so answer their question from the returned trip instead of asking for a route.",
     "Whenever the itinerary has more than one flight, send `legs` — one entry per flight, in the order flown,",
@@ -111,6 +109,8 @@ export default defineTool({
     // prose path makes before a draft exists.
     if (legs) {
       return agentFacingPrepareResult(
+        services,
+        userId,
         await services.tripPlanning.prepareStructured(
           userId,
           { request, legs },
@@ -125,11 +125,13 @@ export default defineTool({
     // the tool owns the rest.
     if (draftId) {
       return agentFacingPrepareResult(
+        services,
+        userId,
         await services.tripPlanning.prepare(userId, request, null, draftId)
       );
     }
     const decided = await services.tripPlanning.handleOpenDraftText(userId, request, null);
-    if (decided) return agentFacingPrepareResult(decided);
+    if (decided) return agentFacingPrepareResult(services, userId, decided);
     // A null here is the service declining the turn, not asking for a retry.
     // Re-feeding a bare "yes" as a fresh planning request produced a
     // clarification about a route the traveller never mentioned, which is the
@@ -143,6 +145,8 @@ export default defineTool({
       };
     }
     return agentFacingPrepareResult(
+      services,
+      userId,
       await services.tripPlanning.prepare(userId, request, null)
     );
     });

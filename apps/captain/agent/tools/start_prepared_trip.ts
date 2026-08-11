@@ -7,11 +7,11 @@ import { reportingFailures } from "../lib/tool-failure.js";
 
 export default defineTool({
   description: [
-    "Create the exact confirmed trip draft once.",
-    "Call only after the traveller confirms the latest awaiting_confirmation revision",
-    "(Create button, or a clear yes/confirm reply).",
+    "Save a prepared trip draft that is somehow still awaiting confirmation.",
+    "You will almost never need this: prepare_trip already saves a finished plan and returns its receipt,",
+    "so reach for this only when a draft was left unsaved by an interrupted turn.",
     "A successful result contains a persisted trip receipt; return its message verbatim.",
-    "Never claim creation without that receipt, and never call this to skip Create/Cancel."
+    "Never claim creation without that receipt."
   ].join(" "),
   inputSchema: z.object({
     draftId: z.uuid(),

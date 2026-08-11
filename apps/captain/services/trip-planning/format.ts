@@ -168,9 +168,8 @@ export function formatActiveTripList(inputs: ActiveTripFormatInput[]): string {
 export function isExplicitPlanConsentPrompt(message: string): boolean {
   const text = message.trim();
   if (!text) return false;
-  if (/^Ready to create this trip:/imu.test(text)) return true;
-  if (/Tap Create or Cancel below/iu.test(text)) return true;
-  if (/^Itinerary ready to confirm\./imu.test(text)) return true;
+  if (looksLikeTripPlanConfirmation(text)) return true;
+  if (looksLikeTripCreationReceipt(text)) return true;
   if (/Replace it with this (?:one|new\b)/iu.test(text)) return true;
   // A bare "yes" only counts against a prompt that asked for one, so this has
   // to recognise the replace question in whatever wording it currently uses.
@@ -183,6 +182,36 @@ export function isExplicitPlanConsentPrompt(message: string): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Whatever the planner prefixed above the plan's own header — the date conflict
+ * it resolved, most often. `formatTripPlanConfirmation` owns the header down, so
+ * anything above it was added for the traveller and has to survive a channel
+ * that saves the plan instead of showing the card it was written onto.
+ */
+export function tripPlanConfirmationNote(confirmation: string): string | null {
+  const header = confirmation.search(/^Ready to create this trip:/mu);
+  if (header <= 0) return null;
+  return confirmation.slice(0, header).trim() || null;
+}
+
+/**
+ * Text that offers a plan for Create/Cancel — the card the service writes, or a
+ * model restatement that kept its header or its instruction. The buttons live
+ * on the message that carries them, so this wording with nothing awaiting
+ * confirmation points the traveller at a tap that is not there.
+ */
+export function looksLikeTripPlanConfirmation(message: string): boolean {
+  const text = message.trim();
+  if (!text) return false;
+  if (/^Ready to create this trip:/imu.test(text)) return true;
+  return /Tap Create or Cancel below/iu.test(text);
+}
+
+/** Whether the text carries the receipt for a saved trip. */
+export function looksLikeTripCreationReceipt(message: string): boolean {
+  return /^Itinerary ready to confirm\./imu.test(message.trim());
 }
 
 function formatActiveTripRoute(input: ActiveTripFormatInput): string {
@@ -301,9 +330,20 @@ export function tripConfirmationFacts(message: string): string[] {
     .filter((line) => /^(?:route|leg \d+|depart|return|stay|trip type|travellers|cabin|stops|currency|budget|airlines|avoiding):/u.test(line));
 }
 
+/**
+ * Below this, two messages have too little labelled plan in them to be called
+ * the same plan: a single "• Route:" line is a mention, not a restatement.
+ */
+const MIN_COMPARABLE_PLAN_FACTS = 3;
+
+/** Whether the text restates a whole plan rather than mentioning part of one. */
+export function isTripPlanRestatement(message: string): boolean {
+  return tripConfirmationFacts(message).length >= MIN_COMPARABLE_PLAN_FACTS;
+}
+
 export function hasSameTripConfirmationFacts(expected: string, candidate: string): boolean {
   const expectedFacts = tripConfirmationFacts(expected);
-  if (expectedFacts.length < 3) return false;
+  if (expectedFacts.length < MIN_COMPARABLE_PLAN_FACTS) return false;
   const candidateFacts = new Set(tripConfirmationFacts(candidate));
   return expectedFacts.every((fact) => candidateFacts.has(fact));
 }

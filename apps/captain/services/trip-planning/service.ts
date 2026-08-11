@@ -30,7 +30,8 @@ import {
   formatActiveTripLocation,
   formatTripCreationReceipt,
   formatTripPlanConfirmation,
-  isExplicitPlanConsentPrompt
+  isExplicitPlanConsentPrompt,
+  tripPlanConfirmationNote
 } from "./format.js";
 import { suggestedMaxStops, suggestedTripCurrency } from "./currency.js";
 import {
@@ -496,11 +497,9 @@ export class TripPlanningService {
     // saved Review / Confirm checkpoint before it posts anything.
     if (state.questionsAsked > 0) {
       const started = await this.confirm(userId, revised.id, revised.revision);
-      if (started.status !== "started" || !reduced.issue) return started;
-      return {
-        ...started,
-        message: `${reduced.issue}\n\n${started.message}`
-      };
+      return reduced.issue
+        ? { ...started, message: `${reduced.issue}\n\n${started.message}` }
+        : started;
     }
     return {
       status: "awaiting_confirmation",
@@ -511,7 +510,29 @@ export class TripPlanningService {
     };
   }
 
-  async confirm(userId: string, draftId: string, expectedRevision: number): Promise<TripPlanResult> {
+  /**
+   * Save a plan the traveller can review, and hand back its receipt. This is
+   * what chat gets instead of a Create/Cancel card: the receipt's Confirm and
+   * Review are the same consent one step later, on a trip that exists and can
+   * be opened and edited — the card asked for it on a plan nothing had saved.
+   *
+   * A note the planner wrote above the plan — a date conflict it resolved —
+   * rides onto the receipt, because the card it was written onto is not sent.
+   */
+  async saveReviewableDraft(
+    userId: string,
+    result: Extract<TripPlanResult, { status: "awaiting_confirmation" }>
+  ): Promise<Extract<TripPlanResult, { status: "started" }>> {
+    const started = await this.confirm(userId, result.draft.id, result.draft.revision);
+    const note = tripPlanConfirmationNote(result.confirmation);
+    return note ? { ...started, message: `${note}\n\n${started.message}` } : started;
+  }
+
+  async confirm(
+    userId: string,
+    draftId: string,
+    expectedRevision: number
+  ): Promise<Extract<TripPlanResult, { status: "started" }>> {
     const now = this.#now();
     const draft = await this.#store.getTripPlanDraft(userId, draftId, now);
     if (!draft?.confirmationSnapshot) throw new Error("Trip draft is incomplete or expired");

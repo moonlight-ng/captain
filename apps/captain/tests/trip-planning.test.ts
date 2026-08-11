@@ -7,11 +7,9 @@ import {
 } from "@agents/flight-domain";
 import { MemoryCaptainPlatformStore } from "@agents/flight-store";
 import {
-  hasDeliveredTripConfirmation,
+  claimTurnPlanRestatement,
   isCaptainGreeting,
-  isDuplicateTripConfirmationReply,
   parseTripPlanCallback,
-  tripPlanConfirmationReplyMarkup,
   tripPlanReviewReplyMarkup
 } from "../agent/channels/telegram.js";
 import {
@@ -23,7 +21,11 @@ import {
   formatActiveTripList,
   formatTripPlanConfirmation,
   isExplicitPlanConsentPrompt,
+  isTripPlanRestatement,
+  looksLikeTripCreationReceipt,
+  looksLikeTripPlanConfirmation,
   telegramDashboardMessage,
+  tripPlanConfirmationNote,
   type ActiveTripFormatInput
 } from "../services/trip-planning/format.js";
 import { TripService } from "../services/trips/service.js";
@@ -178,40 +180,69 @@ describe("Captain trip planning", () => {
     expect(correction.draft.state.legs[0]?.destinationAirports).toEqual(["LON"]);
   });
 
+  /**
+   * Captain no longer sends Create/Cancel, but cards it sent before still sit in
+   * travellers' chats and their buttons must keep resolving to the right draft.
+   */
   it("parses revision-bound Telegram confirmation buttons", () => {
     const id = "11111111-1111-4111-8111-111111111111";
-    expect(tripPlanConfirmationReplyMarkup({ id, revision: 3 })).toEqual({
-      inline_keyboard: [[{
-        text: "Create",
-        callback_data: `captain-trip:start:${id}:3`
-      }, {
-        text: "Cancel",
-        callback_data: `captain-trip:cancel:${id}:3`
-      }]]
-    });
     expect(parseTripPlanCallback(`captain-trip:start:${id}:3`)).toEqual({
       type: "start",
+      draftId: id,
+      revision: 3
+    });
+    expect(parseTripPlanCallback(`captain-trip:cancel:${id}:3`)).toEqual({
+      type: "cancel",
       draftId: id,
       revision: 3
     });
     expect(parseTripPlanCallback(`captain-trip:start:${id}:0`)).toBeNull();
   });
 
-  it("keeps prepare_trip on awaiting_confirmation instead of auto-creating", async () => {
+  it("hands the agent a saved receipt instead of a plan to create", async () => {
+    const clock = new Date("2026-08-08T12:00:00Z");
+    const { planning, store, user } = await setup(clock, async () => true);
     const { agentFacingPrepareResult } = await import("../agent/tools/prepare_trip.js");
-    const draft = confirmableDraft();
-    const confirmation = formatTripPlanConfirmation(draft);
-    const result = agentFacingPrepareResult({
-      status: "awaiting_confirmation",
-      draft,
-      confirmation
+
+    const prepared = await planning.prepare(user.id, "Plan a trip from Lagos to Nairobi");
+    expect(prepared.status).toBe("awaiting_confirmation");
+    if (prepared.status !== "awaiting_confirmation") throw new Error("Expected plan review");
+
+    const result = await agentFacingPrepareResult({ tripPlanning: planning }, user.id, prepared);
+    expect(result.status).toBe("started");
+    if (result.status !== "started") throw new Error("Expected a saved trip receipt");
+    expect(result.message).toContain("Itinerary ready to confirm.");
+    expect(result.message).not.toContain("Ready to create this trip:");
+    expect(result.message).not.toContain("Tap Create or Cancel");
+    expect(result.receipt.status).toBe("draft");
+    expect(await store.getTrip(user.id, result.receipt.tripId)).toMatchObject({ status: "draft" });
+  });
+
+  it("carries a planner note onto the receipt it replaces the card with", async () => {
+    const clock = new Date("2026-08-08T12:00:00Z");
+    const { planning, user } = await setup(clock, async () => true);
+
+    const prepared = await planning.prepare(user.id, "Plan a trip from Lagos to Nairobi");
+    if (prepared.status !== "awaiting_confirmation") throw new Error("Expected plan review");
+    const note = "I moved the return: the 8th is before you land.";
+
+    const started = await planning.saveReviewableDraft(user.id, {
+      ...prepared,
+      confirmation: `${note}\n\n${prepared.confirmation}`
     });
-    expect(result).toMatchObject({
-      status: "awaiting_confirmation",
-      confirmation,
-      message: confirmation
-    });
-    expect(result).not.toHaveProperty("receipt");
+    expect(started.message).toContain(note);
+    expect(started.message).toContain("Itinerary ready to confirm.");
+    expect(started.message.indexOf(note)).toBeLessThan(
+      started.message.indexOf("Itinerary ready to confirm.")
+    );
+  });
+
+  it("reads a planner note as whatever sits above the plan's own header", () => {
+    const card = formatTripPlanConfirmation(confirmableDraft());
+    expect(tripPlanConfirmationNote(card)).toBeNull();
+    expect(tripPlanConfirmationNote(`Those dates overlap.\n\n${card}`))
+      .toBe("Those dates overlap.");
+    expect(tripPlanConfirmationNote("Itinerary ready to confirm.")).toBeNull();
   });
 
   it("binds Review and Confirm to the saved trip version", () => {
@@ -243,51 +274,73 @@ describe("Captain trip planning", () => {
     expect(isTripConfirmationText("review it first")).toBe(false);
   });
 
-  it("distinguishes a delivered confirmation from an older button message", () => {
-    const draft = { updatedAt: "2026-09-01T12:00:00.000Z" };
-    expect(hasDeliveredTripConfirmation(draft, "Ready", [{
-      role: "assistant",
-      content: "Ready",
-      createdAt: "2026-09-01T11:59:59.000Z"
-    }])).toBe(false);
-    expect(hasDeliveredTripConfirmation(draft, "Ready", [{
-      role: "assistant",
-      content: "Ready",
-      createdAt: "2026-09-01T12:00:01.000Z"
-    }])).toBe(true);
+  /**
+   * The reported bug: one turn showed the Create/Cancel card, created the trip,
+   * and then restated the same plan on the way to the receipt. The traveller
+   * read their route three times, and the middle copy carried no buttons — the
+   * model's own retyping, down to a straight apostrophe where the card has a
+   * curly one, which is why the bytes cannot be what these are compared on.
+   */
+  const multiCityCard = [
+    "Ready to create this trip:",
+    "",
+    "• Route: LON → PAR → MRS → NYC → LOS",
+    "• Leg 1: LON → PAR · Tuesday, 3 Nov 2026",
+    "• Leg 2: PAR → MRS · Sunday, 8 Nov 2026 – Friday, 13 Nov 2026",
+    "• Leg 3: MRS → NYC · Tuesday, 8 Dec 2026 – Wednesday, 9 Dec 2026",
+    "• Leg 4: NYC → LOS · Sunday, 20 Dec 2026 – Wednesday, 23 Dec 2026",
+    "• Trip type: Multi-city",
+    "• Travellers: 1 (default)",
+    "• Cabin: Economy (default)",
+    "• Stops: At most 1 stop",
+    "• Currency: USD (default)",
+    "",
+    "Tap Create or Cancel below, or reply with what you’d like to change."
+  ].join("\n");
+  const retypedCard = multiCityCard.replace("you’d", "you'd");
+
+  it("says a plan once per turn however the model retypes it", () => {
+    expect(claimTurnPlanRestatement("turn-1", multiCityCard)).toBe(true);
+    expect(claimTurnPlanRestatement("turn-1", retypedCard)).toBe(false);
+    // A revision is a different plan, not a repeat: the route line moves.
+    expect(claimTurnPlanRestatement(
+      "turn-1",
+      multiCityCard.replace("→ MRS ", "→ NCE ")
+    )).toBe(true);
+    // The next turn may show the plan again — a traveller who asks for it back
+    // is owed it.
+    expect(claimTurnPlanRestatement("turn-2", multiCityCard)).toBe(true);
   });
 
-  it("suppresses a repeated confirmation after the button message was delivered", () => {
-    const draft = { updatedAt: "2026-09-01T12:00:00.000Z" };
-    const confirmation = [
-      "Ready to create this trip:",
-      "",
-      "• Route: LOS → LON",
-      "• Depart: Sunday, 6 Sep 2026",
-      "• Trip type: One-way (default)",
-      "• Travellers: 1 (default)",
-      "• Cabin: Economy (default)",
-      "• Stops: At most 2 stops (default)",
-      "• Currency: USD (default)",
-      "",
-      "Tap Create or Cancel below, or reply with what you’d like to change."
-    ].join("\n");
-    const echo = confirmation.replace(
-      "Tap Create or Cancel below, or reply with what you’d like to change.",
-      "Reply “Create” to start tracking, or tell me what you’d like to change."
-    );
-    const delivered = [{
-      role: "assistant" as const,
-      content: confirmation,
-      createdAt: "2026-09-01T12:00:01.000Z"
-    }];
+  it("claims nothing for a message that is not a plan restatement", () => {
+    expect(claimTurnPlanRestatement("turn-3", "Which airport in Italy?")).toBe(true);
+    expect(claimTurnPlanRestatement("turn-3", "Which airport in Italy?")).toBe(true);
+  });
 
-    expect(isDuplicateTripConfirmationReply(draft, confirmation, echo, delivered)).toBe(true);
-    expect(isDuplicateTripConfirmationReply(
-      draft,
-      confirmation,
-      echo.replace("LOS → LON", "LOS → NYC"),
-      delivered
+  it("recognizes a Create/Cancel offer without mistaking the receipt for one", () => {
+    expect(looksLikeTripPlanConfirmation(multiCityCard)).toBe(true);
+    expect(looksLikeTripPlanConfirmation(retypedCard)).toBe(true);
+    expect(looksLikeTripPlanConfirmation(
+      "Got it — here is the plan.\n\nReady to create this trip:\n\n• Route: LOS → LON"
+    )).toBe(true);
+    expect(looksLikeTripPlanConfirmation(
+      "Itinerary ready to confirm.\n\nLON → PAR\nLeg 1 · LON → PAR · Tuesday, 3 Nov 2026"
+    )).toBe(false);
+    expect(looksLikeTripPlanConfirmation("Which airport in Italy?")).toBe(false);
+  });
+
+  it("lets a receipt through even when card wording is stuck to it", () => {
+    const both = `${multiCityCard}\n\nItinerary ready to confirm.\n\nLON → PAR`;
+    expect(looksLikeTripPlanConfirmation(both)).toBe(true);
+    expect(looksLikeTripCreationReceipt(both)).toBe(true);
+    expect(looksLikeTripCreationReceipt(multiCityCard)).toBe(false);
+  });
+
+  it("counts a whole plan as a restatement and a passing mention as not", () => {
+    expect(isTripPlanRestatement(multiCityCard)).toBe(true);
+    expect(isTripPlanRestatement("• Route: LON → PAR → MRS")).toBe(false);
+    expect(isTripPlanRestatement(
+      "Itinerary ready to confirm.\n\nLON → PAR\nLeg 1 · LON → PAR · Tuesday, 3 Nov 2026"
     )).toBe(false);
   });
 
