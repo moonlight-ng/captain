@@ -28,6 +28,9 @@ import {
 import { toTrackedPriceHistory } from "../../services/trips/tracked-price-history.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
+/** Vite copies `apps/web/public/*` into `dist/` root as single-segment files. */
+const PUBLIC_DIST_FILE = /^[a-zA-Z0-9._-]+\.(?:avif|gif|ico|jpe?g|png|svg|webp|webmanifest|txt)$/u;
+
 export default defineChannel({
   kindHint: "captain-api",
   routes: [
@@ -77,7 +80,10 @@ export default defineChannel({
     GET("/api/me/trip/legs/:legId/searches/:searchId", authenticated(getTripLegSearch)),
     POST("/api/me/trip/legs/:legId/selection", authenticatedMutation(setTripLegSelection)),
     GET("/api/flights/:flightKey", safely(getCanonicalFlight)),
-    DELETE("/api/me/account", authenticatedMutation(requireSession(deleteAccount)))
+    DELETE("/api/me/account", authenticatedMutation(requireSession(deleteAccount))),
+    // After SPA/API routes so `/trip` etc. keep winning; only extensioned
+    // public files from `dist/` (Vite's copy of `apps/web/public`) land here.
+    GET("/:file", serveDistRootFile)
   ]
 });
 
@@ -776,6 +782,27 @@ async function serveAsset(
   }
 }
 
+/** Vite copies `apps/web/public/*` to `dist/` root; hashed bundles live under `/assets`. */
+async function serveDistRootFile(
+  _request: Request,
+  context: RouteContext
+): Promise<Response> {
+  const file = context.params.file;
+  if (!file || file === "index.html" || !PUBLIC_DIST_FILE.test(file)) {
+    return new Response("Not found", { status: 404 });
+  }
+  try {
+    return new Response(await readFile(resolve("dist", file)), {
+      headers: {
+        "content-type": contentType(file),
+        "cache-control": "public, max-age=86400"
+      }
+    });
+  } catch {
+    return new Response("Not found", { status: 404 });
+  }
+}
+
 async function requestJson(request: Request): Promise<unknown> {
   const length = Number(request.headers.get("content-length") ?? "0");
   if (Number.isFinite(length) && length > MAX_BODY_BYTES) throw new Error("body_too_large");
@@ -837,7 +864,15 @@ function contentType(file: string): string {
     ".js": "text/javascript; charset=utf-8",
     ".svg": "image/svg+xml",
     ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".avif": "image/avif",
+    ".ico": "image/x-icon",
+    ".txt": "text/plain; charset=utf-8",
+    ".webmanifest": "application/manifest+json",
     ".woff": "font/woff",
     ".woff2": "font/woff2"
-  } as Record<string, string>)[extname(file)] ?? "application/octet-stream";
+  } as Record<string, string>)[extname(file).toLowerCase()] ?? "application/octet-stream";
 }
