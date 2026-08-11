@@ -42,7 +42,6 @@ import {
 
 import { getCaptainServices } from "../../services/app/services.js";
 import { clearTelegramOwnerContext } from "../../services/agent/owner-context.js";
-import { CAPTAIN_NEW_USER_GREETING } from "../../services/onboarding/followups.js";
 import {
   isTripConfirmationText,
   TripPlanningService
@@ -233,7 +232,25 @@ export function captainPlanningStages(
 const PROCESSING_FAILURE_TEXT = "That one didn’t go through on my end. Your trip is untouched — try me again.";
 // Onboarding opens as a conversation. Capability and orientation messages are
 // staggered later, and disappear as soon as the traveller finds their own way.
-export { CAPTAIN_NEW_USER_GREETING };
+// The opening question varies, because a single scripted line is the one thing
+// every traveller reads before deciding whether this is a person or a form.
+// Each asks for the trip in its own way and leaves the traveller free to answer
+// with as much or as little as they have.
+export const CAPTAIN_NEW_USER_GREETINGS = [
+  "Hi, I’m Captain. Where do you want to go?",
+  "Hi, I’m Captain. What’s the plan?",
+  "Hi, I’m Captain. What’s on your mind?"
+] as const;
+/**
+ * A traveller meets Captain once, so the variant is picked from something
+ * stable about them rather than rotated: the same person re-reading their own
+ * chat history finds the greeting they were actually sent.
+ */
+export function captainNewUserGreeting(variationKey: string): string {
+  return CAPTAIN_NEW_USER_GREETINGS[
+    stableVariationIndex(variationKey, CAPTAIN_NEW_USER_GREETINGS.length)
+  ]!;
+}
 // Captain introduces itself once, at the welcome step. A traveller who has
 // already onboarded gets this instead.
 export const CAPTAIN_RETURNING_TRAVELLER_WELCOME =
@@ -908,8 +925,9 @@ async function postNewUserOnboarding(
 
   // The caller already completed onboarding by claiming the welcome step. The
   // remaining orientation is scheduled and only survives while they are idle.
-  await ctx.telegram.post(CAPTAIN_NEW_USER_GREETING);
-  await remember(CAPTAIN_NEW_USER_GREETING);
+  const greeting = captainNewUserGreeting(userId);
+  await ctx.telegram.post(greeting);
+  await remember(greeting);
 }
 
 async function postWithLink(

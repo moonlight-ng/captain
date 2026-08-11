@@ -10,10 +10,11 @@ import {
   CAPTAIN_FEEDBACK_COMMAND,
   CAPTAIN_FEEDBACK_PROMPT,
   CAPTAIN_HOLDING_STATUS,
-  CAPTAIN_NEW_USER_GREETING,
+  CAPTAIN_NEW_USER_GREETINGS,
   CAPTAIN_OPENING_STATUS_VARIANTS,
   CAPTAIN_PLANNING_STATUS,
   CAPTAIN_PROVIDER_HOLDING_STATUS,
+  captainNewUserGreeting,
   captainPlanningStages,
   CAPTAIN_PROFILE_COMMAND,
   CAPTAIN_RETURNING_TRAVELLER_WELCOME,
@@ -39,9 +40,11 @@ import {
 
 describe("Telegram profile onboarding", () => {
   it("starts every new traveller with a conversational introduction", () => {
-    expect(CAPTAIN_NEW_USER_GREETING).toBe(
-      "Hi, I'm Captain. Tell me about your trip."
-    );
+    expect([...CAPTAIN_NEW_USER_GREETINGS]).toEqual([
+      "Hi, I’m Captain. Where do you want to go?",
+      "Hi, I’m Captain. What’s the plan?",
+      "Hi, I’m Captain. What’s on your mind?"
+    ]);
     expect(CAPTAIN_ONBOARDING_CAPABILITIES).toBe(
       "I can help you figure out where to go, plan a multi-city trip, compare flight options across different dates, or watch for fare changes once your trip is set."
     );
@@ -54,10 +57,15 @@ describe("Telegram profile onboarding", () => {
   });
 
   it("keeps the greeting warm and moves product orientation into follow-ups", () => {
-    expect(CAPTAIN_NEW_USER_GREETING).not.toContain("early testing");
-    expect(CAPTAIN_NEW_USER_GREETING).not.toContain("one trip at a time");
-    expect(CAPTAIN_NEW_USER_GREETING).not.toContain("USD fares");
-    expect(CAPTAIN_NEW_USER_GREETING).not.toContain("book or pay");
+    for (const greeting of CAPTAIN_NEW_USER_GREETINGS) {
+      expect(greeting).not.toContain("early testing");
+      expect(greeting).not.toContain("one trip at a time");
+      expect(greeting).not.toContain("USD fares");
+      expect(greeting).not.toContain("book or pay");
+      // Every variant has to end in an open question, or a traveller who drew
+      // it is left introduced to Captain with nothing asked of them.
+      expect(greeting).toMatch(/\?$/u);
+    }
     expect(CAPTAIN_ONBOARDING_CAPABILITIES).toContain("multi-city trip");
     expect(CAPTAIN_ONBOARDING_CAPABILITIES).toContain("once your trip is set");
     expect(CAPTAIN_ONBOARDING_WORKSPACE).toContain("voice note or text");
@@ -66,12 +74,26 @@ describe("Telegram profile onboarding", () => {
   });
 
   it("introduces Captain once and welcomes returning travellers differently", () => {
-    expect(CAPTAIN_NEW_USER_GREETING).toMatch(/I['’]m Captain/u);
+    for (const greeting of CAPTAIN_NEW_USER_GREETINGS) {
+      expect(greeting).toMatch(/I['’]m Captain/u);
+    }
     expect(CAPTAIN_ONBOARDING_CAPABILITIES).not.toMatch(/I['’]m Captain/u);
     expect(CAPTAIN_RETURNING_TRAVELLER_WELCOME).not.toMatch(/I['’]m Captain/u);
     expect(CAPTAIN_RETURNING_TRAVELLER_WELCOME).toBe(
       "Welcome back. Where to next?"
     );
+  });
+
+  it("greets a given traveller the same way every time and varies across them", () => {
+    // The greeting is posted once and kept in the traveller's own conversation
+    // history, so the variant has to be a function of who they are rather than
+    // of when the line happened to be rendered.
+    expect(captainNewUserGreeting("user-1")).toBe(captainNewUserGreeting("user-1"));
+    expect(CAPTAIN_NEW_USER_GREETINGS).toContain(captainNewUserGreeting("user-1"));
+    const drawn = new Set(
+      Array.from({ length: 60 }, (_, index) => captainNewUserGreeting(`user-${index}`))
+    );
+    expect(drawn.size).toBe(CAPTAIN_NEW_USER_GREETINGS.length);
   });
 
   it("welcomes a returning traveller back to an existing trip", () => {
