@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { getCaptainServices } from "../../services/app/services.js";
 import { requireCaptainUser } from "../lib/principal.js";
+import { reportingFailures } from "../lib/tool-failure.js";
 
 export default defineTool({
   description: [
@@ -17,11 +18,13 @@ export default defineTool({
     expectedRevision: z.number().int().positive()
   }).strict(),
   async execute({ draftId, expectedRevision }, ctx) {
-    const services = await getCaptainServices();
-    return services.tripPlanning.confirm(
-      requireCaptainUser(ctx),
-      draftId,
-      expectedRevision
-    );
+    return reportingFailures(async () => {
+      const services = await getCaptainServices();
+      return services.tripPlanning.confirm(
+        requireCaptainUser(ctx),
+        draftId,
+        expectedRevision
+      );
+    });
   }
 });

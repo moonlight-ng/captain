@@ -5,6 +5,7 @@ import { structuredTripLegSchema, type TripPlanResult } from "@agents/flight-dom
 import { getCaptainServices } from "../../services/app/services.js";
 import { TripPlanningService } from "../../services/trip-planning/service.js";
 import { requireCaptainUser } from "../lib/principal.js";
+import { reportingFailures } from "../lib/tool-failure.js";
 
 /**
  * One call to prepare, one to correct it. A third is never a better phrasing —
@@ -94,6 +95,7 @@ export default defineTool({
   ].join(" "),
   inputSchema: prepareTripInputSchema,
   async execute({ request, draftId, legs }, ctx) {
+    return reportingFailures(async () => {
     const services = await getCaptainServices();
     const userId = requireCaptainUser(ctx);
     if (!claimPrepareCall(ctx.session.id, ctx.session.turn.id)) {
@@ -143,5 +145,6 @@ export default defineTool({
     return agentFacingPrepareResult(
       await services.tripPlanning.prepare(userId, request, null)
     );
+    });
   }
 });

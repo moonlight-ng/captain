@@ -172,6 +172,10 @@ export function isExplicitPlanConsentPrompt(message: string): boolean {
   if (/Tap Create or Cancel below/iu.test(text)) return true;
   if (/^Itinerary ready to confirm\./imu.test(text)) return true;
   if (/Replace it with this (?:one|new\b)/iu.test(text)) return true;
+  // A bare "yes" only counts against a prompt that asked for one, so this has
+  // to recognise the replace question in whatever wording it currently uses.
+  if (/should I swap it for this one/iu.test(text)) return true;
+  if (/already tracking .+\bswap\b/isu.test(text)) return true;
   if (/already have .+ as your active trip/iu.test(text) && /\breplace\b/iu.test(text)) {
     return true;
   }

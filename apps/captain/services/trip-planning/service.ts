@@ -927,8 +927,11 @@ function replacementPrompt(
   candidate: TripPlanConfirmationSnapshot
 ): string[] {
   const legs = candidate.input.brief.legs ?? [];
-  const question = `You already have “${activeTrip.title}” as your active trip. Replace it with this one? `
-    + "If you want to keep both, use /feedback to let us know.";
+  // Captain's own limit, said in Captain's own voice. Pointing the traveller
+  // at /feedback to ask for a second trip read like an internal note that
+  // escaped, because that is what it was.
+  const question = `You’re already tracking “${activeTrip.title}”. `
+    + "I can only follow one trip at a time — should I swap it for this one?";
   if (legs.length === 0) return [question];
   return [
     [

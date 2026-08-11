@@ -63,6 +63,57 @@ const credentials = {
   webhookSecretToken: () => required("TELEGRAM_WEBHOOK_SECRET_TOKEN")
 };
 const pendingSessionRotations = new Map<string, PendingSessionRotation>();
+/**
+ * What the traveller just said, so the turn's opening acknowledgement can echo
+ * their own route back. `turn.started` fires with the session, not the
+ * message, and Captain going quiet until some recognised tool fired is the
+ * thing this is here to fix.
+ */
+const pendingTurnContent = new Map<string, { content: string; key: string }>();
+
+/**
+ * Text already sent this turn. A model that speaks before a tool call often
+ * repeats itself in its final answer, and the traveller should not read the
+ * same sentence twice.
+ */
+const turnMessagesSent = new Map<string, Set<string>>();
+
+const turnsWithPreface = new Set<string>();
+
+function claimTurnPreface(turnId: string): boolean {
+  if (turnsWithPreface.has(turnId)) return false;
+  turnsWithPreface.add(turnId);
+  while (turnsWithPreface.size > 64) {
+    const oldest = turnsWithPreface.values().next();
+    if (oldest.done) break;
+    turnsWithPreface.delete(oldest.value);
+  }
+  return true;
+}
+
+function claimTurnMessage(turnId: string, text: string): boolean {
+  const sent = turnMessagesSent.get(turnId) ?? new Set<string>();
+  if (sent.has(text)) return false;
+  sent.add(text);
+  turnMessagesSent.set(turnId, sent);
+  while (turnMessagesSent.size > 64) {
+    const oldest = turnMessagesSent.keys().next();
+    if (oldest.done) break;
+    turnMessagesSent.delete(oldest.value);
+  }
+  return true;
+}
+
+function rememberTurnContent(chatId: string, content: string, key: string): void {
+  pendingTurnContent.set(chatId, { content, key });
+  // A turn that never starts — a command handled inline, a dropped update —
+  // must not leave its opening waiting for the next one.
+  while (pendingTurnContent.size > 64) {
+    const oldest = pendingTurnContent.keys().next();
+    if (oldest.done) break;
+    pendingTurnContent.delete(oldest.value);
+  }
+}
 const agentProgress = new TelegramProgressTracker();
 const pendingConfirmationPosts = new Set<string>();
 // Only steps a traveller would recognise as work belong here. Tools left out
@@ -115,9 +166,19 @@ function stableVariationIndex(seed: string, choices: number): number {
 // say about waiting.
 export const CAPTAIN_HOLDING_STATUS = [
   "Still on it…",
-  "The providers are being slow. Still on it…",
   "Almost there — thanks for your patience…"
 ] as const;
+/**
+ * Only a step that is genuinely waiting on an airline gets to blame one. These
+ * used to be the default for every step, on a timer with no idea what was
+ * running, so Captain reported slow providers while it was reading a date.
+ */
+export const CAPTAIN_PROVIDER_HOLDING_STATUS = [
+  "Still checking…",
+  "The airlines are being slow to answer. Still checking…",
+  "Almost there — thanks for your patience…"
+] as const;
+const CAPTAIN_PROVIDER_TOOLS = new Set(["search_trip_leg", "search_flights"]);
 // The deterministic planner interprets the request, resolves airports, and
 // validates the calendar before any agent tool runs, so its stages are known up
 // front and paced on a timer rather than reported by a tool.
@@ -126,6 +187,25 @@ export const CAPTAIN_PLANNING_STATUS = [
   ...CAPTAIN_HOLDING_STATUS
 ] as const;
 const CAPTAIN_PLANNING_STAGE_MS = 3_000;
+
+/**
+ * The status stages for one turn: what Captain says before it knows anything,
+ * then the lines that take over while it works.
+ *
+ * Extracted so the wiring can be asserted. It was silently dropped in
+ * 16020b8 — the opening acknowledgement went on existing, fully tested, and
+ * called from nowhere, and travellers got silence until a recognised tool
+ * happened to fire.
+ */
+export function captainPlanningStages(
+  content: string,
+  variationKey: string
+): { opening: string; lines: readonly string[] } {
+  return {
+    opening: captainOpeningStatus(content, variationKey),
+    lines: CAPTAIN_HOLDING_STATUS
+  };
+}
 const PROCESSING_FAILURE_TEXT = "That one didn’t go through on my end. Your trip is untouched — try me again.";
 // Onboarding opens as a conversation. Capability and orientation messages are
 // staggered later, and disappear as soon as the traveller finds their own way.
@@ -364,7 +444,11 @@ export default telegramChannel({
       // It used to route on verbs. “What's the best day to fly that week”
       // matched /fly/ and /best/, opened an empty draft, and answered a
       // question about an existing trip by asking where they were flying from.
-      const reply = await withCaptainProgress(ctx, telegramChatId, null, async () => {
+      const reply = await withCaptainProgress(
+        ctx,
+        telegramChatId,
+        captainPlanningStages(content, String(messageId)),
+        async () => {
         const decision = await services.tripPlanning.handleDraftDecision(
           user.id,
           content,
@@ -386,7 +470,8 @@ export default telegramChannel({
           return { kind: "trip_confirmation_accepted" as const };
         }
         return null;
-      });
+      }
+      );
       if (reply) {
         if (reply.kind === "trip_confirmation_accepted") {
           const summary = await services.tripPlanning.activeTripsLocation(user.id);
@@ -430,6 +515,7 @@ export default telegramChannel({
     if (voiceTranscript !== null) {
       promoteVoiceTranscriptToTelegramTurn(message, voiceTranscript);
     }
+    rememberTurnContent(String(telegramChatId), content, String(messageId));
     return {
       auth: {
         attributes: {
@@ -574,10 +660,16 @@ export default telegramChannel({
     async "turn.started"(data, channel, ctx) {
       await channel.telegram.startTyping();
       const chatId = channel.telegram.chatId;
+      const said = pendingTurnContent.get(chatId);
+      pendingTurnContent.delete(chatId);
+      const stages = said ? captainPlanningStages(said.content, said.key) : null;
       agentProgress.start({
         sessionId: ctx.session.id,
         chatId,
         turnId: data.turnId,
+        // Something is said within half a second of every turn, before Captain
+        // knows anything — an acknowledgement, not a claim about the work.
+        ...(stages ? { opening: stages.opening } : {}),
         holdingLines: CAPTAIN_HOLDING_STATUS,
         ...telegramProgressCallbacks(channel.telegram, chatId),
         onTyping: () => channel.telegram.startTyping()
@@ -585,13 +677,36 @@ export default telegramChannel({
     },
     async "actions.requested"(data, channel, ctx) {
       await channel.telegram.startTyping();
-      const label = statusTextForToolNames(
-        toolNamesFromActions(data.actions as never),
-        CAPTAIN_TOOL_STATUS
-      );
+      const toolNames = toolNamesFromActions(data.actions as never);
+      const label = statusTextForToolNames(toolNames, CAPTAIN_TOOL_STATUS);
       // Tools without a traveller-facing step keep the typing indicator only.
       if (!label) return;
-      await agentProgress.setStatus(ctx.session.id, data.turnId, label);
+      const waitsOnAirlines = toolNames.some((name) => CAPTAIN_PROVIDER_TOOLS.has(name));
+      await agentProgress.setStatus(
+        ctx.session.id,
+        data.turnId,
+        label,
+        waitsOnAirlines ? CAPTAIN_PROVIDER_HOLDING_STATUS : CAPTAIN_HOLDING_STATUS
+      );
+    },
+    /**
+     * A failed tool used to leave no trace anywhere Captain's operators could
+     * see — the model got the error and decided alone what to do with it. This
+     * cannot rewrite what the model reads (that is each tool's own job), but
+     * it does mean a failure is visible afterwards.
+     */
+    async "action.result"(data, _channel, ctx) {
+      const result = data as unknown as {
+        error?: { code?: string; message?: string };
+        toolName?: string;
+      };
+      if (!result.error) return;
+      console.error(JSON.stringify({
+        event: "captain.tool_call_failed",
+        session_id: ctx.session.id,
+        tool: result.toolName ?? "unknown",
+        code: result.error.code ?? "unknown"
+      }));
     },
     async "input.requested"(data, channel, ctx) {
       const requests = Array.isArray(data.requests)
@@ -659,7 +774,33 @@ export default telegramChannel({
       });
     },
     async "message.completed"(data, channel, ctx) {
-      if (data.finishReason === "tool-calls" || !data.message) return;
+      if (!data.message) return;
+      // Captain is told to leave a response before going off to do a job.
+      // This used to throw exactly that message away, so the instruction was
+      // unfollowable: a turn that reached for a tool said nothing until the
+      // tool came back. It is delivered as its own message, and the status
+      // line stays up because the work is still running.
+      if (data.finishReason === "tool-calls") {
+        const preface = reviewCaptainMessage(data.message).trim();
+        const userId = authUserId(ctx.session.auth.current?.attributes.captain_user_id);
+        if (!preface || !userId) return;
+        // One only. A turn that reaches for four tools should not narrate all
+        // four — "I've tried six different phrasings" is what that reads like.
+        if (!claimTurnPreface(ctx.session.turn.id)) return;
+        if (!claimTurnMessage(ctx.session.turn.id, preface)) return;
+        const services = await getCaptainServices();
+        // A plan or a claim about a trip is never a preface — those belong to
+        // the end of the turn, where they are checked against what was saved.
+        const draft = await services.tripPlanning.findOpen(userId);
+        if (draft?.status === "awaiting_confirmation") return;
+        if (preface !== await services.tripPlanning.groundAssistantMessage(userId, preface)
+          .then((grounded) => grounded.message)) {
+          return;
+        }
+        await services.platformStore.appendMessage(userId, "assistant", preface, new Date());
+        await postTelegramAssistantMessage(channel.telegram, preface, null);
+        return;
+      }
       await clearAgentProgress(ctx.session.id);
       const userId = authUserId(ctx.session.auth.current?.attributes.captain_user_id);
       let message = data.message;
@@ -712,14 +853,19 @@ export default telegramChannel({
       // Receipt and /trip-style replies carry dashboard URLs in the body. Always
       // lift those into buttons — a plain post leaves "Open trip: https://…"
       // visible and skips Confirm/Review when the createdTrip gate misses.
+      if (!claimTurnMessage(ctx.session.turn.id, message.trim())) return;
       await postTelegramAssistantMessage(channel.telegram, message, reviewTrip);
     },
     async "turn.completed"(_data, _channel, ctx) {
       clearPrepareTripTurn(ctx.session.id, ctx.session.turn.id);
+      turnMessagesSent.delete(ctx.session.turn.id);
+      turnsWithPreface.delete(ctx.session.turn.id);
       await clearAgentProgress(ctx.session.id);
     },
     async "turn.failed"(_data, channel, ctx) {
       clearPrepareTripTurn(ctx.session.id, ctx.session.turn.id);
+      turnMessagesSent.delete(ctx.session.turn.id);
+      turnsWithPreface.delete(ctx.session.turn.id);
       await clearAgentProgress(ctx.session.id);
       await channel.telegram.post(PROCESSING_FAILURE_TEXT);
     }

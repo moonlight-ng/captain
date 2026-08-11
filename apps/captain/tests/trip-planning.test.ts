@@ -358,7 +358,7 @@ describe("Captain trip planning", () => {
     }
     expect(originQuestion.prompt).toContain("Nairobi → Entebbe → London → Lagos");
     expect(originQuestion.prompt).toContain("Where will you be flying from to Nairobi?");
-    expect(originQuestion.prompt).not.toContain("Replace it");
+    expect(originQuestion.prompt).not.toContain("swap it for this one");
     expect(originQuestion.draft.confirmationSnapshot).toBeNull();
     expect(originQuestion.draft.state).toMatchObject({
       tripType: "multi_city",
@@ -414,8 +414,8 @@ describe("Captain trip planning", () => {
     if (!replacement || replacement.status !== "needs_input") {
       throw new Error("Expected replacement consent");
     }
-    expect(replacement.prompt).toContain("Replace it");
-    expect(replacement.prompt).toContain("/feedback");
+    expect(replacement.prompt).toContain("should I swap it for this one?");
+    expect(replacement.prompt).not.toContain("/feedback");
     // The recap and the question are two turns. Bundled into one message the
     // question lands under a dozen dated bullets, where it is least likely to
     // be read and answered.
@@ -423,9 +423,9 @@ describe("Captain trip planning", () => {
     const [recap, question] = replacement.promptParts!;
     expect(recap).toContain("I mapped the flights as:");
     expect(recap).toContain("→");
-    expect(recap).not.toContain("Replace it");
-    expect(question).toContain("Replace it");
-    expect(question).toContain("/feedback");
+    expect(recap).not.toContain("swap it for this one");
+    expect(question).toContain("should I swap it for this one?");
+    expect(question).not.toContain("/feedback");
     expect(question).not.toContain("I mapped the flights as:");
     // `prompt` stays the single canonical string for anything that needs one.
     expect(replacement.prompt).toBe(`${recap}\n\n${question}`);
@@ -1336,8 +1336,8 @@ describe("Captain trip planning", () => {
     expect(blocked.status).toBe("needs_input");
     if (blocked.status !== "needs_input") throw new Error("Expected the trip limit prompt");
     expect(blocked.prompt).toContain("Existing London trip");
-    expect(blocked.prompt).toContain("Replace it");
-    expect(blocked.prompt).toContain("/feedback");
+    expect(blocked.prompt).toContain("should I swap it for this one?");
+    expect(blocked.prompt).not.toContain("/feedback");
     expect(blocked.draft.confirmationSnapshot).toMatchObject({
       input: { brief: { originAirports: ["LOS"], destinationAirports: ["NYC"] } }
     });
