@@ -72,6 +72,10 @@ import {
   type OnboardingFollowupStage
 } from "./contracts.js";
 import { matchingMultiCityLegs, multiCityLegRevision } from "./multi-city-results.js";
+import {
+  tripLegFlightSelectionPayload,
+  tripLegFlightSelectionSummary
+} from "./leg-flight-selection.js";
 import { notificationGoalPayload, offerDateSummary, offerRangeSummary } from "./notification-payload.js";
 import {
   meetsAlertThreshold,
@@ -966,6 +970,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     tripId: string,
     legId: string,
     flightKey: string | null,
+    selectedBy: "agent" | "person",
     now: Date
   ): Promise<TripCityLeg> {
     return this.#sql.begin(async (tx) => {
@@ -981,6 +986,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         for update
       `;
       if (!legs[0]) throw new TripNotFoundError();
+      const previousFlightKey = legs[0].selected_flight_key;
       if (flightKey) {
         const matching = await tx<Array<{ present: boolean }>>`
           select exists (
@@ -994,6 +1000,12 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         `;
         if (matching[0]?.present !== true) throw new Error("Flight not found for Trip leg");
       }
+      const flight = flightKey
+        ? await this.#legFlightSelectionSummary(tx, tripId, legId, flightKey)
+        : null;
+      const previousFlight = previousFlightKey && previousFlightKey !== flightKey
+        ? await this.#legFlightSelectionSummary(tx, tripId, legId, previousFlightKey)
+        : null;
       const updated = await tx<TripCityLegRow[]>`
         update captain.trip_legs set selected_flight_key = ${flightKey}, updated_at = ${now}
         where id = ${legId}
@@ -1008,7 +1020,14 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         values (
           ${randomUUID()}, ${tripId}, ${userId},
           ${flightKey ? "trip_leg_flight_selected" : "trip_leg_flight_unselected"},
-          ${tx.json(json({ legId, flightKey }))}, ${now}
+          ${tx.json(json(tripLegFlightSelectionPayload({
+            legId,
+            flightKey,
+            selectedBy,
+            previousFlightKey: previousFlightKey !== flightKey ? previousFlightKey : null,
+            flight,
+            previousFlight
+          })))}, ${now}
         )
       `;
       return toTripCityLeg(updated[0]!);
@@ -2802,6 +2821,30 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       })) queued += 1;
     }
     return queued;
+  }
+
+  async #legFlightSelectionSummary(
+    sql: Sql,
+    tripId: string,
+    legId: string,
+    flightKey: string
+  ) {
+    const rows = await sql<Array<{
+      flight: CanonicalFlight;
+      offers: FlightOfferSnapshot[];
+    }>>`
+      select flight as flight, snapshot.offers as offers
+      from captain.leg_search_snapshots snapshot,
+        jsonb_array_elements(snapshot.flights) flight
+      where snapshot.trip_id = ${tripId}
+        and snapshot.leg_id = ${legId}
+        and flight ->> 'key' = ${flightKey}
+      order by snapshot.updated_at desc
+      limit 1
+    `;
+    const row = rows[0];
+    if (!row) return null;
+    return tripLegFlightSelectionSummary(row.flight, row.offers);
   }
 
 }

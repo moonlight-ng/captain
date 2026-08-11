@@ -603,6 +603,7 @@ async function setTripLegSelection(
     trip.id,
     legId,
     body.flightKey,
+    "person",
     new Date()
   );
   return Response.json(leg, { headers: noStore() });

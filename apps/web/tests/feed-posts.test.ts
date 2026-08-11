@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { TripActivity } from "../src/domain.js";
-import { activityFeedLine, feedPostAuthor, feedPostsFromActivity } from "../src/feed-posts.js";
+import {
+  activityFeedLine,
+  feedPostAuthor,
+  feedPostsFromActivity,
+  legFlightSelectionFeedTitle
+} from "../src/feed-posts.js";
 
 function activity(partial: Partial<TripActivity> & Pick<TripActivity, "id" | "eventType">): TripActivity {
   return {
@@ -97,6 +102,30 @@ describe("feedPostsFromActivity", () => {
     });
   });
 
+  it("attributes flight selection by selectedBy, defaulting legacy rows to traveller", () => {
+    expect(feedPostsFromActivity([
+      activity({
+        id: "agent",
+        eventType: "trip_leg_flight_selected",
+        payload: { legId: "leg-1", selectedBy: "agent" }
+      }),
+      activity({
+        id: "person",
+        eventType: "trip_leg_flight_selected",
+        payload: { legId: "leg-1", selectedBy: "person" }
+      }),
+      activity({
+        id: "legacy",
+        eventType: "trip_leg_flight_selected",
+        payload: { legId: "leg-1" }
+      })
+    ]).map((post) => [post.id, post.author])).toEqual([
+      ["agent", "captain"],
+      ["person", "traveller"],
+      ["legacy", "traveller"]
+    ]);
+  });
+
   it("falls back to agent-voice lines for quiet checkpoints", () => {
     expect(activityFeedLine("trip_leg_flight_unselected")).toBe("Stopped watching a flight.");
     expect(feedPostsFromActivity([
@@ -104,5 +133,52 @@ describe("feedPostsFromActivity", () => {
     ])).toEqual([
       expect.objectContaining({ body: "Stopped watching a flight.", author: "traveller" })
     ]);
+  });
+});
+
+describe("legFlightSelectionFeedTitle", () => {
+  const ba = {
+    airlineCode: "BA",
+    flightNumber: "BA178",
+    departureDate: "2026-11-05",
+    stops: 1,
+    durationMinutes: 800,
+    priceAmount: "842",
+    currency: "USD"
+  };
+  const jl = {
+    airlineCode: "JL",
+    flightNumber: "JL5",
+    departureDate: "2026-11-06",
+    stops: 0,
+    durationMinutes: 780,
+    priceAmount: "791",
+    currency: "USD"
+  };
+
+  it("describes a first selection with flight details", () => {
+    expect(legFlightSelectionFeedTitle({
+      eventType: "trip_leg_flight_selected",
+      routeLabel: "Tokyo → New York",
+      flight: ba
+    })).toBe("Selected BA178 for Tokyo → New York — Nov 5 · $842 · 1 stop.");
+  });
+
+  it("describes a swap with previous flight diffs", () => {
+    expect(legFlightSelectionFeedTitle({
+      eventType: "trip_leg_flight_selected",
+      routeLabel: "Tokyo → New York",
+      flight: jl,
+      previousFlight: ba,
+      previousFlightKey: "ba-key"
+    })).toBe("Changed Tokyo → New York to JL5 — Nov 6 · $791 · direct (was BA178 · $842 · 1 stop).");
+  });
+
+  it("describes an unselect with the previous flight identity", () => {
+    expect(legFlightSelectionFeedTitle({
+      eventType: "trip_leg_flight_unselected",
+      routeLabel: "Tokyo → New York",
+      flight: ba
+    })).toBe("Stopped watching BA178 on Tokyo → New York.");
   });
 });

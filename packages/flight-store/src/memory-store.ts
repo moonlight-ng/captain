@@ -66,6 +66,10 @@ import {
   type OnboardingEngagementReason,
   type OnboardingFollowupStage
 } from "./contracts.js";
+import {
+  tripLegFlightSelectionPayload,
+  tripLegFlightSelectionSummary
+} from "./leg-flight-selection.js";
 import { matchingMultiCityLegs, multiCityLegRevision } from "./multi-city-results.js";
 import {
   notificationGoalPayload,
@@ -884,19 +888,26 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     tripId: string,
     legId: string,
     flightKey: string | null,
+    selectedBy: "agent" | "person",
     now: Date
   ): Promise<TripCityLeg> {
     const trip = this.#requiredTrip(userId, tripId);
     const graph = this.#tripGraphs.get(tripId);
     const leg = graph?.legs.find((candidate) => candidate.id === legId);
     if (!graph || !leg) throw new TripNotFoundError();
-    if (flightKey && ![...this.#legSearchSnapshots.values()].some((snapshot) =>
-      snapshot.tripId === tripId
-      && snapshot.legId === legId
-      && snapshot.flights.some((flight) => flight.key === flightKey)
+    const previousFlightKey = leg.selectedFlightKey;
+    const snapshots = [...this.#legSearchSnapshots.values()]
+      .filter((snapshot) => snapshot.tripId === tripId && snapshot.legId === legId)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    if (flightKey && !snapshots.some((snapshot) =>
+      snapshot.flights.some((flight) => flight.key === flightKey)
     )) {
       throw new Error("Flight not found for Trip leg");
     }
+    const flight = flightKey ? this.#legFlightSelectionSummary(snapshots, flightKey) : null;
+    const previousFlight = previousFlightKey && previousFlightKey !== flightKey
+      ? this.#legFlightSelectionSummary(snapshots, previousFlightKey)
+      : null;
     leg.selectedFlightKey = flightKey;
     this.#trips.set(tripId, {
       ...trip,
@@ -906,7 +917,14 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
     this.#recordTripActivity(
       tripId,
       flightKey ? "trip_leg_flight_selected" : "trip_leg_flight_unselected",
-      { legId, flightKey },
+      tripLegFlightSelectionPayload({
+        legId,
+        flightKey,
+        selectedBy,
+        previousFlightKey: previousFlightKey !== flightKey ? previousFlightKey : null,
+        flight,
+        previousFlight
+      }),
       now
     );
     return clone(leg);
@@ -2189,6 +2207,17 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       sourceMessageId: extras?.sourceMessageId ?? null
     });
     this.#tripActivity.set(tripId, activity.slice(0, 50));
+  }
+
+  #legFlightSelectionSummary(
+    snapshots: LegSearchSnapshot[],
+    flightKey: string
+  ) {
+    for (const snapshot of snapshots) {
+      const flight = snapshot.flights.find((candidate) => candidate.key === flightKey);
+      if (flight) return tripLegFlightSelectionSummary(flight, snapshot.offers);
+    }
+    return null;
   }
 
   #enqueueTrackingStartedNotification(

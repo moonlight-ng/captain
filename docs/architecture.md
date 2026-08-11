@@ -146,8 +146,9 @@ changes write `trip_plan_changed` (not every cosmetic patch). Ops kinds such as
 
 The web Feed and Trip Settings Activity card both read `listTripActivity` and
 render through `feedPostsFromActivity` (lifecycle events only). Authorship
-defaults to Captain; only explicit traveller checkpoint mutations (plan change,
-pause/resume, cancel/complete, flight select/unselect) render as “You”.
+defaults to Captain; explicit traveller checkpoint mutations (plan change,
+pause/resume, cancel/complete) render as “You”. Flight select/unselect posts
+read `payload.selectedBy`: traveller/person → “You”, agent → Captain.
 
 The conversational `get_trip` tool reads the same normalized leg graph and
 latest per-leg search snapshots as the web trip screen. Its compact

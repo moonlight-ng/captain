@@ -17,7 +17,13 @@ import {
   type TripCity,
   type TripCityLeg
 } from "../domain";
-import { activityFeedLine, feedPostsFromActivity, withFeedUpdateAction } from "../feed-posts";
+import {
+  activityFeedLine,
+  feedPostsFromActivity,
+  legFlightSelectionFeedTitle,
+  type LegFlightSelectionSummary,
+  withFeedUpdateAction
+} from "../feed-posts";
 import {
   calendarDayOffset,
   clockLabel,
@@ -266,16 +272,54 @@ function feedActivityTitle(
   cities: Map<string, TripCity>,
   legs: TripCityLeg[]
 ): string {
-  if (item.eventType === "trip_leg_flight_selected") {
+  if (
+    item.eventType === "trip_leg_flight_selected"
+    || item.eventType === "trip_leg_flight_unselected"
+  ) {
     const legId = typeof item.payload.legId === "string" ? item.payload.legId : null;
     const leg = legId ? legs.find((candidate) => candidate.id === legId) : undefined;
     if (leg) {
       const origin = cities.get(leg.originCityId)?.label ?? "Origin";
       const destination = cities.get(leg.destinationCityId)?.label ?? "Destination";
-      return `Started watching ${origin} → ${destination}.`;
+      const title = legFlightSelectionFeedTitle({
+        eventType: item.eventType,
+        routeLabel: `${origin} → ${destination}`,
+        flight: asFlightSummary(item.payload.flight)
+          ?? (item.eventType === "trip_leg_flight_unselected"
+            ? asFlightSummary(item.payload.previousFlight)
+            : null),
+        previousFlight: asFlightSummary(item.payload.previousFlight),
+        previousFlightKey: typeof item.payload.previousFlightKey === "string"
+          ? item.payload.previousFlightKey
+          : null
+      });
+      if (title) return title;
     }
   }
   return activityFeedLine(item.eventType);
+}
+
+function asFlightSummary(value: unknown): LegFlightSelectionSummary | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.airlineCode !== "string"
+    || typeof record.flightNumber !== "string"
+    || typeof record.departureDate !== "string"
+    || typeof record.stops !== "number"
+    || typeof record.durationMinutes !== "number"
+  ) {
+    return null;
+  }
+  return {
+    airlineCode: record.airlineCode,
+    flightNumber: record.flightNumber,
+    departureDate: record.departureDate,
+    stops: record.stops,
+    durationMinutes: record.durationMinutes,
+    priceAmount: typeof record.priceAmount === "string" ? record.priceAmount : null,
+    currency: typeof record.currency === "string" ? record.currency : null
+  };
 }
 
 type WatchingItem = {

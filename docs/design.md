@@ -336,7 +336,7 @@ Stages: `stopped` | `paused` | `stale` | `searching` | `tracking`. `stageLabel()
 #### Captain feed posts
 - **Classes / components:** `.feed-posts`, `.feed-post` (+ `.is-update`), `.feed-post-dot`, `.feed-post-body`, `.feed-post-header`, `CaptainFeedPosts`, `feedPostsFromActivity`, `withFeedUpdateAction`
 - **Status:** `live`
-- **Job:** Progress journal of **trip events** only (lifecycle checkpoints such as tracking started, flight selected, plan changed). Spoken Telegram deliveries stay in chat and are not mirrored as feed posts. Author defaults to **Captain**; traveller checkpoint mutations (plan change, pause/resume, cancel/complete, select/unselect flight) show **You**. Optional quiet action on the newest captain event.
+- **Job:** Progress journal of **trip events** only (lifecycle checkpoints such as tracking started, flight selected, plan changed). Spoken Telegram deliveries stay in chat and are not mirrored as feed posts. Author defaults to **Captain**; traveller checkpoint mutations (plan change, pause/resume, cancel/complete) show **You**. Flight select/unselect use `payload.selectedBy` (person → You, agent → Captain). Optional quiet action on the newest captain event.
 - **Inputs:** Lifecycle checkpoint-filtered `TripActivity[]` via `GET /api/me/trip`; chat mirrors, spoken `captain_update` / `telegram_notification` rows, and non-checkpoint audit rows are hidden.
 - **Compose with:** Watching cards, Agent schedule on Feed.
 - **Do not use when:** Settings / watchlist need a compact disclosure — use `.activity-list` with `feedPostsFromActivity` (same stream).

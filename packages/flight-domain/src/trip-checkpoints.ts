@@ -58,7 +58,9 @@ export const CHECKPOINT_LIFECYCLE_SHADOWED_BY_KIND: Record<string, readonly stri
   trip_closed: ["trip_cancel", "trip_complete", "trip_replaced"]
 };
 
-/** Explicit traveller-driven checkpoint mutations (Feed author → "You"). */
+/** Explicit traveller-driven checkpoint mutations (Feed author → "You").
+ * Flight select/unselect still list here as a legacy fallback when
+ * `payload.selectedBy` is absent; newer rows use selectedBy for authorship. */
 export const TRAVELLER_CHECKPOINT_EVENT_TYPES = new Set<string>([
   "trip_plan_changed",
   "trip_pause",

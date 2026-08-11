@@ -29,6 +29,7 @@ export default defineTool({
         trip.id,
         legId,
         selected ? itineraryKey.trim() : null,
+        "agent",
         new Date()
       );
       return {

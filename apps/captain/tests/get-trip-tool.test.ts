@@ -76,6 +76,7 @@ describe("get_trip normalized leg state", () => {
       TRIP_ID,
       LEG_ID,
       FLIGHT_KEY,
+      "agent",
       expect.any(Date)
     );
     expect(services.trips.selectFlight).not.toHaveBeenCalled();

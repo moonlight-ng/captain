@@ -311,13 +311,139 @@ export function describeCaptainPlatformStore(
         created.trip.id,
         leg.id,
         flight.key,
+        "person",
         new Date("2026-08-01T12:04:00Z")
       )).resolves.toMatchObject({ selectedFlightKey: flight.key });
+      await expect(store.listTripActivity(ada.id, created.trip.id)).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            eventType: "trip_leg_flight_selected",
+            payload: expect.objectContaining({
+              legId: leg.id,
+              flightKey: flight.key,
+              selectedBy: "person",
+              previousFlightKey: null,
+              flight: expect.objectContaining({
+                airlineCode: "BA",
+                flightNumber: "BA982",
+                departureDate: "2026-09-10",
+                stops: 0,
+                priceAmount: "100",
+                currency: "GBP"
+              }),
+              previousFlight: null
+            })
+          })
+        ])
+      );
+      const otherFlight = {
+        ...flight,
+        key: "LH100-LHR-BER-20260910",
+        primaryAirlineCode: "LH",
+        participatingAirlineCodes: ["LH"],
+        segments: [{
+          ...flight.segments[0]!,
+          marketingAirlineCode: "LH",
+          marketingAirline: "Lufthansa",
+          flightNumber: "LH100"
+        }],
+        stops: 1,
+        durationMinutes: 180
+      };
+      await store.reviseLegSearchSnapshot(
+        ada.id,
+        snapshot.id,
+        2,
+        {
+          status: "completed",
+          analysis: {
+            complete: true,
+            datesRequested: ["2026-09-10"],
+            datesCompleted: ["2026-09-10"],
+            failedDates: [],
+            optionsChecked: 2,
+            cheapest: {
+              flightKey: otherFlight.key, departureDate: "2026-09-10", priceAmount: "90",
+              currency: "GBP", durationMinutes: 180, stops: 1
+            },
+            fastest: {
+              flightKey: flight.key, departureDate: "2026-09-10", priceAmount: "100",
+              currency: "GBP", durationMinutes: 120, stops: 0
+            },
+            balanced: {
+              flightKey: flight.key, departureDate: "2026-09-10", priceAmount: "100",
+              currency: "GBP", durationMinutes: 120, stops: 0
+            },
+            cheapestByDate: [{
+              flightKey: otherFlight.key, departureDate: "2026-09-10", priceAmount: "90",
+              currency: "GBP", durationMinutes: 180, stops: 1
+            }],
+            observedAt: "2026-08-01T12:04:30Z"
+          },
+          flights: [flight, otherFlight],
+          offers: [{
+            offerId: "off_1",
+            flightKey: flight.key,
+            provider: "official_duffel",
+            priceAmount: "100",
+            currency: "GBP",
+            evidence: [{ url: "https://ba.com/flight", title: "Verified fare", domain: "ba.com" }],
+            observedAt: "2026-08-01T12:02:00Z",
+            expiresAt: "2026-08-01T12:32:00Z"
+          }, {
+            offerId: "off_2",
+            flightKey: otherFlight.key,
+            provider: "official_duffel",
+            priceAmount: "90",
+            currency: "GBP",
+            evidence: [{ url: "https://lh.com/flight", title: "Verified fare", domain: "lh.com" }],
+            observedAt: "2026-08-01T12:04:30Z",
+            expiresAt: "2026-08-01T12:34:30Z"
+          }],
+          completedAt: "2026-08-01T12:04:30Z"
+        },
+        new Date("2026-08-01T12:04:30Z")
+      );
+      await expect(store.setTripLegFlight(
+        ada.id,
+        created.trip.id,
+        leg.id,
+        otherFlight.key,
+        "agent",
+        new Date("2026-08-01T12:04:45Z")
+      )).resolves.toMatchObject({ selectedFlightKey: otherFlight.key });
+      await expect(store.listTripActivity(ada.id, created.trip.id)).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            eventType: "trip_leg_flight_selected",
+            payload: expect.objectContaining({
+              legId: leg.id,
+              flightKey: otherFlight.key,
+              selectedBy: "agent",
+              previousFlightKey: flight.key,
+              flight: expect.objectContaining({
+                airlineCode: "LH",
+                flightNumber: "LH100",
+                stops: 1,
+                priceAmount: "90",
+                currency: "GBP"
+              }),
+              previousFlight: expect.objectContaining({
+                airlineCode: "BA",
+                flightNumber: "BA982",
+                priceAmount: "100",
+                currency: "GBP"
+              })
+            })
+          })
+        ])
+      );
       await expect(store.setTripLegFlight(
         ada.id,
         created.trip.id,
         leg.id,
         null,
+        "person",
         new Date("2026-08-01T12:05:00Z")
       )).resolves.toMatchObject({ selectedFlightKey: null });
       await expect(store.listTripActivity(ada.id, created.trip.id)).resolves.toEqual(

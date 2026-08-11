@@ -54,7 +54,7 @@ import { ChevronRightIcon, FilterIcon, FlightIcon, SearchRadarIcon } from "./com
 import { FilterSheet } from "./components/FilterSheet";
 import { FlightTimeline } from "./components/FlightTimeline";
 import { PriceChart, TrackedFlightCard } from "./components/TrackedFlight";
-import { feedPostsFromActivity, withFeedUpdateAction } from "./feed-posts";
+import { feedPostsFromActivity, withFeedUpdateAction, legFlightSummaryFromSnapshot } from "./feed-posts";
 import { CaptainFeedPosts } from "./components/CaptainFeedPosts";
 import { inPageLink } from "./navigation";
 import { isWatchSearching, shouldAutoSearchOnOpen } from "./trip-stage";
@@ -490,28 +490,46 @@ export function App() {
         onNavigate={navigate}
         onSelected={(legId, selectedFlightKey) => {
           const selectedAt = new Date().toISOString();
-          setTripData((current) => current ? {
-            ...current,
-            legs: (current.legs ?? []).map((item) => item.id === legId
-              ? { ...item, selectedFlightKey }
-              : item),
-            activity: [
-              {
-                id: `local-leg-select-${legId}-${selectedAt}`,
-                eventType: "trip_leg_flight_selected",
-                payload: { legId, flightKey: selectedFlightKey },
-                createdAt: selectedAt,
-                body: null,
-                channel: "web",
-                notificationId: null,
-                sourceMessageId: null
-              },
-              ...(current.activity ?? []).filter((item) =>
-                !(item.eventType === "trip_leg_flight_selected"
-                  && item.payload.legId === legId)
-              )
-            ]
-          } : current);
+          setTripData((current) => {
+            if (!current) return current;
+            const leg = (current.legs ?? []).find((item) => item.id === legId);
+            const snapshot = current.latestSearches?.[legId];
+            const flight = snapshot
+              ? legFlightSummaryFromSnapshot(snapshot, selectedFlightKey)
+              : null;
+            const previousFlightKey = leg?.selectedFlightKey && leg.selectedFlightKey !== selectedFlightKey
+              ? leg.selectedFlightKey
+              : null;
+            const previousFlight = previousFlightKey && snapshot
+              ? legFlightSummaryFromSnapshot(snapshot, previousFlightKey)
+              : null;
+            return {
+              ...current,
+              legs: (current.legs ?? []).map((item) => item.id === legId
+                ? { ...item, selectedFlightKey }
+                : item),
+              activity: [
+                {
+                  id: `local-leg-select-${legId}-${selectedAt}`,
+                  eventType: "trip_leg_flight_selected",
+                  payload: {
+                    legId,
+                    flightKey: selectedFlightKey,
+                    selectedBy: "person",
+                    previousFlightKey,
+                    flight,
+                    previousFlight
+                  },
+                  createdAt: selectedAt,
+                  body: null,
+                  channel: "web",
+                  notificationId: null,
+                  sourceMessageId: null
+                },
+                ...(current.activity ?? [])
+              ]
+            };
+          });
         }}
         onBack={() => {
           if ((window.history.state as { captainNavigation?: boolean } | null)?.captainNavigation) {

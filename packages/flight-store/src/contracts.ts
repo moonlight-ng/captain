@@ -377,6 +377,7 @@ export interface CaptainPlatformStore {
     tripId: string,
     legId: string,
     flightKey: string | null,
+    selectedBy: "agent" | "person",
     now: Date
   ): Promise<TripCityLeg>;
   getWatch(userId: string, tripId: string): Promise<Watch | null>;
