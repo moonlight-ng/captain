@@ -132,7 +132,7 @@ Stages: `stopped` | `paused` | `stale` | `searching` | `tracking`. `stageLabel()
 - **Classes / components:** `.centered` (`CenteredState` in `App.tsx`), `.empty-hero`
 - **Status:** `live`
 - **Job:** Auth/loading errors (`.centered` + brand mark); no-trip heroes on Home / App.
-- **Inputs:** Title + detail string; or eyebrow + `h1` + muted `p`.
+- **Inputs:** Title + detail string; or `h1` + muted `p` pointing the traveller to Telegram. No in-app create action.
 - **Do not use when:** In-tab empty results — use `.results-empty` instead.
 
 ---

@@ -10,6 +10,7 @@ and reports a useful initial cost picture or a material change.
 
 - `apps/captain` owns onboarding, trip planning, and authenticated APIs.
 - `apps/web` is the React UI Captain serves (traveller trip workspace and private `/admin`).
+  Trips start in Telegram; `/trips` is the workspace home.
 - `apps/flight-worker` runs initial and scheduled fare checks for confirmed plans.
 - `packages` contains the flight domain, persistence, provider adapters,
   observability, and Telegram helpers shared by those two deployments.

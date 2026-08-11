@@ -236,6 +236,9 @@ notification delivery or the manual leg-search API.
 
 ## Web, API, and authentication
 
+`/trips` is the traveller home. With no active trip it tells the traveller to
+send the plan by text or voice note in Telegram; the web workspace does not
+create trips.
 `/trip/:tripId` is the chronological city/flight composition.
 `/trip/:tripId/leg/:legId` is the date comparison and flight result view.
 `/flight/:flightKey` is the public canonical schedule/current-offer view; it must
