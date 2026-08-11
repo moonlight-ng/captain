@@ -90,7 +90,7 @@ describe("Trip planner v3 transcript", () => {
       now: clock,
       timeZone: "UTC"
     });
-    expect(turn).toEqual({ intent: "unrelated", operations: [] });
+    expect(turn).toEqual({ intent: "unrelated", operations: [], unresolvedPlaces: [] });
   });
 });
 

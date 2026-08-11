@@ -186,6 +186,18 @@ export function orderedAirportCodesFromText(value: string): string[] {
  * not at several thousand.
  */
 export function orderedAirportMentionsFromText(value: string): AirportMention[] {
+  return allAirportMentions(value).filter((mention, index, all) =>
+    index === 0 || mention.code !== all[index - 1]!.code
+  );
+}
+
+/**
+ * Every mention, including a city named twice running. The exported form
+ * collapses those — a route does not fly from a place to itself — but the
+ * unresolved-place check needs all of them, or the second "Lagos" in "Lagos
+ * as well, return to Lagos" reads as a city Captain could not place.
+ */
+function allAirportMentions(value: string): AirportMention[] {
   const normalized = normalizeTextWithOffsets(value);
   const tokens = tokenizeWithSpans(normalized.text);
   const mentions: AirportMention[] = [];
@@ -218,9 +230,7 @@ export function orderedAirportMentionsFromText(value: string): AirportMention[] 
     }
     cursor += matched > 0 ? matched : 1;
   }
-  return mentions.filter((mention, index, all) =>
-    index === 0 || mention.code !== all[index - 1]!.code
-  );
+  return mentions;
 }
 
 /**
@@ -266,6 +276,102 @@ function startsASentence(value: string, index: number): boolean {
     return /[.!?;:]/u.test(character);
   }
   return true;
+}
+
+export type UnresolvedPlace = {
+  /** The traveller's own words, for quoting back. */
+  text: string;
+  index: number;
+  /** Near-misses worth offering: a typo, or a spelling Captain does not hold. */
+  suggestions: Array<{ code: string; label: string }>;
+};
+
+/**
+ * Places named in a slot that only ever holds one — "to X", "then X", "X to
+ * somewhere" — which Captain could not resolve.
+ *
+ * This is the difference between a shorter itinerary and a question. A word
+ * that resolved to nothing used to vanish, and the cities either side of it
+ * closed the gap into a route that looked deliberate.
+ */
+export function unresolvedPlacesFromText(value: string): UnresolvedPlace[] {
+  const claimed = allAirportMentions(value)
+    .map((mention) => ({ start: mention.index, end: mention.index + mention.evidence.length }));
+  const found: UnresolvedPlace[] = [];
+  for (const match of value.matchAll(PLACE_SLOT_PATTERN)) {
+    const phrase = match.groups?.place;
+    if (!phrase) continue;
+    const index = match.index + match[0].length - phrase.length;
+    const end = index + phrase.length;
+    if (claimed.some((span) => span.start < end && span.end > index)) continue;
+    const text = phrase.trim();
+    if (!isPlausiblePlace(text)) continue;
+    if (found.some((entry) => entry.text.toLowerCase() === text.toLowerCase())) continue;
+    found.push({ text, index, suggestions: nearestAliases(text) });
+  }
+  return found;
+}
+
+/**
+ * A capitalised phrase sitting where only a place goes. Anchored on the words
+ * that introduce one, plus the bare "X to Y" form that opens most itineraries.
+ */
+const PLACE_SLOT_PATTERN =
+  /(?:\b(?:from|to|via|in|into|through|toward|towards|then|visiting|stopping\s+in|arrive\s+in|arriving\s+in)\s+)(?<place>\p{Lu}[\p{L}'’.-]*(?:\s+\p{Lu}[\p{L}'’.-]*){0,2})/gu;
+
+const NOT_A_PLACE_WORD = /^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|christmas|easter|today|tomorrow|tonight|i|i'?m|it|we|they|there|here|home|work|economy|business|first|create|cancel|yes|no)$/iu;
+
+function isPlausiblePlace(text: string): boolean {
+  if (text.length < 3) return false;
+  return text.split(/\s+/u).every((word) => !NOT_A_PLACE_WORD.test(word));
+}
+
+/**
+ * Aliases close enough to be the same word misspelt. Captain looks before it
+ * asks: "Marsielle" is a typo, and naming the city it probably meant is a
+ * better question than admitting ignorance.
+ */
+function nearestAliases(text: string): Array<{ code: string; label: string }> {
+  const needle = normalizeText(text);
+  if (needle.length < 4) return [];
+  const budget = needle.length <= 6 ? 1 : 2;
+  const hits: Array<{ code: string; distance: number }> = [];
+  for (const [alias, entry] of ALIASES) {
+    if (Math.abs(alias.length - needle.length) > budget) continue;
+    const distance = boundedEditDistance(alias, needle, budget);
+    if (distance <= budget) hits.push({ code: entry.code, distance });
+  }
+  const seen = new Set<string>();
+  return hits
+    .sort((left, right) => left.distance - right.distance)
+    .filter((hit) => !seen.has(hit.code) && seen.add(hit.code))
+    .slice(0, 3)
+    .flatMap((hit) => {
+      const label = AIRPORTS.get(hit.code)?.label;
+      return label ? [{ code: hit.code, label }] : [];
+    });
+}
+
+/** Levenshtein that stops caring once it is past `budget`. */
+function boundedEditDistance(left: string, right: string, budget: number): number {
+  let previous = Array.from({ length: right.length + 1 }, (_unused, index) => index);
+  for (let row = 1; row <= left.length; row += 1) {
+    const current = [row];
+    let best = row;
+    for (let column = 1; column <= right.length; column += 1) {
+      const cost = left[row - 1] === right[column - 1] ? 0 : 1;
+      const value = Math.min(
+        current[column - 1]! + 1,
+        previous[column]! + 1,
+        previous[column - 1]! + cost
+      );
+      current.push(value);
+      best = Math.min(best, value);
+    }
+    if (best > budget) return budget + 1;
+    previous = current;
+  }
+  return previous[right.length]!;
 }
 
 export function allowedModelAirportCodes(value: string): ReadonlySet<string> {

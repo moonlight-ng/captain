@@ -13,7 +13,8 @@ import { createCaptainGateway } from "../ai/gateway.js";
 import type { GatewayGenerationUsageInput } from "../admin/usage.js";
 import {
   allowedModelAirportCodes,
-  orderedAirportCodesFromText
+  orderedAirportCodesFromText,
+  unresolvedPlacesFromText
 } from "./airport-catalog.js";
 import {
   datesTheReturnLeg,
@@ -110,7 +111,16 @@ const operationSchema = z.discriminatedUnion("type", [
 
 export const tripTurnPatchSchema = z.object({
   intent: z.enum(["continue", "replace_trip", "confirm", "cancel", "unrelated"]),
-  operations: z.array(operationSchema).max(24)
+  operations: z.array(operationSchema).max(24),
+  /**
+   * Places named in this turn that Captain could not resolve. A fact about
+   * the message rather than a change to the draft, and optional so patches
+   * already in the store — and the model's own proposals — still parse.
+   */
+  unresolvedPlaces: z.array(z.object({
+    text: z.string(),
+    suggestions: z.array(z.object({ code: z.string(), label: z.string() })).max(3)
+  })).max(4).optional()
 }).strict().superRefine((patch, context) => {
   patch.operations.forEach((operation, index) => {
     if (operation.type !== "set_option") return;
@@ -232,12 +242,20 @@ export function deterministicTripTurn(input: {
     ? structuredClone(EMPTY_TRIP_DRAFT_STATE)
     : input.state;
   const facts = fallbackTripFactExtraction(request, interpretationState);
+  const unresolvedPlaces = unresolvedPlacesFromText(request).map((place) => ({
+    text: place.text,
+    suggestions: place.suggestions
+  }));
   const route = deterministicRoute(
     request,
     interpretationState,
     replaceTrip ? null : input.activeQuestion
   );
-  if (route.length > 0) {
+  // A route built around a city that resolved to nothing is not a shorter
+  // itinerary, it is a wrong one — the cities either side close the gap and
+  // the result looks deliberate. Say nothing about the route until the
+  // traveller has settled the place Captain could not place.
+  if (route.length > 0 && unresolvedPlaces.length === 0) {
     operations.push({ type: "set_route", legs: route, evidence: request });
   }
 
@@ -255,14 +273,19 @@ export function deterministicTripTurn(input: {
   }
 
   appendExplicitClear(operations, request);
-  appendDateOperations(operations, {
-    ...input,
-    state: interpretationState,
-    activeQuestion: replaceTrip ? null : input.activeQuestion,
-    request,
-    normalizedDateText,
-    routeLegCount: route.length
-  });
+  // Dates in an itinerary belong to its flights. With a city still unplaced
+  // those flights do not exist yet, and applying the dates anyway conjures
+  // empty legs for them to sit on.
+  if (unresolvedPlaces.length === 0) {
+    appendDateOperations(operations, {
+      ...input,
+      state: interpretationState,
+      activeQuestion: replaceTrip ? null : input.activeQuestion,
+      request,
+      normalizedDateText,
+      routeLegCount: route.length
+    });
+  }
 
   const command = request.toLowerCase();
   const intent: TripTurnPatch["intent"] =
@@ -276,7 +299,11 @@ export function deterministicTripTurn(input: {
             ? "continue"
             : "unrelated";
 
-  return tripTurnPatchSchema.parse({ intent, operations });
+  return tripTurnPatchSchema.parse({
+    intent: intent === "unrelated" && unresolvedPlaces.length > 0 ? "continue" : intent,
+    operations,
+    unresolvedPlaces
+  });
 }
 
 function deterministicRoute(
@@ -682,15 +709,25 @@ function sanitizeModelPatch(
       return false;
     }
     if (operation.type !== "set_route") return true;
-    return operation.legs.every((leg) =>
-      [...leg.originAirports, ...leg.destinationAirports].every((code) => allowedAirports.has(code))
-    );
+    const invented = operation.legs.flatMap((leg) =>
+      [...leg.originAirports, ...leg.destinationAirports]
+    ).filter((code) => !allowedAirports.has(code));
+    if (invented.length === 0) return true;
+    // Discarding the whole route is right — a route missing one leg is a
+    // different trip, not a shorter one — but doing it silently is how this
+    // went unnoticed for so long.
+    console.warn(JSON.stringify({
+      event: "captain.trip_route_rejected_unsupported_airports",
+      codes: [...new Set(invented)]
+    }));
+    return false;
   });
   return tripTurnPatchSchema.parse({
     intent: operations.length === 0 && parsed.intent !== "confirm" && parsed.intent !== "cancel"
       ? "unrelated"
       : parsed.intent,
-    operations
+    operations,
+    unresolvedPlaces: []
   });
 }
 

@@ -253,6 +253,38 @@ export class TripPlanningService {
     // the traveller's. Carry those codes on the draft so the confirmation can
     // mark them — an unmarked guess is how a whole leg goes to the wrong city.
     reduced.state = withAssumedAirports(reduced.state, request);
+    // A place Captain could not place stops the turn here. Everything below
+    // reads the route as settled, and a route missing one of its cities is
+    // not a shorter trip — it is a different one that looks finished.
+    const unresolvedPlaces = turn?.unresolvedPlaces ?? [];
+    if (unresolvedPlaces.length > 0) {
+      const revised = await this.#store.reviseTripPlanDraft(
+        userId,
+        draft.id,
+        draft.revision,
+        {
+          status: "collecting",
+          conversation,
+          state: {
+            ...reduced.state,
+            questionsAsked: Math.min(
+              MAX_CLARIFICATION_QUESTIONS,
+              reduced.state.questionsAsked + 1
+            )
+          },
+          confirmationSnapshot: null,
+          sourceMessageIds
+        },
+        now
+      );
+      if (!revised) throw new Error("Trip draft changed while it was being prepared");
+      return {
+        status: "needs_input",
+        draft: revised,
+        prompt: unresolvedPlacePrompt(unresolvedPlaces),
+        missingFields: ["destinationAirports"]
+      };
+    }
     const unresolvedFields = missingTripFields(reduced.state, null);
     const canReviewWithDateAssumptions = unresolvedFields.length > 0
       && unresolvedFields.every((field) => ASSUMABLE_DATE_FIELDS.has(field));
@@ -1102,6 +1134,36 @@ function clarificationPrompt(missingFields: string[], state: TripDraftState): st
     return "What departure window should I use for the next flight leg?";
   }
   return "What should I add to the trip?";
+}
+
+/**
+ * Asks about a place Captain could not place — with the answer already looked
+ * for. A near-miss is usually a typo, and naming the city it probably meant
+ * costs the traveller one word instead of an explanation.
+ */
+function unresolvedPlacePrompt(
+  places: ReadonlyArray<{ text: string; suggestions: ReadonlyArray<{ code: string; label: string }> }>
+): string {
+  const [first] = places;
+  if (!first) return "Which city should I add?";
+  const others = places.slice(1).map((place) => place.text);
+  const tail = others.length > 0
+    ? ` I couldn’t place ${formatList(others)} either.`
+    : "";
+  if (first.suggestions.length === 1) {
+    const [only] = first.suggestions;
+    return `I don’t have an airport under “${first.text}” — did you mean ${only!.label} (${only!.code})?${tail}`;
+  }
+  if (first.suggestions.length > 1) {
+    const options = first.suggestions.map((hit) => `${hit.label} (${hit.code})`);
+    return `“${first.text}” could be ${formatList(options)}. Which one?${tail}`;
+  }
+  return `I can’t find an airport for “${first.text}”. What’s the nearest city you’d fly into, or its airport code?${tail}`;
+}
+
+function formatList(values: readonly string[]): string {
+  if (values.length <= 1) return values[0] ?? "";
+  return `${values.slice(0, -1).join(", ")} or ${values.at(-1)}`;
 }
 
 function ambiguityLimitPrompt(missingFields: string[]): string {

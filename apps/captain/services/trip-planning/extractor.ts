@@ -229,13 +229,21 @@ export function sanitizeModelAirportExtraction(
   const allowed = allowedModelAirportCodes(request);
   const safeCodes = (codes: string[]): string[] =>
     unique(codes.filter((code) => allowed.has(code)));
+  const legs = extraction.legs.map((leg) => ({
+    originAirports: safeCodes(leg.originAirports),
+    destinationAirports: safeCodes(leg.destinationAirports)
+  }));
+  // Dropping the legs that used a code the traveller never gave leaves the
+  // survivors looking like the whole itinerary, and they join up: strike one
+  // city out of four and the remaining three still read as a journey. So an
+  // unusable leg voids the route rather than shortening it.
+  const usable = legs.every((leg) =>
+    leg.originAirports.length > 0 && leg.destinationAirports.length > 0
+  );
   return extractionSchema.parse({
     ...extraction,
     originAirports: safeCodes(extraction.originAirports),
     destinationAirports: safeCodes(extraction.destinationAirports),
-    legs: extraction.legs.map((leg) => ({
-      originAirports: safeCodes(leg.originAirports),
-      destinationAirports: safeCodes(leg.destinationAirports)
-    })).filter((leg) => leg.originAirports.length > 0 && leg.destinationAirports.length > 0)
+    legs: usable ? legs : []
   });
 }

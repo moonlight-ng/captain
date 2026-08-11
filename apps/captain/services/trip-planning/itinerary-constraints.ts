@@ -412,6 +412,10 @@ function sanitizeConstraintSet(
   const stops = parsed.data.stops.filter((stop) =>
     allowed.has(stop.airportCode) && containsEvidence(stop.evidence)
   );
+  // A stop struck from the middle of an itinerary leaves the cities either
+  // side sitting next to each other, which is a route nobody described. Fall
+  // back to the deterministic reading of the whole message instead.
+  if (stops.length !== parsed.data.stops.length) return null;
   const origin = parsed.data.origin
     && allowed.has(parsed.data.origin.airportCode)
     && containsEvidence(parsed.data.origin.evidence)

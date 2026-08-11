@@ -791,6 +791,61 @@ describe("Captain trip planning", () => {
     expect(result.confirmation).not.toContain("/feedback");
   });
 
+  describe("a city Captain cannot place", () => {
+    const itinerary = (middle: string): string =>
+      `London to Paris on Nov 4, Paris to ${middle} on Nov 8, `
+      + `${middle} to New York on Dec 9. Just me.`;
+
+    it("offers the city a typo probably meant", async () => {
+      const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const result = await planning.prepare(user.id, itinerary("Marsielle"));
+      expect(result.status).toBe("needs_input");
+      if (result.status !== "needs_input") throw new Error("Expected a question");
+      expect(result.prompt).toBe(
+        "I don’t have an airport under “Marsielle” — did you mean Marseille (MRS)?"
+      );
+    });
+
+    it("asks for the nearest airport when nothing comes close", async () => {
+      const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const result = await planning.prepare(user.id, itinerary("Xanadu"));
+      expect(result.status).toBe("needs_input");
+      if (result.status !== "needs_input") throw new Error("Expected a question");
+      expect(result.prompt).toContain("Xanadu");
+      expect(result.prompt).toContain("nearest city");
+    });
+
+    // The failure this whole change exists for: the unplaceable city used to
+    // vanish and the two either side of it joined up, so a four-city trip
+    // became a plausible three-city one nobody had asked for.
+    it("builds no route at all rather than a shorter one", async () => {
+      const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const result = await planning.prepare(user.id, itinerary("Xanadu"));
+      if (result.status !== "needs_input") throw new Error("Expected a question");
+      expect(result.draft.state.legs).toEqual([]);
+      expect(result.draft.confirmationSnapshot).toBeNull();
+    });
+
+    it("completes the trip once the traveller settles it", async () => {
+      const { planning, user } = await setup(new Date("2026-08-08T12:00:00.000Z"));
+      const asked = await planning.prepare(user.id, itinerary("Xanadu"));
+      if (asked.status !== "needs_input") throw new Error("Expected a question");
+      const settled = await planning.prepare(
+        user.id,
+        itinerary("Marseille"),
+        null,
+        asked.draft.id
+      );
+      // Answering a clarification is consent, so the corrected trip saves
+      // rather than going back for another Create/Cancel.
+      expect(settled.status).toBe("started");
+      if (settled.status !== "started") throw new Error("Expected the trip to save");
+      expect(settled.draft.state.legs.map((leg) => leg.destinationAirports)).toEqual([
+        ["PAR"], ["MRS"], ["NYC"]
+      ]);
+    });
+  });
+
   // The traveller wrote "No return." and got a flight home anyway: the words
   // set tripType to round_trip, which outranked the leg count, collapsed the
   // itinerary to its first flight, and had the reducer mirror it.
