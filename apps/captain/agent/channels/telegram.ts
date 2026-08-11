@@ -779,7 +779,10 @@ export default telegramChannel({
         }));
       }
       if (limitRequests.length > 0) {
-        await recoverUndeliveredTripConfirmation(channel.telegram, ctx.session.auth.current?.attributes);
+        await recoverUndeliveredTripConfirmation(
+          channel.telegram,
+          captainSessionAuthAttributes(ctx.session.auth)
+        );
       }
       for (const request of otherRequests) {
         if (
@@ -823,7 +826,7 @@ export default telegramChannel({
       // line stays up because the work is still running.
       if (data.finishReason === "tool-calls") {
         const preface = reviewCaptainMessage(data.message).trim();
-        const userId = authUserId(ctx.session.auth.current?.attributes.captain_user_id);
+        const userId = captainSessionUserId(ctx.session.auth);
         if (!preface || !userId) return;
         // A plan is never a preface, whatever state the draft is in. This used
         // to be checked only against an awaiting draft, so the step that
@@ -848,7 +851,7 @@ export default telegramChannel({
         return;
       }
       await clearAgentProgress(ctx.session.id);
-      const userId = authUserId(ctx.session.auth.current?.attributes.captain_user_id);
+      const userId = captainSessionUserId(ctx.session.auth);
       let message = data.message;
       let reviewTrip: Trip | null = null;
       if (userId) {
@@ -981,6 +984,33 @@ function safeId(value: string): number | null {
 function authUserId(value: unknown): string | null {
   const candidate = Array.isArray(value) ? value[0] : value;
   return typeof candidate === "string" && candidate.length > 0 ? candidate : null;
+}
+
+type CaptainSessionAuth = {
+  readonly current: {
+    readonly attributes: Readonly<Record<string, string | readonly string[]>>;
+  } | null;
+  readonly initiator: {
+    readonly attributes: Readonly<Record<string, string | readonly string[]>>;
+  } | null;
+};
+
+/**
+ * Eve's Telegram HITL callback deliberately has no current auth because the
+ * callback is framework-generated rather than sent by the traveller. The
+ * original authenticated caller remains the session initiator, so every
+ * post-continuation operation must fall back to it instead of treating the
+ * resumed turn as anonymous.
+ */
+export function captainSessionUserId(auth: CaptainSessionAuth): string | null {
+  return authUserId(auth.current?.attributes.captain_user_id)
+    ?? authUserId(auth.initiator?.attributes.captain_user_id);
+}
+
+function captainSessionAuthAttributes(
+  auth: CaptainSessionAuth
+): Readonly<Record<string, string | readonly string[]>> | undefined {
+  return auth.current?.attributes ?? auth.initiator?.attributes;
 }
 
 function voiceAttachment(raw: Record<string, unknown>): { fileId: string; size?: number } | null {

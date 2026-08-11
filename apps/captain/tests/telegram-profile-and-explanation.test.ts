@@ -16,6 +16,7 @@ import {
   CAPTAIN_PROVIDER_HOLDING_STATUS,
   captainNewUserGreeting,
   captainPlanningStages,
+  captainSessionUserId,
   CAPTAIN_PROFILE_COMMAND,
   CAPTAIN_RETURNING_TRAVELLER_WELCOME,
   CAPTAIN_TRIP_COMMAND,
@@ -39,6 +40,17 @@ import {
 } from "../services/onboarding/followups.js";
 
 describe("Telegram profile onboarding", () => {
+  it("keeps the original Captain identity during automatic session-budget continuation", () => {
+    const initiator = {
+      attributes: { captain_user_id: "captain-user-1" }
+    };
+    expect(captainSessionUserId({ current: null, initiator })).toBe("captain-user-1");
+    expect(captainSessionUserId({
+      current: { attributes: { captain_user_id: "captain-user-2" } },
+      initiator
+    })).toBe("captain-user-2");
+  });
+
   it("starts every new traveller with a conversational introduction", () => {
     expect([...CAPTAIN_NEW_USER_GREETINGS]).toEqual([
       "Hi, I’m Captain. Where do you want to go?",
