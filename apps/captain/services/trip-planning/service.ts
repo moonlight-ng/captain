@@ -628,7 +628,8 @@ export class TripPlanningService {
         legs: trip.brief.legs.map((leg) => ({
           originAirports: leg.originAirports,
           destinationAirports: leg.destinationAirports,
-          departureDate: leg.departureWindow.start
+          departureDate: leg.departureWindow.start,
+          departureWindow: leg.departureWindow
         }))
       } : {}),
       departureDate,
@@ -658,7 +659,8 @@ export class TripPlanningService {
           legs: trip.brief.legs.map((leg) => ({
             originAirports: leg.originAirports,
             destinationAirports: leg.destinationAirports,
-            departureDate: leg.departureWindow.start
+            departureDate: leg.departureWindow.start,
+            departureWindow: leg.departureWindow
           }))
         } : {}),
         departureDate,

@@ -67,6 +67,22 @@ describe("Captain public environment", () => {
     expect(loadEnv()).toMatchObject({ databaseUrl: null });
   });
 
+  it("defaults the private conversation review to Lagos and the requested recipients", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("CAPTAIN_CONVERSATION_REVIEW_ENABLED", undefined);
+    vi.stubEnv("CAPTAIN_CONVERSATION_REVIEW_TIME_ZONE", undefined);
+    vi.stubEnv("CAPTAIN_CONVERSATION_REVIEW_RECIPIENTS", undefined);
+    expect(loadEnv()).toMatchObject({
+      conversationReviewEnabled: false,
+      conversationReviewTimeZone: "Africa/Lagos",
+      conversationReviewModel: "openai/gpt-5.6-luna",
+      conversationReviewRecipients: [
+        "ope@moonlight.ng",
+        "fawaz@moonlight.ng"
+      ]
+    });
+  });
+
   it("configures the feedback bridge as an all-or-nothing pair", () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("FEEDBACK_BRIDGE_URL", "https://pilot.example");

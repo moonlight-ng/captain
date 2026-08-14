@@ -13,6 +13,12 @@ export type CaptainEnv = {
   supabaseUrl: string | null;
   supabasePublishableKey: string | null;
   adminEmails: string[];
+  conversationReviewEnabled: boolean;
+  conversationReviewTimeZone: string;
+  conversationReviewModel: string;
+  conversationReviewRecipients: string[];
+  conversationReviewFrom: string | null;
+  resendApiKey: string | null;
   betaUserLimit: number;
   publicBetaEnabled: boolean;
   simplifiedMultiCityEnabled: boolean;
@@ -51,6 +57,23 @@ export function loadEnv(): CaptainEnv {
     supabaseUrl: optional("SUPABASE_URL"),
     supabasePublishableKey: optional("SUPABASE_PUBLISHABLE_KEY"),
     adminEmails: emailList(process.env.CAPTAIN_ADMIN_EMAILS),
+    conversationReviewEnabled: booleanValue(
+      process.env.CAPTAIN_CONVERSATION_REVIEW_ENABLED,
+      false
+    ),
+    conversationReviewTimeZone:
+      process.env.CAPTAIN_CONVERSATION_REVIEW_TIME_ZONE?.trim()
+      || "Africa/Lagos",
+    conversationReviewModel:
+      process.env.CAPTAIN_CONVERSATION_REVIEW_MODEL?.trim()
+      || process.env.TRIP_INTERPRETER_MODEL?.trim()
+      || "openai/gpt-5.6-luna",
+    conversationReviewRecipients: emailList(
+      process.env.CAPTAIN_CONVERSATION_REVIEW_RECIPIENTS
+      || "ope@moonlight.ng,fawaz@moonlight.ng"
+    ),
+    conversationReviewFrom: optional("CAPTAIN_CONVERSATION_REVIEW_FROM"),
+    resendApiKey: optional("RESEND_API_KEY"),
     betaUserLimit: positiveInteger("CAPTAIN_BETA_USER_LIMIT", 25),
     publicBetaEnabled: booleanValue(
       process.env.CAPTAIN_PUBLIC_BETA_ENABLED,
@@ -63,6 +86,7 @@ export function loadEnv(): CaptainEnv {
     duffelAccessToken: optional("DUFFEL_ACCESS_TOKEN"),
     duffelBaseUrl: (process.env.DUFFEL_BASE_URL?.trim() || "https://api.duffel.com").replace(/\/$/u, "")
   };
+  assertTimeZone(env.conversationReviewTimeZone);
   if (mode === "production") {
     for (const [name, value] of [
       ["DATABASE_URL", env.databaseUrl],
@@ -76,6 +100,14 @@ export function loadEnv(): CaptainEnv {
     }
   }
   return env;
+}
+
+function assertTimeZone(value: string): void {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date());
+  } catch {
+    throw new Error(`Invalid CAPTAIN_CONVERSATION_REVIEW_TIME_ZONE: ${value}`);
+  }
 }
 
 function emailList(value: string | undefined): string[] {

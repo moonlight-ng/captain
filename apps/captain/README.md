@@ -142,6 +142,16 @@ remain browseable, but no earlier AI spend is estimated or backfilled. Direct
 Gateway generations whose exact cost is not immediately available are retried
 every five minutes for up to six attempts and remain visibly unresolved.
 
+The private conversation review runs at 07:15 Africa/Lagos and emails a concise
+review of the previous local calendar day. It lists each conversation with a
+one-line summary, message activity, model calls, tracked AI spend, unresolved
+costs, and an Admin link; recurring insights and up to five evidence-backed
+high/medium attention items follow. Silence and ordinary unfinished chats are
+not treated as failures. Configure `RESEND_API_KEY` and
+`CAPTAIN_CONVERSATION_REVIEW_FROM`; the recipient list defaults to the Moonlight
+operators in `.env.example`. For a controlled backfill, run
+`pnpm conversation-review:send -- --date=YYYY-MM-DD` from `apps/captain`.
+
 The retained legacy flight worker has its own ignored `.env`. It requires:
 
 - `DATABASE_URL`

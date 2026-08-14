@@ -1,7 +1,9 @@
 import {
   MemoryCaptainAdminStore,
+  MemoryCaptainConversationReviewStore,
   MemoryCaptainPlatformStore,
   PostgresCaptainAdminStore,
+  PostgresCaptainConversationReviewStore,
   PostgresCaptainPlatformStore,
   type CaptainAdminStore,
   type CaptainPlatformStore
@@ -11,6 +13,7 @@ import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
 import { CaptainWebAuth } from "../auth/web-session.js";
 import { CaptainAdminAuth } from "../admin/auth.js";
 import { CaptainUsageRecorder } from "../admin/usage.js";
+import { ResendEmailSender } from "../email/resend.js";
 import {
   createConversationMemoryWriter,
   type ConversationMemoryWriter
@@ -24,6 +27,10 @@ import {
 } from "../feedback/telegram-bridge.js";
 import { TripPlanningService } from "../trip-planning/service.js";
 import { TripService } from "../trips/service.js";
+import {
+  ConversationDailyReview,
+  createConversationReviewNarrator
+} from "../review/conversation-daily-review.js";
 import { loadEnv, type CaptainEnv } from "./env.js";
 import { assertCaptainDatabase } from "./project-guard.js";
 
@@ -39,6 +46,7 @@ export type CaptainServices = {
   flightLookup: FlightLookupService;
   legSearch: LegSearchService;
   feedback: FeedbackBridge;
+  conversationReview: ConversationDailyReview | null;
   /**
    * Updates the rolling conversation summary and durable traveller facts.
    * Fire-and-forget: it must never sit between a traveller and their reply.
@@ -67,6 +75,9 @@ export async function createCaptainServices(): Promise<CaptainServices> {
   const adminStore: CaptainAdminStore = env.databaseUrl
     ? PostgresCaptainAdminStore.connect(env.databaseUrl, 2)
     : new MemoryCaptainAdminStore();
+  const conversationReviewStore = env.databaseUrl
+    ? PostgresCaptainConversationReviewStore.connect(env.databaseUrl, 1)
+    : new MemoryCaptainConversationReviewStore();
   const adminAuth = new CaptainAdminAuth({
     url: env.supabaseUrl,
     publishableKey: env.supabasePublishableKey,
@@ -76,6 +87,30 @@ export async function createCaptainServices(): Promise<CaptainServices> {
     store: adminStore,
     apiKey: env.aiGatewayApiKey
   });
+  const conversationReview = env.conversationReviewEnabled
+    && env.resendApiKey
+    && env.conversationReviewFrom
+    && env.aiGatewayApiKey
+    && env.conversationReviewRecipients.length > 0
+    ? new ConversationDailyReview({
+        store: conversationReviewStore,
+        narrate: createConversationReviewNarrator({
+          apiKey: env.aiGatewayApiKey,
+          model: env.conversationReviewModel,
+          recordUsage: (input) => usage.recordGatewayGeneration(input)
+        }),
+        email: new ResendEmailSender({
+          apiKey: env.resendApiKey,
+          from: env.conversationReviewFrom,
+          recipients: env.conversationReviewRecipients
+        }),
+        config: {
+          timeZone: env.conversationReviewTimeZone,
+          recipients: env.conversationReviewRecipients,
+          adminBaseUrl: env.publicUrl
+        }
+      })
+    : null;
   const auth = new CaptainWebAuth({
     publicUrl: env.publicUrl,
     secret: env.telegramBotToken ?? "captain-local-design-secret",
@@ -105,6 +140,7 @@ export async function createCaptainServices(): Promise<CaptainServices> {
     auth,
     trips,
     feedback,
+    conversationReview,
     flightLookup: new FlightLookupService({
       store: platformStore,
       trips,

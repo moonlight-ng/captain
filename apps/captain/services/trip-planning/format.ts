@@ -209,6 +209,19 @@ export function looksLikeTripPlanConfirmation(message: string): boolean {
   return /Tap Create or Cancel below/iu.test(text);
 }
 
+/**
+ * A tool-call preface cannot ask whether to save the trip: by the time the
+ * traveller sees that preface, the same turn is already saving it. Keep this
+ * separate from the formal Create/Cancel card so it cannot count as consent.
+ */
+export function looksLikeTripSaveOffer(message: string): boolean {
+  const text = message.replace(/\s+/gu, " ").trim();
+  if (!text) return false;
+  return /\b(?:want me to|would you like me to|shall I|should I)\s+(?:save|create|set up)\b/iu
+    .test(text)
+    || /\bready for me to\s+(?:save|create|set up)\b/iu.test(text);
+}
+
 /** Whether the text carries the receipt for a saved trip. */
 export function looksLikeTripCreationReceipt(message: string): boolean {
   return /^Itinerary ready to confirm\./imu.test(message.trim());

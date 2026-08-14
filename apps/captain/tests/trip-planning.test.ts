@@ -24,6 +24,7 @@ import {
   isTripPlanRestatement,
   looksLikeTripCreationReceipt,
   looksLikeTripPlanConfirmation,
+  looksLikeTripSaveOffer,
   telegramDashboardMessage,
   tripPlanConfirmationNote,
   type ActiveTripFormatInput
@@ -327,6 +328,18 @@ describe("Captain trip planning", () => {
       "Itinerary ready to confirm.\n\nLON → PAR\nLeg 1 · LON → PAR · Tuesday, 3 Nov 2026"
     )).toBe(false);
     expect(looksLikeTripPlanConfirmation("Which airport in Italy?")).toBe(false);
+  });
+
+  it("recognizes save questions that cannot be sent while saving the trip", () => {
+    expect(looksLikeTripSaveOffer(
+      "Want me to save that — Lagos to Nairobi, departing Dec 1–24?"
+    )).toBe(true);
+    expect(looksLikeTripSaveOffer("Would you like me to create this trip?")).toBe(true);
+    expect(looksLikeTripSaveOffer("Ready for me to set up the tracker?")).toBe(true);
+    expect(looksLikeTripSaveOffer("I saved this trip.")).toBe(false);
+    expect(looksLikeTripSaveOffer(
+      "Itinerary ready to confirm.\n\nLOS → NBO → LOS"
+    )).toBe(false);
   });
 
   it("lets a receipt through even when card wording is stuck to it", () => {
@@ -1559,6 +1572,39 @@ describe("Captain trip planning", () => {
       }
     ]);
     expect(rendered.text).not.toContain("https://");
+  });
+
+  it("keeps every leg's full date window in a multi-city trip status", async () => {
+    const clock = new Date("2026-08-14T12:00:00Z");
+    const { planning, trips, user } = await setup(clock);
+    const nairobi = await trips.create(user.id, {
+      title: "Lagos to Nairobi and back",
+      brief: defaultTestBrief({
+        originAirports: ["LOS"],
+        destinationAirports: ["LOS"],
+        tripType: "multi_city",
+        departureWindow: { start: "2026-12-01", end: "2026-12-24" },
+        stayNights: null,
+        legs: [
+          {
+            originAirports: ["LOS"],
+            destinationAirports: ["NBO"],
+            departureWindow: { start: "2026-12-01", end: "2026-12-24" }
+          },
+          {
+            originAirports: ["NBO"],
+            destinationAirports: ["LOS"],
+            departureWindow: { start: "2026-12-08", end: "2026-12-31" }
+          }
+        ]
+      })
+    });
+
+    expect(await planning.activeTripsLocation(user.id)).toBe(
+      "LOS → NBO → LOS\n"
+      + "Tuesday, 1 Dec 2026 – Thursday, 31 Dec 2026 · Draft\n\n"
+      + `Open trip: https://captain.example/t#test-${nairobi.trip.id}`
+    );
   });
 
   // Travellers who already had several trips when the one-trip limit landed

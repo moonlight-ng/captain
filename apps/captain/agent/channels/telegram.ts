@@ -52,6 +52,7 @@ import {
   isTripPlanRestatement,
   looksLikeTripCreationReceipt,
   looksLikeTripPlanConfirmation,
+  looksLikeTripSaveOffer,
   telegramDashboardMessage
 } from "../../services/trip-planning/format.js";
 import { tripRouteEcho } from "../../services/trip-planning/route-echo.js";
@@ -643,11 +644,10 @@ export default telegramChannel({
           expectedVersion: trip.status === "draft" ? trip.version : action.version
         });
         await clearCallbackButtons(ctx, query);
-        const summary = await services.tripPlanning.activeTripsLocation(user.id);
-        if (summary) {
-          await services.platformStore.appendMessage(user.id, "assistant", summary, new Date());
-          await postTelegramDashboardMessage(ctx, summary);
-        }
+        // Tracking writes an immediate, durable acknowledgement to the
+        // notification outbox. Let that be the one confirmation message;
+        // reconstructing the itinerary here produced a second, conflicting
+        // summary before the worker's acknowledgement arrived.
         return;
       }
       if (action.type === "edit") {
@@ -832,7 +832,11 @@ export default telegramChannel({
         // to be checked only against an awaiting draft, so the step that
         // created the trip could narrate the plan on its way past — the same
         // itinerary the traveller had just been shown for Create/Cancel.
-        if (isTripPlanRestatement(preface) || looksLikeTripPlanConfirmation(preface)) return;
+        if (isTripPlanRestatement(preface)
+          || looksLikeTripPlanConfirmation(preface)
+          || looksLikeTripSaveOffer(preface)) {
+          return;
+        }
         // One only. A turn that reaches for four tools should not narrate all
         // four — "I've tried six different phrasings" is what that reads like.
         if (!claimTurnPreface(ctx.session.turn.id)) return;
