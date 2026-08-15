@@ -20,6 +20,7 @@ COPY packages/flight-store ./packages/flight-store
 COPY packages/observability ./packages/observability
 COPY packages/provider-duffel ./packages/provider-duffel
 COPY packages/provider-flysoar ./packages/provider-flysoar
+COPY packages/telegram-core ./packages/telegram-core
 
 WORKDIR /app/apps/flight-worker
 CMD ["node", "--import", "tsx", "src/index.ts"]
