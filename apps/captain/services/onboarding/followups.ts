@@ -9,7 +9,7 @@ export const CAPTAIN_ONBOARDING_CAPABILITIES =
 export const CAPTAIN_ONBOARDING_WORKSPACE =
   "You can send requests via voice note or text and I’ll take it from there. Once we start a trip, you’ll also get a shared workspace to follow it.";
 export const CAPTAIN_ONBOARDING_COMMANDS =
-  "If you need any help, use the menu beside the message box to browse my commands.";
+  "If you need any help, use the menu beside the message box to browse available commands.";
 
 const MESSAGE_BY_STAGE: Readonly<Record<OnboardingFollowupStage, string>> = {
   capabilities: CAPTAIN_ONBOARDING_CAPABILITIES,
