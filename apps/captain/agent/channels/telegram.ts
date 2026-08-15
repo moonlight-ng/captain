@@ -232,7 +232,7 @@ export function captainPlanningStages(
     lines: CAPTAIN_HOLDING_STATUS
   };
 }
-const PROCESSING_FAILURE_TEXT = "That one didn’t go through on my end. Your trip is untouched — try me again.";
+const PROCESSING_FAILURE_TEXT = "That one didn’t go through. Your trip is untouched — please try again.";
 // Onboarding opens as a conversation. Capability and orientation messages are
 // staggered later, and disappear as soon as the traveller finds their own way.
 // The opening question varies, because a single scripted line is the one thing
@@ -447,7 +447,7 @@ export default telegramChannel({
       return null;
     }
     if (content.trimStart().startsWith("/")) {
-      const response = "That’s not one of mine. /trip for your trip, /profile for preferences, /feedback to send feedback.";
+      const response = "That command isn’t available. Use /trip for your trip, /profile for preferences, or /feedback to send feedback.";
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       const delivered = await postTelegramAssistantMessage(ctx.telegram, response, null, user.id);
       await services.platformStore.appendMessage(user.id, "assistant", delivered.storedText, new Date());
