@@ -24,6 +24,7 @@
     "start": "eve start --host 0.0.0.0 --port 8080",
     "telegram:webhook": "node --env-file-if-exists=.env --experimental-strip-types scripts/configure-telegram-webhook.ts",
     "conversation-review:send": "node --env-file-if-exists=.env --import tsx scripts/send-conversation-review.ts",
+    "language:backfill": "node --env-file-if-exists=.env --import tsx scripts/backfill-preferred-languages.ts",
     "test": "vitest run --config vitest.config.ts",
     "typecheck": "tsc -p tsconfig.service.json --noEmit --pretty false",
     "db:clear-trips": "node --env-file-if-exists=.env --import tsx scripts/clear-trips.ts"

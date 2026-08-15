@@ -6,6 +6,7 @@ import {
   FallbackFlightSearchProvider,
   FlysoarMcpFlightSearchProvider
 } from "@agents/provider-flysoar";
+import { TelegramLanguageService } from "@agents/telegram-core";
 
 import { loadWorkerEnv } from "./env.js";
 import { FlightWorker } from "./worker.js";
@@ -48,7 +49,11 @@ const worker = new FlightWorker({
   workerId: `${env.workerId}-manual`,
   leaseMs: env.leaseMs,
   freshnessMs: 0,
-  claimLimit: env.claimLimit
+  claimLimit: env.claimLimit,
+  language: new TelegramLanguageService({
+    apiKey: env.aiGatewayApiKey,
+    model: env.languageModel
+  })
 });
 
 try {

@@ -14,6 +14,7 @@ import {
   type RecommendationSnapshot
 } from "@agents/flight-store";
 import { logEvent } from "@agents/observability";
+import type { TelegramLanguageService } from "@agents/telegram-core";
 
 export class FlightWorker {
   readonly #store: CaptainPlatformStore;
@@ -25,6 +26,7 @@ export class FlightWorker {
   readonly #leaseMs: number;
   readonly #freshnessMs: number;
   readonly #claimLimit: number;
+  readonly #language: Pick<TelegramLanguageService, "localize"> | null;
   #running = false;
   #lastPrunedAt = 0;
   #lastTickHadDueWork = false;
@@ -39,6 +41,7 @@ export class FlightWorker {
     leaseMs: number;
     freshnessMs: number;
     claimLimit: number;
+    language?: Pick<TelegramLanguageService, "localize"> | null;
   }) {
     this.#store = options.store;
     this.#provider = options.provider;
@@ -49,6 +52,7 @@ export class FlightWorker {
     this.#leaseMs = options.leaseMs;
     this.#freshnessMs = options.freshnessMs;
     this.#claimLimit = options.claimLimit;
+    this.#language = options.language ?? null;
   }
 
   get lastTickHadDueWork(): boolean {
@@ -239,8 +243,17 @@ export class FlightWorker {
 
   async #deliver(notification: CaptainNotification, now: Date): Promise<boolean> {
     try {
-      const replyMarkup = this.#notificationReplyMarkup(notification);
-      const text = notificationText(notification);
+      const shouldLocalize = notification.preferredLanguageSource !== "default"
+        && notification.preferredLanguage
+        && !notification.preferredLanguage.toLowerCase().startsWith("en");
+      const language = notification.preferredLanguage ?? "en";
+      const [text, openTripLabel] = shouldLocalize && this.#language
+        ? await Promise.all([
+            this.#language.localize(notificationText(notification), language),
+            this.#language.localize("Open trip", language)
+          ])
+        : [notificationText(notification), "Open trip"];
+      const replyMarkup = this.#notificationReplyMarkup(notification, openTripLabel);
       const response = await fetch(`https://api.telegram.org/bot${this.#telegramBotToken}/sendMessage`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -273,13 +286,13 @@ export class FlightWorker {
    * to disambiguate. "Open trip" reads the same in every message, which is the
    * point: the traveller learns one button rather than reading each one.
    */
-  #notificationReplyMarkup(notification: CaptainNotification): {
+  #notificationReplyMarkup(notification: CaptainNotification, openTripLabel = "Open trip"): {
     inline_keyboard: Array<Array<{ text: string; url?: string; callback_data?: string }>>;
   } | undefined {
     if (notification.kind === "tracking_started") return undefined;
     return {
       inline_keyboard: [[{
-        text: "Open trip",
+        text: openTripLabel,
         url: this.#createTripAccessLink(notification.userId, notification.tripId)
       }]]
     };

@@ -5,6 +5,8 @@ export type WorkerEnv = {
   flysoarMcpUrl: string;
   telegramBotToken: string;
   captainPublicUrl: string;
+  aiGatewayApiKey: string | null;
+  languageModel: string;
   trackingEnabled: boolean;
   workerId: string;
   port: number;
@@ -24,6 +26,8 @@ export function loadWorkerEnv(source: NodeJS.ProcessEnv = process.env): WorkerEn
     flysoarMcpUrl: (source.FLYSOAR_MCP_URL?.trim() || "https://mcp.flysoar.ai/mcp").replace(/\/$/u, ""),
     telegramBotToken: required(source, "TELEGRAM_BOT_TOKEN"),
     captainPublicUrl: required(source, "CAPTAIN_PUBLIC_URL").replace(/\/$/u, ""),
+    aiGatewayApiKey: source.AI_GATEWAY_API_KEY?.trim() || null,
+    languageModel: source.CAPTAIN_LANGUAGE_MODEL?.trim() || "openai/gpt-5.6-luna",
     trackingEnabled: !booleanValue(source.TRACKING_KILL_SWITCH, false),
     workerId: source.FLIGHT_WORKER_ID?.trim() || `worker-${process.pid}`,
     port: positive(source, "PORT", 8080),

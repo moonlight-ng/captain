@@ -198,6 +198,8 @@ export type CaptainNotification = {
   userId: string;
   tripId: string;
   telegramChatId: number;
+  preferredLanguage?: string;
+  preferredLanguageSource?: TravellerProfile["preferredLanguageSource"];
   kind:
     | "tracking_started"
     | "initial_results"
@@ -254,6 +256,11 @@ export interface CaptainPlatformStore {
     },
     now: Date
   ): Promise<TravellerProfile>;
+  claimDetectedLanguage(
+    userId: string,
+    language: string,
+    now: Date
+  ): Promise<{ claimed: boolean; profile: TravellerProfile }>;
   /**
    * Advances a traveller past the welcome step, returning true only for the
    * caller that won. Two updates arriving together must not both greet.

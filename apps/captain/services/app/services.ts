@@ -9,6 +9,7 @@ import {
   type CaptainPlatformStore
 } from "@agents/flight-store";
 import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
+import { TelegramLanguageService } from "@agents/telegram-core";
 
 import { CaptainWebAuth } from "../auth/web-session.js";
 import { CaptainAdminAuth } from "../admin/auth.js";
@@ -52,6 +53,7 @@ export type CaptainServices = {
    * Fire-and-forget: it must never sit between a traveller and their reply.
    */
   rememberConversation: ConversationMemoryWriter;
+  language: TelegramLanguageService;
 };
 
 let servicesPromise: Promise<CaptainServices> | undefined;
@@ -86,6 +88,17 @@ export async function createCaptainServices(): Promise<CaptainServices> {
   const usage = new CaptainUsageRecorder({
     store: adminStore,
     apiKey: env.aiGatewayApiKey
+  });
+  const language = new TelegramLanguageService({
+    apiKey: env.aiGatewayApiKey,
+    model: env.languageModel,
+    recordUsage: (input) => usage.recordGatewayGeneration({
+      userId: null,
+      operation: input.operation,
+      model: input.model,
+      providerMetadata: input.providerMetadata,
+      usage: input.usage
+    })
   });
   const conversationReview = env.conversationReviewEnabled
     && env.resendApiKey
@@ -137,6 +150,7 @@ export async function createCaptainServices(): Promise<CaptainServices> {
     adminStore,
     adminAuth,
     usage,
+    language,
     auth,
     trips,
     feedback,

@@ -96,7 +96,7 @@ export async function dismissTravellerFact(factId: string): Promise<void> {
 }
 
 export async function updateProfile(
-  update: Pick<
+  update: Partial<Pick<
     TravellerProfile,
     | "timeZone"
     | "defaultCurrency"
@@ -111,7 +111,7 @@ export async function updateProfile(
     | "quietHoursEnabled"
     | "quietHoursStart"
     | "quietHoursEnd"
-  >
+  >> & { preferredLanguage?: string | null }
 ): Promise<TravellerProfile> {
   return (await api<{ profile: TravellerProfile }>("/api/me/profile", {
     method: "PATCH",

@@ -24,7 +24,7 @@ export default defineAgent({
     maxOutputTokensPerSession: 20_000
   },
   build: {
-    externalDependencies: ["@workflow/world-postgres", "postgres"]
+    externalDependencies: ["@workflow/world-postgres", "ai", "postgres"]
   },
   experimental: {
     workflow: { world: "@workflow/world-postgres" }

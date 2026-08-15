@@ -11,6 +11,7 @@ import {
   FlysoarMcpFlightSearchProvider
 } from "@agents/provider-flysoar";
 import postgres from "postgres";
+import { TelegramLanguageService } from "@agents/telegram-core";
 
 import { loadWorkerEnv } from "./env.js";
 import { InterruptibleWorkerScheduler } from "./scheduler.js";
@@ -39,7 +40,11 @@ const worker = new FlightWorker({
   workerId: env.workerId,
   leaseMs: env.leaseMs,
   freshnessMs: env.freshnessMs,
-  claimLimit: env.claimLimit
+  claimLimit: env.claimLimit,
+  language: new TelegramLanguageService({
+    apiKey: env.aiGatewayApiKey,
+    model: env.languageModel
+  })
 });
 
 let ready = false;

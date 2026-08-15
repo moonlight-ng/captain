@@ -34,6 +34,20 @@ describe("Conversation summary migration", () => {
   });
 });
 
+describe("Preferred language migration", () => {
+  const migration = readFileSync(
+    resolve(process.cwd(), "database/migrations/028_preferred_language.sql"),
+    "utf8"
+  );
+
+  it("keeps English as an eligible default until a response establishes a language", () => {
+    expect(DEFAULT_PROFILE.preferredLanguage).toBe("en");
+    expect(DEFAULT_PROFILE.preferredLanguageSource).toBe("default");
+    expect(migration).toContain("preferred_language text not null default 'en'");
+    expect(migration).toContain("'default', 'detected', 'user'");
+  });
+});
+
 // from daily-alert-cap-migration.test.ts
 describe("Daily alert cap migration", () => {
   const migration = readFileSync(

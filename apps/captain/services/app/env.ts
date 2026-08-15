@@ -9,6 +9,7 @@ export type CaptainEnv = {
   aiModel: string;
   tripInterpreterModel: string;
   transcriptionModel: string;
+  languageModel: string;
   aiGatewayApiKey: string | null;
   supabaseUrl: string | null;
   supabasePublishableKey: string | null;
@@ -53,6 +54,9 @@ export function loadEnv(): CaptainEnv {
     aiModel: process.env.AI_MODEL?.trim() || "anthropic/claude-sonnet-5",
     tripInterpreterModel: process.env.TRIP_INTERPRETER_MODEL?.trim() || "openai/gpt-5.6-luna",
     transcriptionModel: process.env.TRANSCRIPTION_MODEL?.trim() || "openai/gpt-4o-mini-transcribe",
+    languageModel: process.env.CAPTAIN_LANGUAGE_MODEL?.trim()
+      || process.env.TRIP_INTERPRETER_MODEL?.trim()
+      || "openai/gpt-5.6-luna",
     aiGatewayApiKey: optional("AI_GATEWAY_API_KEY"),
     supabaseUrl: optional("SUPABASE_URL"),
     supabasePublishableKey: optional("SUPABASE_PUBLISHABLE_KEY"),

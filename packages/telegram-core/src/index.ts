@@ -1,5 +1,6 @@
 export * from "./session-limit.js";
 export * from "./progress.js";
+export * from "./language.js";
 
 export type TelegramIdentity = {
   telegramUserId: number;

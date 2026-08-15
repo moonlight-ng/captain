@@ -229,6 +229,9 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           quiet_hours_enabled = ${DEFAULT_PROFILE.quietHoursEnabled},
           quiet_hours_start = ${DEFAULT_PROFILE.quietHoursStart},
           quiet_hours_end = ${DEFAULT_PROFILE.quietHoursEnd},
+          preferred_language = ${DEFAULT_PROFILE.preferredLanguage},
+          preferred_language_source = ${DEFAULT_PROFILE.preferredLanguageSource},
+          preferred_language_set_at = null,
           onboarding_step = 'welcome',
           onboarding_completed_at = null,
           updated_at = ${now}
@@ -272,6 +275,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         notification_mode, price_rise_alerts_enabled,
         better_option_alerts_enabled,
         quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
+        preferred_language, preferred_language_source, preferred_language_set_at,
         onboarding_step, onboarding_completed_at,
         created_at, updated_at
       )
@@ -282,6 +286,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         ${DEFAULT_PROFILE.betterOptionAlertsEnabled},
         ${DEFAULT_PROFILE.quietHoursEnabled},
         ${DEFAULT_PROFILE.quietHoursStart}, ${DEFAULT_PROFILE.quietHoursEnd},
+        ${DEFAULT_PROFILE.preferredLanguage}, ${DEFAULT_PROFILE.preferredLanguageSource}, null,
         'welcome', null, ${now}, ${now}
       where exists (select 1 from captain.users where id = ${userId})
       on conflict (user_id) do update set user_id = excluded.user_id
@@ -336,6 +341,21 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         quiet_hours_enabled = coalesce(${input.quietHoursEnabled ?? null}, quiet_hours_enabled),
         quiet_hours_start = coalesce(${input.quietHoursStart ?? null}, quiet_hours_start),
         quiet_hours_end = coalesce(${input.quietHoursEnd ?? null}, quiet_hours_end),
+        preferred_language = case
+          when ${input.preferredLanguage !== undefined}
+            then ${input.preferredLanguage ?? DEFAULT_PROFILE.preferredLanguage}
+          else preferred_language
+        end,
+        preferred_language_source = case
+          when ${input.preferredLanguage !== undefined}
+            then ${input.preferredLanguage === null ? "default" : "user"}
+          else preferred_language_source
+        end,
+        preferred_language_set_at = case
+          when ${input.preferredLanguage !== undefined}
+            then ${input.preferredLanguage === null ? null : now}
+          else preferred_language_set_at
+        end,
         onboarding_step = coalesce(${input.onboardingStep ?? null}, onboarding_step),
         onboarding_completed_at = case
           when ${input.onboardingCompletedAt !== undefined}
@@ -367,6 +387,27 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
     `;
     for (const spec of specs) await this.evaluateTripsForSearchSpec(spec.search_spec_id, now);
     return updatedProfile;
+  }
+
+  async claimDetectedLanguage(
+    userId: string,
+    language: string,
+    now: Date
+  ): Promise<{ claimed: boolean; profile: TravellerProfile }> {
+    await this.ensureProfile(userId, now);
+    const rows = await this.#sql<ProfileRow[]>`
+      update captain.traveller_profiles set
+        preferred_language = ${language},
+        preferred_language_source = 'detected',
+        preferred_language_set_at = ${now},
+        updated_at = ${now}
+      where user_id = ${userId} and preferred_language_source = 'default'
+      returning *
+    `;
+    if (rows[0]) return { claimed: true, profile: toProfile(rows[0]) };
+    const profile = await this.getProfile(userId);
+    if (!profile) throw new Error("User profile not found");
+    return { claimed: false, profile };
   }
 
   async createLoginToken(
@@ -2615,7 +2656,11 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         where notification.id = ranked.id
           and ranked.position > 1
       `;
-      const rows = await tx<Array<NotificationRow & { chat_id: string }>>`
+      const rows = await tx<Array<NotificationRow & {
+        chat_id: string;
+        preferred_language: string;
+        preferred_language_source: TravellerProfile["preferredLanguageSource"];
+      }>>`
         with candidates as (
           select id from captain.notifications
           where status = 'pending' and available_at <= ${now}
@@ -2627,12 +2672,18 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           from candidates where notification.id = candidates.id
           returning notification.*
         )
-        select claimed.*, telegram.chat_id::text as chat_id
-        from claimed join captain.telegram_accounts telegram on telegram.user_id = claimed.user_id
+        select claimed.*, telegram.chat_id::text as chat_id,
+          coalesce(profile.preferred_language, 'en') as preferred_language,
+          coalesce(profile.preferred_language_source, 'default') as preferred_language_source
+        from claimed
+        join captain.telegram_accounts telegram on telegram.user_id = claimed.user_id
+        left join captain.traveller_profiles profile on profile.user_id = claimed.user_id
       `;
       return rows.map((row) => ({
         id: row.id, userId: row.user_id, tripId: row.trip_id,
         telegramChatId: Number(row.chat_id), kind: row.kind,
+        preferredLanguage: row.preferred_language,
+        preferredLanguageSource: row.preferred_language_source,
         payload: row.payload, attempts: row.attempts,
         telegramMessageId: row.telegram_message_id === null ? null : Number(row.telegram_message_id)
       }));
@@ -3347,6 +3398,9 @@ type ProfileRow = {
   quiet_hours_enabled: boolean;
   quiet_hours_start: number;
   quiet_hours_end: number;
+  preferred_language: string;
+  preferred_language_source: TravellerProfile["preferredLanguageSource"];
+  preferred_language_set_at: Date | null;
   onboarding_completed_at: Date | null;
   onboarding_step: TravellerProfile["onboardingStep"];
   created_at: Date;
@@ -3515,6 +3569,11 @@ function toProfile(row: ProfileRow): TravellerProfile {
     quietHoursEnabled: row.quiet_hours_enabled,
     quietHoursStart: row.quiet_hours_start,
     quietHoursEnd: row.quiet_hours_end,
+    preferredLanguage: row.preferred_language,
+    preferredLanguageSource: row.preferred_language_source,
+    preferredLanguageSetAt: row.preferred_language_set_at
+      ? iso(row.preferred_language_set_at)
+      : null,
     onboardingCompletedAt: row.onboarding_completed_at ? iso(row.onboarding_completed_at) : null,
     onboardingStep: row.onboarding_step,
     createdAt: iso(row.created_at),

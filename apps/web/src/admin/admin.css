@@ -221,7 +221,25 @@
 .admin-agent-facts .admin-fact:last-child { border-right: 0; }
 .admin-fact { display: grid; gap: var(--admin-space-1); min-width: 0; }
 .admin-fact span { color: var(--admin-quiet); font-size: var(--type-caption); }
-.admin-fact strong { overflow-wrap: anywhere; color: rgba(255, 255, 255, .78); font-size: var(--type-body); font-weight: var(--weight-medium); }
+.admin-fact-value { display: flex; align-items: center; gap: var(--admin-space-2); min-width: 0; }
+.admin-fact strong { min-width: 0; overflow-wrap: anywhere; color: rgba(255, 255, 255, .78); font-size: var(--type-body); font-weight: var(--weight-medium); }
+.admin-fact-copy {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--admin-quiet);
+  cursor: pointer;
+}
+.admin-fact-copy:hover { color: var(--admin-sage-bright); background: rgba(255, 255, 255, .05); }
+.admin-fact-copy svg { width: 14px; height: 14px; }
 
 .admin-metrics {
   display: grid;

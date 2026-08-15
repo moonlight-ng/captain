@@ -42,6 +42,7 @@ import {
 
 import { getCaptainServices } from "../../services/app/services.js";
 import { clearTelegramOwnerContext } from "../../services/agent/owner-context.js";
+import { learnLanguageFromDeliveredExchange } from "../../services/agent/language-preference.js";
 import {
   isTripConfirmationText,
   TripPlanningService
@@ -72,6 +73,7 @@ const pendingSessionRotations = new Map<string, PendingSessionRotation>();
  * thing this is here to fix.
  */
 const pendingTurnContent = new Map<string, { content: string; key: string }>();
+const turnLanguageInputs = new Map<string, { userId: string; content: string }>();
 
 /**
  * Text already sent this turn. A model that speaks before a tool call often
@@ -312,7 +314,12 @@ export default telegramChannel({
     const updateKey = telegramMessageUpdateKey("captain", telegramChatId, messageId);
     if (!await services.platformStore.claimTelegramUpdate(updateKey, user.id, new Date())) return null;
     if (user.status !== "active") {
-      await ctx.telegram.post("Your Captain access is currently suspended. Please contact support if you think this is a mistake.");
+      await postTelegramAssistantMessage(
+        ctx.telegram,
+        "Your Captain access is currently suspended. Please contact support if you think this is a mistake.",
+        null,
+        user.id
+      );
       return null;
     }
 
@@ -330,7 +337,12 @@ export default telegramChannel({
           "telegram_message",
           new Date()
         );
-        await ctx.telegram.post("I couldn’t understand that voice note. Please try again or send the details as text.");
+        await postTelegramAssistantMessage(
+          ctx.telegram,
+          "I couldn’t understand that voice note. Please try again or send the details as text.",
+          null,
+          user.id
+        );
         return null;
       }
     }
@@ -370,14 +382,15 @@ export default telegramChannel({
       const welcome = returningTravellerWelcome(tracked);
       await services.platformStore.appendMessage(user.id, "assistant", welcome, new Date());
       if (tracked) {
-        await postTelegramDashboardMessage(ctx, welcome);
+        await postTelegramDashboardMessage(ctx, welcome, user.id);
         return null;
       }
       await postWithLink(
         ctx,
         welcome,
         "Edit preferences",
-        await services.auth.createLoginLink(user.id, "/profile")
+        await services.auth.createLoginLink(user.id, "/profile"),
+        user.id
       );
       return null;
     }
@@ -391,7 +404,8 @@ export default telegramChannel({
         ctx,
         "Choose how Captain notifies you, and how it ranks the flights it finds.",
         "Open profile",
-        await services.auth.createLoginLink(user.id, "/profile")
+        await services.auth.createLoginLink(user.id, "/profile"),
+        user.id
       );
       return null;
     }
@@ -401,7 +415,8 @@ export default telegramChannel({
         ctx,
         CAPTAIN_FEEDBACK_PROMPT,
         "Open feedback form",
-        await services.auth.createLoginLink(user.id, "/feedback")
+        await services.auth.createLoginLink(user.id, "/feedback"),
+        user.id
       );
       return null;
     }
@@ -412,28 +427,39 @@ export default telegramChannel({
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
       const response = await services.tripPlanning.activeTripsLocation(user.id);
       if (!response) {
-        await ctx.telegram.post("Nothing on the board yet. Where to next?");
+        await postTelegramAssistantMessage(ctx.telegram, "Nothing on the board yet. Where to next?", null, user.id);
         return null;
       }
-      await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
-      await postTelegramDashboardMessage(ctx, response);
+      const delivered = await postTelegramDashboardMessage(ctx, response, user.id);
+      await services.platformStore.appendMessage(user.id, "assistant", delivered.storedText, new Date());
       return null;
     }
     if (command === CAPTAIN_CLEAR_COMMAND.slice(1)) {
       await clearTelegramOwnerContext(telegramChatId, services.env.databaseUrl);
       await services.platformStore.clearTravellerData(user.id, new Date());
-      await ctx.telegram.post(CAPTAIN_CLEAR_CONFIRMATION);
+      const clearConfirmation = profile.preferredLanguageSource === "default"
+        ? CAPTAIN_CLEAR_CONFIRMATION
+        : await services.language.localize(
+            CAPTAIN_CLEAR_CONFIRMATION,
+            profile.preferredLanguage
+          );
+      await ctx.telegram.post(clearConfirmation);
       return null;
     }
     if (content.trimStart().startsWith("/")) {
       const response = "That’s not one of mine. /trip for your trip, /profile for preferences, /feedback to send feedback.";
       await services.platformStore.appendMessage(user.id, "user", content, new Date());
-      await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
-      await ctx.telegram.post(response);
+      const delivered = await postTelegramAssistantMessage(ctx.telegram, response, null, user.id);
+      await services.platformStore.appendMessage(user.id, "assistant", delivered.storedText, new Date());
       return null;
     }
     if (!content) {
-      await ctx.telegram.post("Send your trip by text or voice note. If you’re unsure about the dates, I’ll help you work them out.");
+      await postTelegramAssistantMessage(
+        ctx.telegram,
+        "Send your trip by text or voice note. If you’re unsure about the dates, I’ll help you work them out.",
+        null,
+        user.id
+      );
       return null;
     }
 
@@ -461,8 +487,9 @@ export default telegramChannel({
       }
       const explanation = notification ? explainNotification(notification) : null;
       if (explanation) {
-        await services.platformStore.appendMessage(user.id, "assistant", explanation, new Date());
-        await ctx.telegram.post(explanation);
+        const delivered = await postTelegramAssistantMessage(ctx.telegram, explanation, null, user.id);
+        await services.platformStore.appendMessage(user.id, "assistant", delivered.storedText, new Date());
+        void learnLanguageAfterDelivery(user.id, content, delivered.visibleText);
         return null;
       }
     }
@@ -471,8 +498,9 @@ export default telegramChannel({
       const response = draft
         ? "Hello. Your draft is still open — want to pick it back up?"
         : "Hello. Where to next?";
-      await services.platformStore.appendMessage(user.id, "assistant", response, new Date());
-      await ctx.telegram.post(response);
+      const delivered = await postTelegramAssistantMessage(ctx.telegram, response, null, user.id);
+      await services.platformStore.appendMessage(user.id, "assistant", delivered.storedText, new Date());
+      void learnLanguageAfterDelivery(user.id, content, delivered.visibleText);
       return null;
     }
 
@@ -489,6 +517,7 @@ export default telegramChannel({
       const reply = await withCaptainProgress(
         ctx,
         telegramChatId,
+        user.id,
         captainPlanningStages(content, String(messageId)),
         async () => {
         const decision = await services.tripPlanning.handleDraftDecision(
@@ -518,13 +547,14 @@ export default telegramChannel({
         if (reply.kind === "trip_confirmation_accepted") {
           const summary = await services.tripPlanning.activeTripsLocation(user.id);
           if (summary) {
-            await services.platformStore.appendMessage(user.id, "assistant", summary, new Date());
-            await postTelegramDashboardMessage(ctx, summary);
+            const delivered = await postTelegramDashboardMessage(ctx, summary, user.id);
+            await services.platformStore.appendMessage(user.id, "assistant", delivered.storedText, new Date());
           }
           return null;
         }
         await postTripPlanResult(ctx, user.id, reply.result, {
-          acknowledgeVoice: voiceTranscript !== null
+          acknowledgeVoice: voiceTranscript !== null,
+          languageInput: content
         });
         return null;
       }
@@ -536,7 +566,8 @@ export default telegramChannel({
           ctx,
           message,
           "Open trip",
-          await services.auth.createLoginLink(user.id, "/trip")
+          await services.auth.createLoginLink(user.id, "/trip"),
+          user.id
         );
         return null;
       }
@@ -550,7 +581,7 @@ export default telegramChannel({
         PROCESSING_FAILURE_TEXT,
         new Date()
       );
-      await ctx.telegram.post(PROCESSING_FAILURE_TEXT);
+      await postTelegramAssistantMessage(ctx.telegram, PROCESSING_FAILURE_TEXT, null, user.id);
       return null;
     }
 
@@ -604,10 +635,7 @@ export default telegramChannel({
       return;
     }
     if (user.status !== "active") {
-      await ctx.telegram.answerCallbackQuery({
-        callbackQueryId: query.id,
-        text: "Captain access is suspended."
-      });
+      await answerLocalizedCallback(ctx, user.id, query.id, "Captain access is suspended.");
       return;
     }
     await services.platformStore.disableOnboardingFollowups(
@@ -617,10 +645,7 @@ export default telegramChannel({
     );
     try {
       if (action.type === "start") {
-        await ctx.telegram.answerCallbackQuery({
-          callbackQueryId: query.id,
-          text: "Setting it up…"
-        });
+        await answerLocalizedCallback(ctx, user.id, query.id, "Setting it up…");
         const result = await services.tripPlanning.confirm(
           user.id,
           action.draftId,
@@ -631,10 +656,7 @@ export default telegramChannel({
         return;
       }
       if (action.type === "confirm") {
-        await ctx.telegram.answerCallbackQuery({
-          callbackQueryId: query.id,
-          text: "Confirming plan…"
-        });
+        await answerLocalizedCallback(ctx, user.id, query.id, "Confirming plan…");
         const trip = await services.trips.get(user.id, action.tripId);
         if (!trip) throw new Error("Trip not found");
         await services.trips.action(user.id, action.tripId, {
@@ -652,14 +674,11 @@ export default telegramChannel({
       }
       if (action.type === "edit") {
         await services.tripPlanning.reopen(user.id, action.draftId, action.revision);
-        await ctx.telegram.answerCallbackQuery({
-          callbackQueryId: query.id,
-          text: "Tell me what to change."
-        });
+        await answerLocalizedCallback(ctx, user.id, query.id, "Tell me what to change.");
         await clearCallbackButtons(ctx, query);
         const message = "What should I change in this trip?";
-        await services.platformStore.appendMessage(user.id, "assistant", message, new Date());
-        await ctx.telegram.post(message);
+        const delivered = await postTelegramAssistantMessage(ctx.telegram, message, null, user.id);
+        await services.platformStore.appendMessage(user.id, "assistant", delivered.storedText, new Date());
         return;
       }
       const result = await services.tripPlanning.cancel(
@@ -667,23 +686,18 @@ export default telegramChannel({
         action.draftId,
         action.revision
       );
-      await ctx.telegram.answerCallbackQuery({
-        callbackQueryId: query.id,
-        text: "Draft dropped."
-      });
+      await answerLocalizedCallback(ctx, user.id, query.id, "Draft dropped.");
       await clearCallbackButtons(ctx, query);
       await postTripPlanResult(ctx, user.id, result);
     } catch (error) {
       if (error instanceof TripLimitError) {
-        await ctx.telegram.answerCallbackQuery({
-          callbackQueryId: query.id,
-          text: "One-trip limit reached."
-        });
+        await answerLocalizedCallback(ctx, user.id, query.id, "One-trip limit reached.");
         await postWithLink(
           ctx,
           "You already have an active trip. Send the new itinerary and I’ll ask whether you want to replace the current one.",
           "Open trip",
-          await services.auth.createLoginLink(user.id, "/trip")
+          await services.auth.createLoginLink(user.id, "/trip"),
+          user.id
         );
         return;
       }
@@ -691,10 +705,12 @@ export default telegramChannel({
         event: "captain.telegram_trip_plan_callback_failed",
         error: error instanceof Error ? error.name : "UnknownError"
       }));
-      await ctx.telegram.answerCallbackQuery({
-        callbackQueryId: query.id,
-        text: "That trip draft changed. Please review the latest message."
-      });
+      await answerLocalizedCallback(
+        ctx,
+        user.id,
+        query.id,
+        "That trip draft changed. Please review the latest message."
+      );
     }
   },
   events: {
@@ -703,6 +719,8 @@ export default telegramChannel({
       const chatId = channel.telegram.chatId;
       const said = pendingTurnContent.get(chatId);
       pendingTurnContent.delete(chatId);
+      const userId = captainSessionUserId(ctx.session.auth);
+      if (said && userId) turnLanguageInputs.set(data.turnId, { userId, content: said.content });
       const stages = said ? captainPlanningStages(said.content, said.key) : null;
       agentProgress.start({
         sessionId: ctx.session.id,
@@ -712,7 +730,7 @@ export default telegramChannel({
         // knows anything — an acknowledgement, not a claim about the work.
         ...(stages ? { opening: stages.opening } : {}),
         holdingLines: CAPTAIN_HOLDING_STATUS,
-        ...telegramProgressCallbacks(channel.telegram, chatId),
+        ...telegramProgressCallbacks(channel.telegram, chatId, userId),
         onTyping: () => channel.telegram.startTyping()
       });
     },
@@ -784,6 +802,7 @@ export default telegramChannel({
           captainSessionAuthAttributes(ctx.session.auth)
         );
       }
+      const userId = captainSessionUserId(ctx.session.auth);
       for (const request of otherRequests) {
         if (
           isSessionLimitContinuationRequest(request)
@@ -791,7 +810,8 @@ export default telegramChannel({
         ) {
           continue;
         }
-        const rendered = renderTelegramInputRequest(request as never, channel.state);
+        const raw = renderTelegramInputRequest(request as never, channel.state);
+        const rendered = userId ? await localizeTelegramInputRequest(userId, raw) : raw;
         const posted = await channel.telegram.post({
           text: rendered.text,
           ...(rendered.replyMarkup ? { reply_markup: rendered.replyMarkup } : {})
@@ -850,8 +870,8 @@ export default telegramChannel({
           .then((grounded) => grounded.message)) {
           return;
         }
-        await services.platformStore.appendMessage(userId, "assistant", preface, new Date());
-        await postTelegramAssistantMessage(channel.telegram, preface, null);
+        const delivered = await postTelegramAssistantMessage(channel.telegram, preface, null, userId);
+        await services.platformStore.appendMessage(userId, "assistant", delivered.storedText, new Date());
         return;
       }
       await clearAgentProgress(ctx.session.id);
@@ -896,19 +916,27 @@ export default telegramChannel({
         if (activeTrip?.status === "draft" && grounded.createdTrip) {
           reviewTrip = activeTrip;
         }
-        await services.platformStore.appendMessage(userId, "assistant", message, new Date());
       }
       // Receipt and /trip-style replies carry dashboard URLs in the body. Always
       // lift those into buttons — a plain post leaves "Open trip: https://…"
       // visible and skips Confirm/Review when the createdTrip gate misses.
       if (!claimTurnMessage(ctx.session.turn.id, message.trim())) return;
-      await postTelegramAssistantMessage(channel.telegram, message, reviewTrip);
+      const delivered = await postTelegramAssistantMessage(channel.telegram, message, reviewTrip, userId);
+      if (userId) {
+        const services = await getCaptainServices();
+        await services.platformStore.appendMessage(userId, "assistant", delivered.storedText, new Date());
+        const input = turnLanguageInputs.get(ctx.session.turn.id);
+        if (input) {
+          void learnLanguageAfterDelivery(input.userId, input.content, delivered.visibleText);
+        }
+      }
     },
     async "turn.completed"(_data, channel, ctx) {
       clearPrepareTripTurn(ctx.session.id, ctx.session.turn.id);
       turnMessagesSent.delete(ctx.session.turn.id);
       turnPlansSent.delete(ctx.session.turn.id);
       turnsWithPreface.delete(ctx.session.turn.id);
+      turnLanguageInputs.delete(ctx.session.turn.id);
       await clearAgentProgress(ctx.session.id);
     },
     async "turn.failed"(_data, channel, ctx) {
@@ -916,8 +944,10 @@ export default telegramChannel({
       turnMessagesSent.delete(ctx.session.turn.id);
       turnPlansSent.delete(ctx.session.turn.id);
       turnsWithPreface.delete(ctx.session.turn.id);
+      turnLanguageInputs.delete(ctx.session.turn.id);
       await clearAgentProgress(ctx.session.id);
-      await channel.telegram.post(PROCESSING_FAILURE_TEXT);
+      const userId = captainSessionUserId(ctx.session.auth);
+      await postTelegramAssistantMessage(channel.telegram, PROCESSING_FAILURE_TEXT, null, userId);
     }
   }
 });
@@ -941,9 +971,20 @@ async function postWithLink(
   telegramOrCtx: TelegramContext | Pick<TelegramContext["telegram"], "post">,
   text: string,
   label: string,
-  url: string
+  url: string,
+  userId?: string
 ): Promise<void> {
   const telegram = "telegram" in telegramOrCtx ? telegramOrCtx.telegram : telegramOrCtx;
+  if (userId) {
+    const services = await getCaptainServices();
+    const profile = await services.platformStore.ensureProfile(userId, new Date());
+    if (profile.preferredLanguageSource !== "default") {
+      [text, label] = await Promise.all([
+        services.language.localize(text, profile.preferredLanguage),
+        services.language.localize(label, profile.preferredLanguage)
+      ]);
+    }
+  }
   await telegram.post({
     text,
     link_preview_options: { is_disabled: true },
@@ -1090,7 +1131,7 @@ async function postTripPlanResult(
   ctx: TelegramContext,
   userId: string,
   planResult: TripPlanResult,
-  options: { acknowledgeVoice?: boolean } = {}
+  options: { acknowledgeVoice?: boolean; languageInput?: string } = {}
 ): Promise<void> {
   const services = await getCaptainServices();
   // A finished plan is saved and sent as its Confirm/Review receipt. Chat used
@@ -1119,19 +1160,17 @@ async function postTripPlanResult(
     parts[0] = acknowledgeVoiceClarification(parts[0]!);
   }
   parts = parts.map(reviewCaptainMessage);
+  const deliveredParts: string[] = [];
   for (const part of parts) {
-    await services.platformStore.appendMessage(userId, "assistant", part, new Date());
-    if (result.status === "started") {
-      const rendered = telegramDashboardMessage(part);
-      await ctx.telegram.post({
-        text: rendered.text,
-        reply_markup: result.receipt.status === "draft"
-          ? tripPlanReviewReplyMarkup(result.receipt)
-          : { inline_keyboard: rendered.links.map((link) => [{ text: link.text, url: link.url }]) }
-      });
-      continue;
-    }
-    await ctx.telegram.post(part);
+    const reviewTrip = result.status === "started" && result.receipt.status === "draft"
+      ? { id: result.receipt.tripId, version: result.receipt.version, status: result.receipt.status }
+      : null;
+    const delivered = await postTelegramAssistantMessage(ctx.telegram, part, reviewTrip, userId);
+    deliveredParts.push(delivered.visibleText);
+    await services.platformStore.appendMessage(userId, "assistant", delivered.storedText, new Date());
+  }
+  if (options.languageInput && deliveredParts.length > 0) {
+    void learnLanguageAfterDelivery(userId, options.languageInput, deliveredParts.join("\n\n"));
   }
 }
 
@@ -1159,14 +1198,15 @@ async function recoverUndeliveredTripConfirmation(
     draft,
     confirmation: formatTripPlanConfirmation(draft)
   });
-  const rendered = telegramDashboardMessage(started.message);
-  await telegram.post({
-    text: rendered.text,
-    reply_markup: started.receipt.status === "draft"
-      ? tripPlanReviewReplyMarkup(started.receipt)
-      : { inline_keyboard: rendered.links.map((link) => [{ text: link.text, url: link.url }]) }
-  });
-  await services.platformStore.appendMessage(userId, "assistant", started.message, new Date());
+  const delivered = await postTelegramAssistantMessage(
+    telegram,
+    started.message,
+    started.receipt.status === "draft"
+      ? { id: started.receipt.tripId, version: started.receipt.version, status: started.receipt.status }
+      : null,
+    userId
+  );
+  await services.platformStore.appendMessage(userId, "assistant", delivered.storedText, new Date());
 }
 
 export function tripPlanReviewReplyMarkup(
@@ -1185,26 +1225,118 @@ export function tripPlanReviewReplyMarkup(
 
 async function postTelegramDashboardMessage(
   ctx: TelegramContext,
-  message: string
-): Promise<void> {
-  await postTelegramAssistantMessage(ctx.telegram, message, null);
+  message: string,
+  userId?: string
+): Promise<DeliveredTelegramMessage> {
+  return postTelegramAssistantMessage(ctx.telegram, message, null, userId);
 }
+
+type DeliveredTelegramMessage = { visibleText: string; storedText: string };
 
 async function postTelegramAssistantMessage(
   telegram: Pick<TelegramContext["telegram"], "post">,
   message: string,
-  reviewTrip: Pick<Trip, "id" | "version" | "status"> | null
-): Promise<void> {
+  reviewTrip: Pick<Trip, "id" | "version" | "status"> | null,
+  userId?: string | null
+): Promise<DeliveredTelegramMessage> {
   const rendered = renderTelegramAssistantMessage(message, reviewTrip);
-  if (!rendered.replyMarkup) {
-    await telegram.post(rendered.text);
-    return;
+  const localized = userId ? await localizeRenderedTelegramMessage(userId, rendered) : rendered;
+  if (!localized.replyMarkup) {
+    await telegram.post(localized.text);
+    return { visibleText: localized.text, storedText: localized.text };
   }
   await telegram.post({
-    text: rendered.text,
+    text: localized.text,
     link_preview_options: { is_disabled: true },
-    reply_markup: rendered.replyMarkup
+    reply_markup: localized.replyMarkup
   });
+  const links = telegramDashboardMessage(message).links;
+  return {
+    visibleText: localized.text,
+    storedText: links.length > 0
+      ? `${localized.text}\n\n${links.map((link) => `Open trip: ${link.url}`).join("\n")}`
+      : localized.text
+  };
+}
+
+async function localizeRenderedTelegramMessage(
+  userId: string,
+  rendered: ReturnType<typeof renderTelegramAssistantMessage>
+): Promise<ReturnType<typeof renderTelegramAssistantMessage>> {
+  const services = await getCaptainServices();
+  const profile = await services.platformStore.ensureProfile(userId, new Date());
+  if (profile.preferredLanguageSource === "default") return rendered;
+  const text = await services.language.localize(rendered.text, profile.preferredLanguage);
+  if (!rendered.replyMarkup) return { text, replyMarkup: null };
+  const inline_keyboard = await Promise.all(rendered.replyMarkup.inline_keyboard.map(async (row) =>
+    Promise.all(row.map(async (button) => ({
+      ...button,
+      text: await services.language.localize(button.text, profile.preferredLanguage)
+    })))
+  ));
+  return { text, replyMarkup: { inline_keyboard } } as ReturnType<typeof renderTelegramAssistantMessage>;
+}
+
+async function localizeTelegramInputRequest(
+  userId: string,
+  rendered: ReturnType<typeof renderTelegramInputRequest>
+): Promise<ReturnType<typeof renderTelegramInputRequest>> {
+  const services = await getCaptainServices();
+  const profile = await services.platformStore.ensureProfile(userId, new Date());
+  if (profile.preferredLanguageSource === "default") return rendered;
+  const localize = (text: string) => services.language.localize(text, profile.preferredLanguage);
+  const text = await localize(rendered.text);
+  if (!rendered.replyMarkup) return { ...rendered, text };
+  const replyMarkup: Record<string, unknown> = { ...rendered.replyMarkup };
+  const keyboard = rendered.replyMarkup.inline_keyboard;
+  if (Array.isArray(keyboard)) {
+    replyMarkup.inline_keyboard = await Promise.all(keyboard.map(async (row) => {
+      if (!Array.isArray(row)) return row;
+      return Promise.all(row.map(async (button) => {
+        if (!button || typeof button !== "object" || Array.isArray(button)) return button;
+        const record = button as Record<string, unknown>;
+        return typeof record.text === "string"
+          ? { ...record, text: await localize(record.text) }
+          : record;
+      }));
+    }));
+  }
+  if (typeof rendered.replyMarkup.input_field_placeholder === "string") {
+    replyMarkup.input_field_placeholder = await localize(
+      rendered.replyMarkup.input_field_placeholder
+    );
+  }
+  return { ...rendered, text, replyMarkup };
+}
+
+async function learnLanguageAfterDelivery(
+  userId: string,
+  userText: string,
+  assistantText: string
+): Promise<void> {
+  try {
+    const services = await getCaptainServices();
+    const result = await learnLanguageFromDeliveredExchange({
+      userId,
+      userText,
+      assistantText,
+      store: services.platformStore,
+      detectMatchingLanguage: (user, assistant) =>
+        services.language.detectMatchingLanguage(user, assistant)
+    });
+    if (result.claimed && result.language) {
+      console.info(JSON.stringify({
+        event: "captain.preferred_language_detected",
+        user_id: userId,
+        language: result.language
+      }));
+    }
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "captain.preferred_language_learning_failed",
+      error: error instanceof Error ? error.name : "UnknownError"
+    }));
+  }
 }
 
 /**
@@ -1258,6 +1390,7 @@ export function renderTelegramAssistantMessage(
 async function withCaptainProgress<T>(
   ctx: TelegramContext,
   chatId: number,
+  userId: string,
   stages: { opening: string; lines: readonly string[] } | null,
   operation: () => Promise<T>
 ): Promise<T> {
@@ -1268,7 +1401,7 @@ async function withCaptainProgress<T>(
     turnId: "deterministic",
     ...(stages ? { opening: stages.opening, holdingLines: stages.lines } : {}),
     holdingIntervalMs: CAPTAIN_PLANNING_STAGE_MS,
-    ...telegramProgressCallbacks(ctx.telegram, String(chatId)),
+    ...telegramProgressCallbacks(ctx.telegram, String(chatId), userId),
     onTyping: () => ctx.telegram.startTyping()
   });
   try {
@@ -1284,12 +1417,15 @@ async function withCaptainProgress<T>(
  */
 function telegramProgressCallbacks(
   telegram: Pick<TelegramContext["telegram"], "post" | "request">,
-  chatId: string
+  chatId: string,
+  userId?: string | null
 ) {
   return {
     onShow: async (statusText: string) => {
       try {
-        const posted = await telegram.post(statusText);
+        const posted = await telegram.post(
+          userId ? await localizeTextForUser(userId, statusText) : statusText
+        );
         return posted.id ?? null;
       } catch (error) {
         console.error(JSON.stringify({
@@ -1304,7 +1440,7 @@ function telegramProgressCallbacks(
         await telegram.request("editMessageText", {
           chat_id: chatId,
           message_id: Number(messageId),
-          text: statusText
+          text: userId ? await localizeTextForUser(userId, statusText) : statusText
         });
       } catch (error) {
         console.error(JSON.stringify({
@@ -1327,6 +1463,26 @@ function telegramProgressCallbacks(
       }
     }
   };
+}
+
+async function localizeTextForUser(userId: string, text: string): Promise<string> {
+  const services = await getCaptainServices();
+  const profile = await services.platformStore.ensureProfile(userId, new Date());
+  return profile.preferredLanguageSource === "default"
+    ? text
+    : services.language.localize(text, profile.preferredLanguage);
+}
+
+async function answerLocalizedCallback(
+  ctx: TelegramContext,
+  userId: string,
+  callbackQueryId: string,
+  text: string
+): Promise<void> {
+  await ctx.telegram.answerCallbackQuery({
+    callbackQueryId,
+    text: await localizeTextForUser(userId, text)
+  });
 }
 
 async function clearAgentProgress(sessionId: string): Promise<void> {

@@ -13,6 +13,31 @@ export type NotificationMode = z.infer<typeof notificationModeSchema>;
 export const airlineCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,3}$/u);
 export const currencyCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/u);
 
+export const preferredLanguageSourceSchema = z.enum(["default", "detected", "user"]);
+export type PreferredLanguageSource = z.infer<typeof preferredLanguageSourceSchema>;
+
+export function canonicalLanguageTag(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 35) throw new Error("Invalid language tag");
+  try {
+    const canonical = Intl.getCanonicalLocales(trimmed)[0];
+    if (!canonical) throw new Error("Invalid language tag");
+    return canonical;
+  } catch {
+    throw new Error("Invalid language tag");
+  }
+}
+
+export const preferredLanguageSchema = z.string().trim().min(2).max(35)
+  .refine((value) => {
+    try {
+      return Boolean(Intl.getCanonicalLocales(value)[0]);
+    } catch {
+      return false;
+    }
+  }, { message: "Invalid language tag" })
+  .transform(canonicalLanguageTag);
+
 export const travellerProfileSchema = z.object({
   userId: z.uuid(),
   defaultCurrency: currencyCodeSchema,
@@ -27,6 +52,9 @@ export const travellerProfileSchema = z.object({
   quietHoursEnabled: z.boolean(),
   quietHoursStart: z.number().int().min(0).max(23),
   quietHoursEnd: z.number().int().min(0).max(23),
+  preferredLanguage: preferredLanguageSchema,
+  preferredLanguageSource: preferredLanguageSourceSchema,
+  preferredLanguageSetAt: z.iso.datetime().nullable(),
   onboardingCompletedAt: z.iso.datetime().nullable(),
   onboardingStep: z.enum(["welcome", "complete"]),
   createdAt: z.iso.datetime(),
@@ -46,7 +74,8 @@ export const updateTravellerProfileSchema = z.object({
   maxAlertsPerDay: z.number().int().min(1).max(2).optional(),
   quietHoursEnabled: z.boolean().optional(),
   quietHoursStart: z.number().int().min(0).max(23).optional(),
-  quietHoursEnd: z.number().int().min(0).max(23).optional()
+  quietHoursEnd: z.number().int().min(0).max(23).optional(),
+  preferredLanguage: preferredLanguageSchema.nullable().optional()
 }).strict().refine((value) => Object.keys(value).length > 0, {
   message: "At least one preference must be updated"
 });
@@ -64,5 +93,8 @@ export const DEFAULT_PROFILE = {
   maxAlertsPerDay: 1,
   quietHoursEnabled: true,
   quietHoursStart: 22,
-  quietHoursEnd: 7
+  quietHoursEnd: 7,
+  preferredLanguage: "en",
+  preferredLanguageSource: "default",
+  preferredLanguageSetAt: null
 } as const;

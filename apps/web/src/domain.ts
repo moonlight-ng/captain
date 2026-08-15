@@ -16,6 +16,9 @@ export type TravellerProfile = {
   quietHoursEnabled: boolean;
   quietHoursStart: number;
   quietHoursEnd: number;
+  preferredLanguage: string;
+  preferredLanguageSource: "default" | "detected" | "user";
+  preferredLanguageSetAt: string | null;
   onboardingCompletedAt: string | null;
   onboardingStep: "welcome" | "complete";
   createdAt: string;

@@ -268,6 +268,73 @@ describe("flight worker orchestration", () => {
     vi.unstubAllGlobals();
   });
 
+  it("localizes notification copy and labels without changing the trip URL", async () => {
+    const now = new Date("2026-08-01T12:00:00Z");
+    const store = new MemoryCaptainPlatformStore();
+    const user = await store.ensureTelegramUser({
+      telegramUserId: 12,
+      telegramChatId: 12,
+      username: null,
+      firstName: "Mina",
+      lastName: null
+    }, now);
+    await store.updateProfile(user.id, {
+      quietHoursEnabled: false,
+      preferredLanguage: "fr"
+    }, now);
+    const input: CreateTripInput = {
+      title: "Lagos to London",
+      brief: {
+        originAirports: ["LOS"], destinationAirports: ["LON"], tripType: "one_way",
+        departureWindow: { start: "2026-10-29", end: "2026-10-29" }, stayNights: null,
+        legs: [], travellers: { adults: 1, childrenAges: [], infants: 0 }, cabin: "economy",
+        maxStops: 2, currency: "USD", maximumPrice: null,
+        preferredAirlines: [], excludedAirlines: [], context: ""
+      }
+    };
+    const created = await store.createTrip(user.id, input, buildSearchSpecs(input.brief), now);
+    const changedBrief = { ...input.brief, maximumPrice: 450 };
+    await store.updateTripBrief(user.id, created.trip.id, {
+      expectedVersion: created.trip.version,
+      brief: changedBrief
+    }, buildSearchSpecs(changedBrief), now);
+
+    const sentBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url, init?: RequestInit) => {
+      sentBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(
+        '{"ok":true,"result":{"message_id":52}}',
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }));
+    const localize = vi.fn(async (text: string, language: string) =>
+      text === "Open trip" ? "Ouvrir le voyage" : `[${language}] ${text}`
+    );
+    const worker = new FlightWorker({
+      store,
+      provider: { provider: "official_duffel", search: vi.fn() } as unknown as FlightSearchProvider,
+      telegramBotToken: "test",
+      captainPublicUrl: "https://captain.example.com",
+      trackingEnabled: false,
+      workerId: "worker-1",
+      leaseMs: 240_000,
+      freshnessMs: 900_000,
+      claimLimit: 1,
+      language: { localize }
+    });
+
+    await expect(worker.tick(now)).resolves.toMatchObject({ notified: 1 });
+    const sent = sentBodies[0]!;
+    expect(sent.text).toMatch(/^\[fr\] I’ve updated the plan/u);
+    const markup = sent.reply_markup as {
+      inline_keyboard: Array<Array<{ text: string; url: string }>>;
+    };
+    expect(markup.inline_keyboard[0]?.[0]).toMatchObject({ text: "Ouvrir le voyage" });
+    expect(markup.inline_keyboard[0]?.[0]?.url).toContain(`/trip/${created.trip.id}`);
+    expect(localize).toHaveBeenCalledWith("Open trip", "fr");
+    vi.unstubAllGlobals();
+  });
+
   it("acks checkpoint pause and plan-change notifications", () => {
     expect(notificationText({
       id: "paused",

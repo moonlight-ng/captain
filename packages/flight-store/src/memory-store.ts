@@ -372,6 +372,19 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         : {}),
       ...(input.quietHoursStart !== undefined ? { quietHoursStart: input.quietHoursStart } : {}),
       ...(input.quietHoursEnd !== undefined ? { quietHoursEnd: input.quietHoursEnd } : {}),
+      ...(input.preferredLanguage !== undefined
+        ? input.preferredLanguage === null
+          ? {
+              preferredLanguage: "en",
+              preferredLanguageSource: "default" as const,
+              preferredLanguageSetAt: null
+            }
+          : {
+              preferredLanguage: input.preferredLanguage,
+              preferredLanguageSource: "user" as const,
+              preferredLanguageSetAt: now.toISOString()
+            }
+        : {}),
       ...(input.onboardingStep !== undefined ? { onboardingStep: input.onboardingStep } : {}),
       ...(input.onboardingCompletedAt !== undefined
         ? { onboardingCompletedAt: input.onboardingCompletedAt }
@@ -398,6 +411,31 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       }
     }
     return clone(updated);
+  }
+
+  async claimDetectedLanguage(
+    userId: string,
+    language: string,
+    now: Date
+  ): Promise<{ claimed: boolean; profile: TravellerProfile }> {
+    await this.ensureProfile(userId, now);
+    // Re-read after the await so concurrent first turns cannot both promote a
+    // stale default-profile snapshot. No await occurs between this check and
+    // the write, matching the Postgres compare-and-set semantics.
+    const current = this.#profiles.get(userId);
+    if (!current) throw new Error("User profile not found");
+    if (current.preferredLanguageSource !== "default") {
+      return { claimed: false, profile: clone(current) };
+    }
+    const profile: TravellerProfile = {
+      ...current,
+      preferredLanguage: language,
+      preferredLanguageSource: "detected",
+      preferredLanguageSetAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    };
+    this.#profiles.set(userId, profile);
+    return { claimed: true, profile: clone(profile) };
   }
 
   async createLoginToken(
@@ -2054,7 +2092,14 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
       .filter((notification) => notification.status === "pending" && notification.availableAt <= now.toISOString())
       .sort((left, right) => left.availableAt.localeCompare(right.availableAt))
       .slice(0, limit)
-      .map(clone);
+      .map((notification) => {
+        const profile = this.#profiles.get(notification.userId);
+        return clone({
+          ...notification,
+          preferredLanguage: profile?.preferredLanguage ?? "en",
+          preferredLanguageSource: profile?.preferredLanguageSource ?? "default"
+        });
+      });
   }
 
   async markNotificationSent(

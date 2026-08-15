@@ -13,7 +13,7 @@ import type {
   AdminTripSummary,
 } from "@agents/flight-domain/admin";
 
-import { ChevronRightIcon, CloseIcon, ConversationsIcon, CostsIcon, OverviewIcon, SearchIcon, SettingsIcon, TripsIcon } from "../components/icons";
+import { CheckIcon, ChevronRightIcon, CloseIcon, ConversationsIcon, CopyIcon, CostsIcon, OverviewIcon, SearchIcon, SettingsIcon, TripsIcon } from "../components/icons";
 import { feedPostsFromActivity } from "../feed-posts";
 import type { TripActivity } from "../domain";
 import { AdminApi, AdminApiError, loadErrorCopy } from "./api";
@@ -349,6 +349,9 @@ function ConversationPage({ api, id, navigate }: { api: AdminApi; id: string; na
           {detail.messages.length === 0 ? <EmptyState text="No messages in this conversation." /> : <div className="admin-messages">{detail.messages.map((message) => <article key={message.id} className={`admin-message ${message.role}`}><header><strong>{message.role === "user" ? identity : "Captain"}</strong><time dateTime={message.createdAt}>{formatDateTime(message.createdAt)}</time></header><p>{message.content}</p></article>)}</div>}
         </section>
         <aside className="admin-detail-sidebar">
+          <DetailCard title="Conversation">
+            <Fact label="Conversation ID" value={shortId(detail.conversation.conversationId)} title={detail.conversation.conversationId} />
+          </DetailCard>
           <DetailCard title="User">
             <Fact label="Internal ID" value={shortId(detail.conversation.userId)} title={detail.conversation.userId} />
             {detail.conversation.identities.map((channel) => (
@@ -480,7 +483,10 @@ function TripPage({ api, id, navigate }: { api: AdminApi; id: string; navigate: 
               </Fragment>
             ))}
             {detail.trip.conversationId
-              ? <button className="admin-button admin-open-conversation" onClick={() => navigate(`/admin/conversations/${detail.trip.conversationId}`)}>Open conversation</button>
+              ? <>
+                <Fact label="Conversation ID" value={shortId(detail.trip.conversationId)} title={detail.trip.conversationId} />
+                <button className="admin-button admin-open-conversation" onClick={() => navigate(`/admin/conversations/${detail.trip.conversationId}`)}>Open conversation</button>
+              </>
               : <p className="admin-card-empty">No conversation linked.</p>}
           </DetailCard>
         </aside>
@@ -561,7 +567,31 @@ function Metric({ label, value, note }: { label: string; value: string; note: st
 }
 
 function Fact({ label, value, title }: { label: string; value: string; title?: string }) {
-  return <div className="admin-fact"><span>{label}</span><strong title={title}>{value}</strong></div>;
+  const [copied, setCopied] = useState(false);
+  const copyValue = title;
+  return (
+    <div className="admin-fact">
+      <span>{label}</span>
+      <div className="admin-fact-value">
+        <strong title={title}>{value}</strong>
+        {copyValue ? (
+          <button
+            type="button"
+            className="admin-fact-copy"
+            aria-label={copied ? "Copied" : `Copy ${label}`}
+            onClick={() => {
+              void navigator.clipboard.writeText(copyValue).then(() => {
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 1500);
+              });
+            }}
+          >
+            {copied ? <CheckIcon /> : <CopyIcon />}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function ConversationTable({ conversations, navigate, empty }: { conversations: AdminConversationSummary[]; navigate: (path: string) => void; empty: string }) {

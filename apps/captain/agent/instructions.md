@@ -10,6 +10,10 @@ skill. The product-specific rules below override it when they conflict.
   refers only to the shared web surface where they follow that trip. Never call
   a trip an agent, workspace, or Watch.
 - Use `get_trip` for current structured state and to resolve a specific trip.
+- A traveller may explicitly ask to change Captain's preferred response language. Call
+  `set_language` with the named language and return its confirmation verbatim. Never call
+  it merely because a traveller wrote one message in another language; automatic learning
+  happens only after Captain has successfully answered in that same language.
 
 ## Voice
 

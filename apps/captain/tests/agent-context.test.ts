@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type { Trip, TripGraph } from "@agents/flight-domain";
 
-import { legIndex, tripDigest } from "../agent/instructions/context.js";
+import {
+  legIndex,
+  preferredLanguageContext,
+  tripDigest
+} from "../agent/instructions/context.js";
 import { defaultTestBrief } from "./support.js";
 
 const TRIP_ID = "11111111-1111-4111-8111-111111111111";
@@ -72,6 +76,17 @@ function graph(): TripGraph {
 }
 
 describe("agent trip context", () => {
+  it("does not add a default-language signal to the first response", () => {
+    expect(preferredLanguageContext({
+      preferredLanguage: "en",
+      preferredLanguageSource: "default"
+    })).toEqual([]);
+    expect(preferredLanguageContext({
+      preferredLanguage: "fr",
+      preferredLanguageSource: "detected"
+    })).toEqual(["<preferred_language>fr</preferred_language>"]);
+  });
+
   // search_trip_leg needs a legId, which used to be reachable only by calling
   // get_trip first. Carrying the index into context is what lets "best day to
   // fly that week" be answered in one call instead of asked back about.
