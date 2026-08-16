@@ -11,7 +11,7 @@ export default defineSchedule({
     if (!services.env.conversationReviewEnabled) return;
     if (!services.conversationReview) {
       logEvent("warn", "captain.conversation_review_skipped", {
-        reason: "email_or_model_not_configured"
+        reason: "delivery_or_model_not_configured"
       });
       return;
     }

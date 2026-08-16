@@ -147,9 +147,12 @@ review of the previous local calendar day. It lists each conversation with a
 one-line summary, message activity, model calls, tracked AI spend, unresolved
 costs, and an Admin link; recurring insights and up to five evidence-backed
 high/medium attention items follow. Silence and ordinary unfinished chats are
-not treated as failures. Configure `RESEND_API_KEY` and
-`CAPTAIN_CONVERSATION_REVIEW_FROM`; the recipient list defaults to the Moonlight
-operators in `.env.example`. For a controlled backfill, run
+not treated as failures. When `FEEDBACK_BRIDGE_URL` and
+`FEEDBACK_BRIDGE_SECRET` are configured, Captain sends the report through
+Pilot's signed, owner-only email bridge; Pilot applies the delivery idempotency
+key and sends to its configured `OWNER_EMAIL`. Direct Resend delivery remains an
+optional fallback using `RESEND_API_KEY`, `CAPTAIN_CONVERSATION_REVIEW_FROM`,
+and `CAPTAIN_CONVERSATION_REVIEW_RECIPIENTS`. For a controlled backfill, run
 `pnpm conversation-review:send -- --date=YYYY-MM-DD` from `apps/captain`.
 
 The retained legacy flight worker has its own ignored `.env`. It requires:

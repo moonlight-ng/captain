@@ -7,7 +7,7 @@ if (!services.env.conversationReviewEnabled) {
 if (!services.conversationReview) {
   throw new Error(
     "Conversation review requires DATABASE_URL, AI_GATEWAY_API_KEY, "
-    + "RESEND_API_KEY, CAPTAIN_CONVERSATION_REVIEW_FROM, and at least one recipient"
+    + "and either the Pilot bridge or configured Resend delivery"
   );
 }
 

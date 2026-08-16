@@ -14,7 +14,11 @@ import { TelegramLanguageService } from "@agents/telegram-core";
 import { CaptainWebAuth } from "../auth/web-session.js";
 import { CaptainAdminAuth } from "../admin/auth.js";
 import { CaptainUsageRecorder } from "../admin/usage.js";
-import { ResendEmailSender } from "../email/resend.js";
+import { PilotBridgeEmailSender } from "../email/pilot-bridge.js";
+import {
+  ResendEmailSender,
+  type EmailSender
+} from "../email/resend.js";
 import {
   createConversationMemoryWriter,
   type ConversationMemoryWriter
@@ -100,11 +104,26 @@ export async function createCaptainServices(): Promise<CaptainServices> {
       usage: input.usage
     })
   });
+  let conversationReviewEmail: EmailSender | null = null;
+  let conversationReviewDeliveryRecipients: string[] = [];
+  if (env.feedbackBridgeUrl && env.feedbackBridgeSecret) {
+    conversationReviewEmail = new PilotBridgeEmailSender({
+      baseUrl: env.feedbackBridgeUrl,
+      secret: env.feedbackBridgeSecret
+    });
+    conversationReviewDeliveryRecipients = ["pilot-owner"];
+  } else if (env.resendApiKey && env.conversationReviewFrom) {
+    conversationReviewEmail = new ResendEmailSender({
+      apiKey: env.resendApiKey,
+      from: env.conversationReviewFrom,
+      recipients: env.conversationReviewRecipients
+    });
+    conversationReviewDeliveryRecipients = env.conversationReviewRecipients;
+  }
   const conversationReview = env.conversationReviewEnabled
-    && env.resendApiKey
-    && env.conversationReviewFrom
+    && conversationReviewEmail
     && env.aiGatewayApiKey
-    && env.conversationReviewRecipients.length > 0
+    && conversationReviewDeliveryRecipients.length > 0
     ? new ConversationDailyReview({
         store: conversationReviewStore,
         narrate: createConversationReviewNarrator({
@@ -112,14 +131,10 @@ export async function createCaptainServices(): Promise<CaptainServices> {
           model: env.conversationReviewModel,
           recordUsage: (input) => usage.recordGatewayGeneration(input)
         }),
-        email: new ResendEmailSender({
-          apiKey: env.resendApiKey,
-          from: env.conversationReviewFrom,
-          recipients: env.conversationReviewRecipients
-        }),
+        email: conversationReviewEmail,
         config: {
           timeZone: env.conversationReviewTimeZone,
-          recipients: env.conversationReviewRecipients,
+          recipients: conversationReviewDeliveryRecipients,
           adminBaseUrl: env.publicUrl
         }
       })
