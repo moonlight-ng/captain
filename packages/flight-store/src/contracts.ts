@@ -127,8 +127,17 @@ export type ClaimedSearchRun = {
   id: string;
   searchSpecId: string;
   request: SearchSpecRequest;
+  /** For rolling fare digests, do not ask the provider for elapsed departure dates. */
+  notBeforeDate: string | null;
   attempt: number;
   leaseExpiresAt: string;
+};
+
+export type FareDigestSchedule = {
+  hourLocal: number;
+  timeZone: string;
+  monitorThrough: string;
+  intro: string;
 };
 
 export type CompletedProviderOffer = Omit<OfferSnapshot, "id" | "searchRunId" | "searchSpecId">;
@@ -210,6 +219,7 @@ export type CaptainNotification = {
     | "price_rise"
     | "tracking_activation"
     | "tracking_summary"
+    | "fare_digest"
     | "plan_changed"
     | "tracking_paused"
     | "tracking_resumed"
@@ -394,6 +404,14 @@ export interface CaptainPlatformStore {
     tripId: string,
     expectedVersion: number,
     specs: SearchSpec[],
+    now: Date
+  ): Promise<{ trip: Trip; watch: Watch }>;
+  startFareDigest(
+    userId: string,
+    tripId: string,
+    expectedVersion: number,
+    specs: SearchSpec[],
+    schedule: FareDigestSchedule,
     now: Date
   ): Promise<{ trip: Trip; watch: Watch }>;
   updateTripBrief(userId: string, tripId: string, input: UpdateTripBrief, specs: SearchSpec[], now: Date): Promise<Trip>;

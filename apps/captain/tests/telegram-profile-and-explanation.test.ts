@@ -164,6 +164,19 @@ describe("Telegram profile onboarding", () => {
     });
   });
 
+  it("lifts fare-digest Browse trip links into the requested Telegram button", () => {
+    const url = "https://captain.example/trip/2d50a766-f60d-464e-8643-974ff50be8fe#access=v1.token";
+    expect(renderTelegramAssistantMessage(
+      `Prices today are looking lower.\n\nBrowse trip: ${url}`,
+      null
+    )).toEqual({
+      text: "Prices today are looking lower.",
+      replyMarkup: {
+        inline_keyboard: [[{ text: "Browse trip", url }]]
+      }
+    });
+  });
+
   it("uses Confirm and Review for a draft creation receipt", () => {
     const tripId = "2d50a766-f60d-464e-8643-974ff50be8fe";
     const dashboardUrl = `https://captain.example/trip/${tripId}#access=v1.token`;

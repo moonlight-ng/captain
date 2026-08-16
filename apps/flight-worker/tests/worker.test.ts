@@ -813,7 +813,177 @@ describe("flight worker orchestration", () => {
     expect(vi.mocked(fetch).mock.calls).toHaveLength(0);
     vi.unstubAllGlobals();
   });
+
+  it("sends Tomi a daily LOS to SYD market digest without selecting a flight", async () => {
+    const now = new Date("2026-08-16T15:25:00.000Z");
+    vi.setSystemTime(now);
+    const store = new MemoryCaptainPlatformStore();
+    const user = await store.ensureTelegramUser({
+      telegramUserId: 1001,
+      telegramChatId: 1001,
+      username: null,
+      firstName: "Tomi",
+      lastName: "Abe"
+    }, now);
+    await store.updateUserTimezone(user.id, "Africa/Lagos", now);
+    await store.updateProfile(user.id, { quietHoursEnabled: false }, now);
+    const input: CreateTripInput = {
+      title: "LOS to SYD daily fares",
+      brief: {
+        originAirports: ["LOS"],
+        destinationAirports: ["SYD"],
+        tripType: "one_way",
+        departureWindow: { start: "2026-08-16", end: "2026-09-13" },
+        stayNights: null,
+        legs: [],
+        travellers: { adults: 1, childrenAges: [], infants: 0 },
+        cabin: "economy",
+        maxStops: 2,
+        currency: "USD",
+        maximumPrice: null,
+        preferredAirlines: [],
+        excludedAirlines: [],
+        context: "Daily cheapest-fare digest; Doha is a connection, not a destination."
+      }
+    };
+    const specs = buildSearchSpecs(input.brief);
+    const created = await store.createTrip(user.id, input, specs, now);
+    await store.startFareDigest(user.id, created.trip.id, created.trip.version, specs, {
+      hourLocal: 9,
+      timeZone: "Africa/Lagos",
+      monitorThrough: "2026-09-13",
+      intro: "Fixed — I removed the extra HUH destination and corrected this to one-adult fares from LOS to SYD. Doha will only appear when it’s a connection within a flight."
+    }, now);
+
+    const search = vi.fn(async (request: Parameters<FlightSearchProvider["search"]>[0]) => {
+      const firstDate = request.slices[0]!.departureStart;
+      return {
+        provider: "official_duffel" as const,
+        requestId: `request-${firstDate}`,
+        discoveryResponseId: `request-${firstDate}`,
+        verificationResponseId: `request-${firstDate}`,
+        model: "duffel",
+        promptVersion: "test",
+        rejectionCounts: {},
+        offers: [
+          qatarOffer(firstDate, "1420.00"),
+          qatarOffer("2026-09-13", "1580.00")
+        ]
+      };
+    });
+    const sent: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(
+        JSON.stringify({ ok: true, result: { message_id: sent.length } }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }));
+    const worker = new FlightWorker({
+      store,
+      provider: { provider: "official_duffel", search } as FlightSearchProvider,
+      telegramBotToken: "test",
+      captainPublicUrl: "https://captain.example.com",
+      trackingEnabled: true,
+      workerId: "worker-1",
+      leaseMs: 240_000,
+      freshnessMs: 0,
+      claimLimit: 1
+    });
+
+    await expect(worker.tick(now)).resolves.toEqual({
+      scheduled: 0,
+      processed: 1,
+      notified: 1
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.text).toBe(
+      "Fixed — I removed the extra HUH destination and corrected this to one-adult fares from LOS to SYD. "
+      + "Doha will only appear when it’s a connection within a flight.\n\n"
+      + "Prices today are looking like $1,420.00–$1,580.00 one-way for departures through 13 Sept. "
+      + "I checked 2 of 29 departure dates in this update.\n\n"
+      + "The cheapest verified option I found is $1,420.00, departing 16 Aug with Qatar Airways "
+      + "via Doha (DOH) — 1 stop, 22h 0m.\n\n"
+      + "I’ll share your next update tomorrow."
+    );
+    expect(sent[0]!.reply_markup).toEqual({
+      inline_keyboard: [[{
+        text: "Browse trip",
+        url: expect.stringContaining(`/trip/${created.trip.id}`)
+      }]]
+    });
+    expect(await store.listTripFlightSelections(user.id, created.trip.id)).toEqual([]);
+
+    const tomorrow = new Date("2026-08-17T08:00:00.000Z");
+    vi.setSystemTime(tomorrow);
+    await expect(worker.tick(tomorrow)).resolves.toEqual({
+      scheduled: 1,
+      processed: 1,
+      notified: 1
+    });
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(search.mock.calls[1]?.[0].slices[0]?.departureStart).toBe("2026-08-17");
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.text).not.toContain("Fixed —");
+    expect(sent[1]!.text).toContain("Prices today are looking like");
+    expect(sent[1]!.text).toContain("I’ll share your next update tomorrow.");
+    await expect(store.getWatch(user.id, created.trip.id)).resolves.toMatchObject({
+      purpose: "fare_digest",
+      checksCompleted: 2,
+      nextCheckAt: "2026-08-18T08:00:00.000Z"
+    });
+    vi.unstubAllGlobals();
+  });
 });
+
+function qatarOffer(date: string, priceAmount: string) {
+  return {
+    itineraryKey: `qr-${date}-${priceAmount}`,
+    providerOfferId: `offer-${date}-${priceAmount}`,
+    priceAmount,
+    currency: "USD",
+    fareBasis: "one_adult_total" as const,
+    cabin: "economy" as const,
+    slices: [{
+      origin: "LOS",
+      destination: "SYD",
+      departureDate: date,
+      segments: [
+        {
+          marketingAirlineCode: "QR",
+          marketingAirline: "Qatar Airways",
+          flightNumber: "QR1406",
+          origin: "LOS",
+          destination: "DOH",
+          departure: `${date}T10:00:00+01:00`,
+          arrival: `${date}T18:00:00+03:00`
+        },
+        {
+          marketingAirlineCode: "QR",
+          marketingAirline: "Qatar Airways",
+          flightNumber: "QR908",
+          origin: "DOH",
+          destination: "SYD",
+          departure: `${date}T20:00:00+03:00`,
+          arrival: `${nextIsoDate(date)}T17:00:00+10:00`
+        }
+      ]
+    }],
+    primaryAirlineCode: "QR",
+    participatingAirlineCodes: ["QR"],
+    evidence: [{
+      url: `https://qatarairways.com/fare/${date}`,
+      title: "Qatar Airways fare",
+      domain: "qatarairways.com"
+    }]
+  };
+}
+
+function nextIsoDate(date: string): string {
+  return new Date(Date.parse(`${date}T00:00:00.000Z`) + 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+}
 
 function offerSnapshot(
   itineraryKey: string,

@@ -93,6 +93,93 @@ export function trackingRunEndsAt(startedAt: Date, departureStart: string): Date
   ));
 }
 
+export function localIsoDate(now: Date, timeZone: string): string {
+  const parts = zonedParts(now, timeZone);
+  return `${parts.year}-${twoDigits(parts.month)}-${twoDigits(parts.day)}`;
+}
+
+/** The next occurrence is always tomorrow: the first fare digest is queued immediately. */
+export function nextFareDigestCheckAt(now: Date, timeZone: string, hourLocal: number): Date {
+  const current = zonedParts(now, timeZone);
+  const tomorrow = new Date(Date.UTC(current.year, current.month - 1, current.day + 1));
+  return zonedDateTimeToUtc({
+    year: tomorrow.getUTCFullYear(),
+    month: tomorrow.getUTCMonth() + 1,
+    day: tomorrow.getUTCDate(),
+    hour: hourLocal
+  }, timeZone);
+}
+
+/** Exclusive boundary immediately after the final local monitoring day. */
+export function fareDigestRunEndsAt(monitorThrough: string, timeZone: string): Date {
+  const parsed = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/u.exec(monitorThrough);
+  if (!parsed) throw new RangeError("Fare digest monitoring end must be an ISO date");
+  const following = new Date(Date.UTC(
+    Number(parsed[1]),
+    Number(parsed[2]) - 1,
+    Number(parsed[3]) + 1
+  ));
+  return zonedDateTimeToUtc({
+    year: following.getUTCFullYear(),
+    month: following.getUTCMonth() + 1,
+    day: following.getUTCDate(),
+    hour: 0
+  }, timeZone);
+}
+
+function zonedDateTimeToUtc(
+  target: { year: number; month: number; day: number; hour: number },
+  timeZone: string
+): Date {
+  const targetAsUtc = Date.UTC(target.year, target.month - 1, target.day, target.hour);
+  let candidate = targetAsUtc;
+  // Two passes handle zones whose offset differs between the initial UTC guess
+  // and the requested local wall time (including a daylight-saving boundary).
+  for (let pass = 0; pass < 2; pass += 1) {
+    const actual = zonedParts(new Date(candidate), timeZone);
+    const actualAsUtc = Date.UTC(
+      actual.year,
+      actual.month - 1,
+      actual.day,
+      actual.hour,
+      actual.minute
+    );
+    candidate += targetAsUtc - actualAsUtc;
+  }
+  return new Date(candidate);
+}
+
+function zonedParts(now: Date, timeZone: string): {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+} {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(now);
+  const number = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value ?? 0);
+  return {
+    year: number("year"),
+    month: number("month"),
+    day: number("day"),
+    hour: number("hour"),
+    minute: number("minute")
+  };
+}
+
+function twoDigits(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
 function compareOffers(left: CompletedProviderOffer, right: CompletedProviderOffer): number {
   return retentionScore(left) - retentionScore(right)
     || left.price - right.price

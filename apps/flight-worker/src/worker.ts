@@ -122,7 +122,9 @@ export class FlightWorker {
     const startedAt = Date.now();
     let searchCompleted = false;
     try {
-      const result = await this.#provider.search(run.request);
+      const result = await this.#provider.search(
+        rollingSearchRequest(run.request, run.notBeforeDate)
+      );
       const completedAt = new Date();
       const offers: CompletedProviderOffer[] = result.offers.map((offer) => {
         const metrics = deriveOfferMetrics(offer.slices);
@@ -247,12 +249,13 @@ export class FlightWorker {
         && notification.preferredLanguage
         && !notification.preferredLanguage.toLowerCase().startsWith("en");
       const language = notification.preferredLanguage ?? "en";
+      const actionLabel = notification.kind === "fare_digest" ? "Browse trip" : "Open trip";
       const [text, openTripLabel] = shouldLocalize && this.#language
         ? await Promise.all([
             this.#language.localize(notificationText(notification), language),
-            this.#language.localize("Open trip", language)
+            this.#language.localize(actionLabel, language)
           ])
-        : [notificationText(notification), "Open trip"];
+        : [notificationText(notification), actionLabel];
       const replyMarkup = this.#notificationReplyMarkup(notification, openTripLabel);
       const response = await fetch(`https://api.telegram.org/bot${this.#telegramBotToken}/sendMessage`, {
         method: "POST",
@@ -384,6 +387,9 @@ function notificationDraftText(notification: CaptainNotification): string {
     return `Your price watch for ${route} is complete.${checks}\n${summary}\n`
       + "These prices are now stale. Open the trip and choose Track.";
   }
+  if (notification.kind === "fare_digest") {
+    return fareDigestText(notification, route);
+  }
   if (notification.kind === "price_rise") {
     const current = offerSnapshot(notification.payload.current);
     const increase = numericField(notification.payload, "increase");
@@ -401,6 +407,86 @@ function notificationDraftText(notification: CaptainNotification): string {
     return firstUpdateText(notification, route);
   }
   return `I found a better option for ${route}: ${improvementText(snapshot)}.\n${details}.`;
+}
+
+function fareDigestText(notification: CaptainNotification, route: string): string {
+  const range = recordField(notification.payload, "range");
+  const dateSummary = recordField(notification.payload, "dateSummary");
+  const snapshot = recommendationSnapshot(notification.payload.snapshot);
+  const current = snapshot?.current ?? offerSnapshot(notification.payload.current);
+  const currency = stringField(dateSummary ?? range ?? {}, "currency")
+    || current?.currency
+    || "USD";
+  const low = numericField(dateSummary ?? range ?? {}, "cheapest")
+    || numericField(range ?? {}, "low");
+  const high = numericField(dateSummary ?? range ?? {}, "highestCombinationLow")
+    || numericField(range ?? {}, "high")
+    || low;
+  const windows = arrayField(dateSummary ?? {}, "searchWindows").filter(recordValue);
+  const through = stringField(windows[0] ?? {}, "end");
+  const combinations = arrayField(dateSummary ?? {}, "combinations").filter(recordValue);
+  const expectedDates = numericField(dateSummary ?? {}, "searchedCombinationCount");
+  const intro = notification.payload.firstDigest === true
+    ? stringField(notification.payload, "intro")
+    : "";
+  const stale = notification.payload.freshResults === false
+    ? "Today’s check didn’t return a new verified fare, so these are the latest verified prices.\n\n"
+    : "";
+  const priceRange = high > low
+    ? `${formatAmount(low, currency)}–${formatAmount(high, currency)}`
+    : `about ${formatAmount(low, currency)}`;
+  const market = low > 0
+    ? `Prices today are looking like ${priceRange} one-way`
+      + `${through ? ` for departures through ${formatDate(through)}` : ""}.`
+    : `I haven’t found a verified fare for ${route} yet.`;
+  const coverage = expectedDates > combinations.length && combinations.length > 0
+    ? ` I checked ${combinations.length} of ${expectedDates} departure dates in this update.`
+    : "";
+  const cheapest = current && low > 0
+    ? `\n\nThe cheapest verified option I found is ${formatAmount(current.price, current.currency)}, `
+      + `${fareDigestOfferDetails(current)}.`
+    : "";
+  return [intro, `${stale}${market}${coverage}${cheapest}`, "I’ll share your next update tomorrow."]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function fareDigestOfferDetails(offer: RecommendationSnapshot["current"]): string {
+  const segments = arrayField(offer.snapshot, "segments").filter(recordValue);
+  const departure = offerDepartureDate(offer);
+  const stops = numericSnapshot(offer.snapshot, "stops");
+  const duration = numericSnapshot(offer.snapshot, "durationSeconds");
+  const connections = segments.slice(0, -1)
+    .map((segment) => stringField(segment, "destination"))
+    .filter(Boolean);
+  const via = connections.length > 0
+    ? ` via ${connections.map(connectionLabel).join(" and ")}`
+    : " nonstop";
+  const stopText = stops === 0 ? "nonstop" : `${stops} stop${stops === 1 ? "" : "s"}`;
+  return `departing ${departure ? formatDate(departure) : "on the best available date"}`
+    + ` with ${airlineName(offer)}${via} — ${stopText}`
+    + `${duration > 0 ? `, ${formatDuration(duration)}` : ""}`;
+}
+
+function connectionLabel(code: string): string {
+  if (code === "DOH") return "Doha (DOH)";
+  return code;
+}
+
+export function rollingSearchRequest(
+  request: ClaimedSearchRun["request"],
+  notBeforeDate: string | null
+): ClaimedSearchRun["request"] {
+  if (!notBeforeDate) return request;
+  return {
+    ...request,
+    slices: request.slices.map((slice) => ({
+      ...slice,
+      departureStart: slice.departureStart < notBeforeDate
+        ? (slice.departureEnd < notBeforeDate ? slice.departureEnd : notBeforeDate)
+        : slice.departureStart
+    }))
+  };
 }
 
 /**

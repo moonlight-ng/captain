@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type { CompletedProviderOffer } from "../src/contracts.js";
 import {
+  fareDigestRunEndsAt,
+  localIsoDate,
   MAX_RETAINED_OFFERS_PER_SEARCH,
   MAX_TRACKING_RUN_MS,
+  nextFareDigestCheckAt,
   retainSearchOffers,
   TRACKING_CHECK_INTERVAL_MS,
   trackingRunEndsAt
@@ -59,6 +62,15 @@ describe("efficient watch policy", () => {
 
   it("checks once a day", () => {
     expect(TRACKING_CHECK_INTERVAL_MS).toBe(24 * 3_600_000);
+  });
+
+  it("anchors a fare digest to the traveller's next local morning", () => {
+    const now = new Date("2026-08-16T15:25:00.000Z");
+    expect(localIsoDate(now, "Africa/Lagos")).toBe("2026-08-16");
+    expect(nextFareDigestCheckAt(now, "Africa/Lagos", 9).toISOString())
+      .toBe("2026-08-17T08:00:00.000Z");
+    expect(fareDigestRunEndsAt("2026-09-13", "Africa/Lagos").toISOString())
+      .toBe("2026-09-13T23:00:00.000Z");
   });
 
   it("tracks a distant departure right up to the day of the flight", () => {

@@ -141,6 +141,11 @@ export type Trip = {
 export type Watch = {
   id: string;
   tripId: string;
+  /** A fare digest follows a market question; price changes follow a chosen trip. */
+  purpose: "price_changes" | "fare_digest";
+  digestHourLocal: number | null;
+  digestTimeZone: string | null;
+  digestIntro: string | null;
   status: "active" | "scheduled" | "paused" | "completed";
   runStartedAt: string;
   runEndsAt: string;

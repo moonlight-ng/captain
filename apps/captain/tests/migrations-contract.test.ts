@@ -19,6 +19,20 @@ describe("Checkpoint notification kinds migration", () => {
   });
 });
 
+describe("Fare digest jobs migration", () => {
+  const migration = readFileSync(
+    resolve(process.cwd(), "database/migrations/029_fare_digest_jobs.sql"),
+    "utf8"
+  );
+
+  it("adds an opt-in watch purpose and its daily notification kind", () => {
+    expect(migration).toContain("purpose text not null default 'price_changes'");
+    expect(migration).toContain("purpose in ('price_changes', 'fare_digest')");
+    expect(migration).toContain("'fare_digest'");
+    expect(migration).toContain("digest_hour_local between 0 and 23");
+  });
+});
+
 // from conversation-summary-migration.test.ts
 describe("Conversation summary migration", () => {
   const migration = readFileSync(

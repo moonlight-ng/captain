@@ -53,6 +53,7 @@ import type {
   ClaimedSearchRun,
   CompletedProviderOffer,
   ConversationContext,
+  FareDigestSchedule,
   TravellerFact,
   TravellerFactInput,
   TravellerFactKind,
@@ -86,6 +87,9 @@ import {
 import {
   CURRENT_OFFER_RETENTION_MS,
   DISCOVERY_SEARCH_SPEC_LIMIT,
+  fareDigestRunEndsAt,
+  localIsoDate,
+  nextFareDigestCheckAt,
   PRICE_HISTORY_RETENTION_MS,
   retainSearchOffers,
   TRACKING_SEARCH_SPEC_LIMIT,
@@ -1159,6 +1163,8 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       const watchRows = existingWatch
         ? await tx<WatchRow[]>`
             update captain.watches set
+              purpose = 'price_changes', digest_hour_local = null,
+              digest_time_zone = null, digest_intro = null,
               status = 'active', run_started_at = ${now}, run_ends_at = ${runEndsAt},
               completed_at = null, checks_completed = 0, next_check_at = ${now},
               last_check_at = null, last_manual_refresh_at = null,
@@ -1212,6 +1218,103 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         immediate: true,
         now
       });
+      await signalFlightWorker(tx);
+      return { trip: toTrip(updated[0]!), watch: toWatch(watchRows[0]!) };
+    });
+  }
+
+  async startFareDigest(
+    userId: string,
+    tripId: string,
+    expectedVersion: number,
+    specs: SearchSpec[],
+    schedule: FareDigestSchedule,
+    now: Date
+  ): Promise<{ trip: Trip; watch: Watch }> {
+    if (specs.length === 0) throw new Error("A fare digest needs a flight search specification");
+    if (!Number.isInteger(schedule.hourLocal) || schedule.hourLocal < 0 || schedule.hourLocal > 23) {
+      throw new RangeError("Fare digest hour must be between 0 and 23");
+    }
+    const runEndsAt = fareDigestRunEndsAt(schedule.monitorThrough, schedule.timeZone);
+    if (runEndsAt <= now) throw new RangeError("Fare digest monitoring end must be in the future");
+    return this.#sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${userId}))`;
+      const trips = await tx<TripRow[]>`
+        select * from captain.trips
+        where id = ${tripId} and user_id = ${userId}
+        for update
+      `;
+      const current = trips[0];
+      if (!current) throw new TripNotFoundError();
+      const existingWatches = await tx<WatchRow[]>`
+        select * from captain.watches where trip_id = ${tripId} for update
+      `;
+      const existingWatch = existingWatches[0];
+      if (
+        existingWatch?.purpose === "fare_digest"
+        && ["active", "scheduled"].includes(existingWatch.status)
+      ) return { trip: toTrip(current), watch: toWatch(existingWatch) };
+      if (current.version !== expectedVersion) throw new TripVersionConflictError(current.version);
+      if (current.status !== "draft") throw new Error("Only a reviewed draft can start a fare digest");
+
+      const watchId = existingWatch?.id ?? randomUUID();
+      const nextCheckAt = nextFareDigestCheckAt(now, schedule.timeZone, schedule.hourLocal);
+      const watchRows = existingWatch
+        ? await tx<WatchRow[]>`
+            update captain.watches set
+              purpose = 'fare_digest', digest_hour_local = ${schedule.hourLocal},
+              digest_time_zone = ${schedule.timeZone}, digest_intro = ${schedule.intro},
+              status = 'active', run_started_at = ${now}, run_ends_at = ${runEndsAt},
+              completed_at = null, checks_completed = 0, next_check_at = ${nextCheckAt},
+              last_check_at = null, last_manual_refresh_at = null,
+              tracking_starts_at = null, baseline_completed_at = null,
+              activated_at = ${now}, last_user_activity_at = ${now},
+              price_rise_itinerary_key = null, price_rise_armed = true,
+              delayed_at = null, delay_reason = null, updated_at = ${now}
+            where id = ${watchId}
+            returning *
+          `
+        : await tx<WatchRow[]>`
+            insert into captain.watches (
+              id, trip_id, purpose, digest_hour_local, digest_time_zone, digest_intro,
+              status, run_started_at, run_ends_at, checks_completed, next_check_at,
+              tracking_starts_at, activated_at, last_user_activity_at, created_at, updated_at
+            ) values (
+              ${watchId}, ${tripId}, 'fare_digest', ${schedule.hourLocal},
+              ${schedule.timeZone}, ${schedule.intro}, 'active', ${now}, ${runEndsAt},
+              0, ${nextCheckAt}, null, ${now}, ${now}, ${now}, ${now}
+            )
+            returning *
+          `;
+      await syncSpecs(tx, watchId, specs, now);
+      for (const spec of specs) {
+        await tx`
+          insert into captain.search_runs (
+            id, search_spec_id, status, attempt, scheduled_at, created_at
+          )
+          select ${randomUUID()}, ${spec.id}, 'queued', 0, ${now}, ${now}
+          where not exists (
+            select 1 from captain.search_runs
+            where search_spec_id = ${spec.id} and status in ('queued', 'running')
+          )
+        `;
+      }
+      const updated = await tx<TripRow[]>`
+        update captain.trips set status = 'tracking', version = version + 1, updated_at = ${now}
+        where id = ${tripId}
+        returning *
+      `;
+      await tx`
+        insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
+        values (
+          ${randomUUID()}, ${tripId}, ${userId}, 'fare_digest_started',
+          ${tx.json(json({
+            hourLocal: schedule.hourLocal,
+            timeZone: schedule.timeZone,
+            monitorThrough: schedule.monitorThrough
+          }))}, ${now}
+        )
+      `;
       await signalFlightWorker(tx);
       return { trip: toTrip(updated[0]!), watch: toWatch(watchRows[0]!) };
     });
@@ -1729,7 +1832,9 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         'agent'::text as selected_by, recommendation.observed_at as selected_at
       from captain.trip_recommendations recommendation
       join captain.trips trip on trip.id = recommendation.trip_id
+      join captain.watches watch on watch.trip_id = trip.id
       where recommendation.trip_id = ${tripId} and trip.user_id = ${userId}
+        and watch.purpose <> 'fare_digest'
       union all
       select selection.trip_id, selection.itinerary_key,
         selection.selected_by, selection.selected_at
@@ -1872,6 +1977,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       user_id: string;
       title: string;
       watch_status: Watch["status"];
+      purpose: Watch["purpose"];
       tracking_starts_at: Date | null;
       run_started_at: Date;
       run_ends_at: Date;
@@ -1882,7 +1988,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       recommendation_summary: string | null;
     }>>`
       select watch.id as watch_id, trip.id as trip_id, trip.user_id, trip.title,
-        watch.status as watch_status, watch.tracking_starts_at,
+        watch.status as watch_status, watch.purpose, watch.tracking_starts_at,
         watch.run_started_at, watch.run_ends_at,
         watch.checks_completed,
         profile.notification_mode, profile.ranking_mode, trip.brief,
@@ -1947,7 +2053,8 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           await tx`
             insert into captain.trip_events (id, trip_id, user_id, event_type, payload, created_at)
             values (
-              ${randomUUID()}, ${row.trip_id}, ${row.user_id}, 'tracking_completed',
+              ${randomUUID()}, ${row.trip_id}, ${row.user_id},
+              ${row.purpose === "fare_digest" ? "fare_digest_completed" : "tracking_completed"},
               ${tx.json(json({
                 checksCompleted: row.checks_completed,
                 recommendationSummary: row.recommendation_summary,
@@ -1958,7 +2065,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           return true;
         });
         if (!didComplete) continue;
-        if (row.notification_mode !== "off") {
+        if (row.purpose !== "fare_digest" && row.notification_mode !== "off") {
           await enqueueNotification(this.#sql, {
             userId: row.user_id,
             tripId: row.trip_id,
@@ -2035,8 +2142,12 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         id: string;
         trip_id: string;
         run_ends_at: Date;
+        purpose: Watch["purpose"];
+        digest_hour_local: number | null;
+        digest_time_zone: string | null;
       }>>`
-        select watch.id, watch.trip_id, watch.run_ends_at
+        select watch.id, watch.trip_id, watch.run_ends_at, watch.purpose,
+          watch.digest_hour_local, watch.digest_time_zone
         from captain.watches watch
         join captain.trips trip on trip.id = watch.trip_id
         where watch.status = 'active'
@@ -2093,7 +2204,14 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         await tx`
           update captain.watches set next_check_at = ${new Date(Math.min(
             watch.run_ends_at.getTime(),
-            now.getTime() + TRACKING_CHECK_INTERVAL_MS
+            watch.purpose === "fare_digest" && watch.digest_time_zone
+              && watch.digest_hour_local !== null
+              ? nextFareDigestCheckAt(
+                  now,
+                  watch.digest_time_zone,
+                  watch.digest_hour_local
+                ).getTime()
+              : now.getTime() + TRACKING_CHECK_INTERVAL_MS
           ))}, updated_at = ${now}
           where id = ${watch.id}
         `;
@@ -2105,6 +2223,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
   async claimSearchRuns(workerId: string, now: Date, leaseMs: number, limit: number): Promise<ClaimedSearchRun[]> {
     type ClaimRow = {
       id: string; search_spec_id: string; request: ClaimedSearchRun["request"];
+      not_before_date: string | null;
       attempt: number; lease_expires_at: Date;
     };
     const rows: ClaimRow[] = await this.#sql.begin(async (tx): Promise<ClaimRow[]> => {
@@ -2135,12 +2254,21 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           returning run.*
         )
         select claimed.id, claimed.search_spec_id, spec.request,
+          (
+            select min((${now} at time zone watch.digest_time_zone)::date)::text
+            from captain.watch_search_specs link
+            join captain.watches watch on watch.id = link.watch_id
+            where link.search_spec_id = claimed.search_spec_id
+              and watch.purpose = 'fare_digest'
+              and watch.digest_time_zone is not null
+          ) as not_before_date,
           claimed.attempt, claimed.lease_expires_at
         from claimed join captain.search_specs spec on spec.id = claimed.search_spec_id
       `;
     });
     return rows.map((row) => ({
       id: row.id, searchSpecId: row.search_spec_id, request: row.request,
+      notBeforeDate: row.not_before_date,
       attempt: row.attempt, leaseExpiresAt: iso(row.lease_expires_at)
     }));
   }
@@ -2415,7 +2543,10 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       const offers = await this.listTripOffers(trip.userId, trip.id, now);
       const profile = await this.ensureProfile(trip.userId, now);
       const watch = await this.getWatch(trip.userId, trip.id);
-      const ranked = rankOffers(trip.brief, profile, offers);
+      const rankingProfile = watch?.purpose === "fare_digest"
+        ? { ...profile, rankingMode: "cheapest" as const }
+        : profile;
+      const ranked = rankOffers(trip.brief, rankingProfile, offers);
       const best = ranked[0];
       if (!best) {
         await this.#sql`delete from captain.trip_recommendations where trip_id = ${trip.id}`;
@@ -2426,7 +2557,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       `;
       const previous = previousRows[0] ? toRecommendation(previousRows[0]) : null;
       const comparison = previous
-        ? rankOffers(trip.brief, profile, [...offers, previous.snapshot.current])
+        ? rankOffers(trip.brief, rankingProfile, [...offers, previous.snapshot.current])
         : [];
       const previousRanked = previous
         ? comparison.find((candidate) => candidate.offer.id === previous.snapshot.current.id) ?? {
@@ -2435,11 +2566,11 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           }
         : null;
       const comparableBest = comparison.find((candidate) => candidate.offer.id === best.offer.id) ?? best;
-      const qualifies = meetsAlertThreshold(profile.rankingMode, comparableBest, previousRanked);
+      const qualifies = meetsAlertThreshold(rankingProfile.rankingMode, comparableBest, previousRanked);
       const reasonCodes = previous && !qualifies
         ? []
         : recommendationReasonCodes(
-            profile.rankingMode,
+            rankingProfile.rankingMode,
             best.offer,
             previous?.snapshot.current ?? null
           );
@@ -2448,11 +2579,11 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         itineraryKey: best.offer.itineraryKey,
         score: best.score, price: best.offer.price, currency: best.offer.currency,
         summary: recommendationSummary(best.offer), observedAt: best.offer.observedAt,
-        rankingMode: profile.rankingMode,
+        rankingMode: rankingProfile.rankingMode,
         snapshot: {
           current: best.offer,
           previous: previous?.snapshot.current ?? null,
-          rankingMode: profile.rankingMode,
+          rankingMode: rankingProfile.rankingMode,
           reasonCodes,
           createdAt: now.toISOString()
         }
@@ -2486,7 +2617,24 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
             ranking_mode = excluded.ranking_mode, snapshot = excluded.snapshot,
             updated_at = excluded.updated_at
         `;
-        if (kind) {
+        if (watch?.purpose === "fare_digest" && watch.digestTimeZone) {
+          queued = await enqueueNotification(tx, {
+            userId: trip.userId,
+            tripId: trip.id,
+            kind: "fare_digest",
+            dedupKey: `${trip.id}:fare_digest:${localIsoDate(now, watch.digestTimeZone)}`,
+            payload: {
+              ...notificationGoalPayload(trip, profile),
+              ...recommendation,
+              range: offerRangeSummary(offers),
+              dateSummary: offerDateSummary(offers, trip),
+              firstDigest: watch.checksCompleted <= 1,
+              intro: watch.digestIntro,
+              freshResults: watch.delayedAt !== now.toISOString()
+            },
+            now
+          });
+        } else if (kind) {
           const recentAlerts = await tx<Array<{ count: string }>>`
             select count(*)::text as count from captain.notifications
             where user_id = ${trip.userId}
@@ -2542,6 +2690,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       if (notified) changed += 1;
       if (
         watch
+        && watch.purpose !== "fare_digest"
         && await this.#evaluatePriceRise(trip, watch, profile, offers, best.offer, now)
       ) {
         changed += 1;
@@ -2806,9 +2955,14 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
       user_id: string;
       title: string;
       brief: TripBrief;
+      purpose: Watch["purpose"];
+      digest_time_zone: string | null;
+      digest_intro: string | null;
+      checks_completed: number;
     }>>`
       select distinct watch.id as watch_id, trip.id as trip_id,
-        trip.user_id, trip.title, trip.brief
+        trip.user_id, trip.title, trip.brief, watch.purpose,
+        watch.digest_time_zone, watch.digest_intro, watch.checks_completed
       from captain.watches watch
       join captain.trips trip on trip.id = watch.trip_id
       join captain.watch_search_specs link on link.watch_id = watch.id
@@ -2836,6 +2990,37 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
         ) as exists
       `;
       if (pending[0]?.exists) continue;
+      if (row.purpose === "fare_digest" && row.digest_time_zone) {
+        const profile = await this.ensureProfile(row.user_id, now);
+        const trip: Trip = {
+          id: row.trip_id,
+          userId: row.user_id,
+          title: row.title,
+          status: "tracking",
+          version: 1,
+          brief: row.brief,
+          archivedAt: null,
+          archiveReason: null,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString()
+        };
+        if (await enqueueNotification(this.#sql, {
+          userId: row.user_id,
+          tripId: row.trip_id,
+          kind: "fare_digest",
+          dedupKey: `${row.trip_id}:fare_digest:${localIsoDate(now, row.digest_time_zone)}`,
+          payload: {
+            ...notificationGoalPayload(trip, profile),
+            firstDigest: row.checks_completed <= 1,
+            intro: row.digest_intro,
+            freshResults: false,
+            range: null,
+            dateSummary: null
+          },
+          now
+        })) queued += 1;
+        continue;
+      }
       const initial = await this.#sql<Array<{ exists: boolean }>>`
         select exists (
           select 1 from captain.notifications
@@ -3318,6 +3503,10 @@ type OfferRow = {
 };
 type WatchRow = {
   id: string; trip_id: string; status: Watch["status"];
+  purpose: Watch["purpose"];
+  digest_hour_local: number | null;
+  digest_time_zone: string | null;
+  digest_intro: string | null;
   run_started_at: Date; run_ends_at: Date; completed_at: Date | null;
   checks_completed: number;
   next_check_at: Date | null; last_check_at: Date | null;
@@ -3504,6 +3693,10 @@ function toOffer(row: OfferRow): OfferSnapshot {
 function toWatch(row: WatchRow): Watch {
   return {
     id: row.id, tripId: row.trip_id, status: row.status,
+    purpose: row.purpose,
+    digestHourLocal: row.digest_hour_local,
+    digestTimeZone: row.digest_time_zone,
+    digestIntro: row.digest_intro,
     runStartedAt: iso(row.run_started_at),
     runEndsAt: iso(row.run_ends_at),
     completedAt: row.completed_at ? iso(row.completed_at) : null,

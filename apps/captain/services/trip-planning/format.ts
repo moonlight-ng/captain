@@ -257,6 +257,11 @@ export function telegramDashboardMessage(message: string): {
   const lines = message.split("\n");
   const links: Array<{ text: string; url: string }> = [];
   const visibleLines = lines.filter((line) => {
+    const browse = /^\s*Browse trip:\s*(https:\/\/\S+)\s*$/u.exec(line);
+    if (browse?.[1]) {
+      links.push({ text: "Browse trip", url: browse[1] });
+      return false;
+    }
     const labelled = /^\s*Open ([^:]+):\s*(https:\/\/\S+)\s*$/u.exec(line);
     if (labelled?.[1] && labelled[2]) {
       links.push({ text: `Open ${labelled[1]}`, url: labelled[2] });
