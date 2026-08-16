@@ -2,6 +2,7 @@ export type AdminRoute =
   | { page: "overview" }
   | { page: "conversations" }
   | { page: "conversation"; id: string }
+  | { page: "automations" }
   | { page: "trips" }
   | { page: "trip"; id: string }
   | { page: "costs" }
@@ -11,6 +12,7 @@ export function parseAdminRoute(pathname: string): AdminRoute {
   const conversation = /^\/admin\/conversations\/([^/]+)\/?$/u.exec(pathname);
   if (conversation?.[1]) return { page: "conversation", id: safelyDecode(conversation[1]) };
   if (/^\/admin\/conversations\/?$/u.test(pathname)) return { page: "conversations" };
+  if (/^\/admin\/automations\/?$/u.test(pathname)) return { page: "automations" };
   const trip = /^\/admin\/trips\/([^/]+)\/?$/u.exec(pathname);
   if (trip?.[1]) return { page: "trip", id: safelyDecode(trip[1]) };
   if (/^\/admin\/trips\/?$/u.test(pathname)) return { page: "trips" };

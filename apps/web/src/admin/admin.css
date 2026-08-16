@@ -453,6 +453,19 @@
 .admin-trip-table .admin-latest { display: grid; gap: 2px; }
 .admin-trip-table .admin-latest strong { display: block; overflow: hidden; color: rgba(255, 255, 255, .82); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
 .admin-trip-table .admin-latest small { display: block; overflow: hidden; color: var(--admin-quiet); font-size: var(--type-caption); text-overflow: ellipsis; white-space: nowrap; }
+.admin-trip-table .admin-table-head,
+.admin-trip-table .admin-table-row { grid-template-columns: 220px minmax(0, 1fr) 160px 80px; }
+.admin-automation-table .admin-table-head,
+.admin-automation-table .admin-table-row { grid-template-columns: 200px minmax(0, 1fr) 180px 210px; }
+.admin-automation-table .admin-latest { display: grid; gap: 2px; }
+.admin-automation-table .admin-latest strong { display: block; overflow: hidden; color: rgba(255, 255, 255, .82); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.admin-automation-table .admin-latest small { display: block; overflow: hidden; color: var(--admin-quiet); font-size: var(--type-caption); text-overflow: ellipsis; white-space: nowrap; }
+.admin-automation-status { display: inline-flex; align-items: center; gap: var(--admin-space-2); color: var(--admin-muted); }
+.admin-automation-status > i { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--admin-quiet); }
+.admin-automation-status.active > i { background: var(--admin-sage); }
+.admin-automation-status.scheduled > i { background: rgba(233, 188, 116, .9); }
+.admin-automation-status.paused > i { background: rgba(233, 188, 116, .68); }
+.admin-automation-next { color: var(--admin-muted); font-size: var(--type-caption); line-height: 1.45; }
 .admin-trip-main { display: grid; gap: var(--admin-space-4); min-width: 0; }
 .admin-trip-panel {
   min-width: 0;
@@ -618,6 +631,10 @@
 @media (max-width: 1180px) {
   .admin-table-head,
   .admin-table-row { grid-template-columns: 180px minmax(0, 1fr) 90px 70px; gap: var(--admin-space-3); }
+  .admin-trip-table .admin-table-head,
+  .admin-trip-table .admin-table-row { grid-template-columns: 180px minmax(0, 1fr) 145px 70px; }
+  .admin-automation-table .admin-table-head,
+  .admin-automation-table .admin-table-row { grid-template-columns: 170px minmax(0, 1fr) 160px 180px; }
   .admin-detail-layout { grid-template-columns: minmax(0, 1fr) 240px; }
 }
 
@@ -638,7 +655,8 @@
     background: rgba(0, 0, 0, .94);
     backdrop-filter: blur(14px);
   }
-  .admin-mobile-nav nav { display: flex; gap: var(--admin-space-1); }
+  .admin-mobile-nav nav { display: flex; min-width: 0; flex: 1; gap: var(--admin-space-1); overflow-x: auto; scrollbar-width: none; }
+  .admin-mobile-nav nav::-webkit-scrollbar { display: none; }
   .admin-mobile-nav nav button { min-height: var(--admin-space-10); padding: var(--admin-space-2); border-radius: 9px; background: transparent; color: var(--admin-muted); font-size: var(--type-body); }
   .admin-mobile-nav nav button[aria-current="page"] { background: rgba(255, 255, 255, .075); color: var(--admin-text); }
   .admin-main { padding: 0 var(--admin-space-5) var(--admin-space-10); }
@@ -653,6 +671,7 @@
 
 @media (max-width: 680px) {
   .admin-mobile-nav { gap: var(--admin-space-2); padding-inline: var(--admin-space-3); }
+  .admin-mobile-nav .admin-brand-label { display: none; }
   .admin-mobile-nav nav button { padding-inline: var(--admin-space-2); }
   .admin-main { padding-inline: var(--admin-space-4); }
   .admin-metrics { grid-template-columns: 1fr 1fr; }
@@ -663,6 +682,10 @@
   .admin-table-row { grid-template-columns: minmax(0, 1fr) auto; gap: var(--admin-space-2); }
   .admin-latest { grid-column: 1 / -1; grid-row: 2; }
   .admin-table-row > span:nth-child(3) { display: none; }
+  .admin-automation-table .admin-table-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .admin-automation-table .admin-table-row > span:nth-child(3) { display: inline-flex; grid-column: 2; grid-row: 1; }
+  .admin-automation-table .admin-latest { grid-column: 1 / -1; grid-row: 2; }
+  .admin-automation-table .admin-automation-next { grid-column: 1 / -1; grid-row: 3; }
   .admin-spend { grid-column: 2; grid-row: 1; justify-items: end; }
   .admin-detail-sidebar { grid-template-columns: 1fr; }
   .admin-detail-card { border-right: 0; border-bottom: 1px solid var(--admin-line); }

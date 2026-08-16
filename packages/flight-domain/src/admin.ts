@@ -160,6 +160,37 @@ export type AdminTripFlight = {
   flightKey: string | null;
 };
 
+export type AdminAutomationState = {
+  automationId: string;
+  purpose: "price_changes" | "fare_digest";
+  status: "active" | "scheduled" | "paused" | "completed";
+  digestHourLocal: number | null;
+  digestTimeZone: string | null;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  runStartedAt: string;
+  runEndsAt: string;
+  completedAt: string | null;
+  checksCompleted: number;
+  delayReason: string | null;
+  updatedAt: string;
+};
+
+export type AdminAutomationSummary = AdminAutomationState & {
+  tripId: string;
+  userId: string;
+  conversationId: string | null;
+  title: string;
+  tripStatus: string;
+  routeLabel: string;
+  identities: AdminChannelIdentity[];
+};
+
+export type AdminAutomationPage = {
+  automations: AdminAutomationSummary[];
+  nextCursor: string | null;
+};
+
 export type AdminTripSummary = {
   tripId: string;
   userId: string;
@@ -171,6 +202,7 @@ export type AdminTripSummary = {
   identities: AdminChannelIdentity[];
   flightCount: number;
   latestActivityLabel: string | null;
+  automation: AdminAutomationState | null;
 };
 
 export type AdminTripPage = {

@@ -1,6 +1,7 @@
 import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
 
 import type {
+  AdminAutomationPage,
   AdminConversationDetail,
   AdminConversationPage,
   AdminCostRange,
@@ -107,6 +108,18 @@ export class AdminApi {
     const search = new URLSearchParams({ limit: "50" });
     if (before) search.set("before", before);
     return this.#get(`/api/admin/conversations/${encodeURIComponent(id)}?${search}`);
+  }
+
+  automations(input: {
+    query?: string;
+    cursor?: string;
+    limit?: number;
+  } = {}): Promise<AdminAutomationPage> {
+    const search = new URLSearchParams();
+    if (input.query) search.set("query", input.query);
+    if (input.cursor) search.set("cursor", input.cursor);
+    if (input.limit) search.set("limit", String(input.limit));
+    return this.#get(`/api/admin/automations?${search}`);
   }
 
   trips(input: {

@@ -1,4 +1,7 @@
 import type {
+  AdminAutomationPage,
+  AdminAutomationState,
+  AdminAutomationSummary,
   AdminConversationDetail,
   AdminConversationPage,
   AdminConversationSummary,
@@ -97,6 +100,11 @@ export interface CaptainAdminStore {
     before?: string;
     limit: number;
   }): Promise<AdminConversationDetail | null>;
+  listAutomations(input: {
+    query?: string;
+    cursor?: string;
+    limit: number;
+  }): Promise<AdminAutomationPage>;
   listTrips(input: {
     query?: string;
     cursor?: string;
@@ -215,6 +223,14 @@ export class MemoryCaptainAdminStore implements CaptainAdminStore {
     return null;
   }
 
+  async listAutomations(_input: {
+    query?: string;
+    cursor?: string;
+    limit: number;
+  }): Promise<AdminAutomationPage> {
+    return { automations: [], nextCursor: null };
+  }
+
   async listTrips(_input: {
     query?: string;
     cursor?: string;
@@ -299,6 +315,45 @@ type TripRow = {
   flight_count: string;
   latest_event_type: string | null;
   latest_event_body: string | null;
+  automation_id: string | null;
+  automation_purpose: AdminAutomationState["purpose"] | null;
+  automation_status: AdminAutomationState["status"] | null;
+  automation_digest_hour_local: number | null;
+  automation_digest_time_zone: string | null;
+  automation_next_run_at: Date | null;
+  automation_last_run_at: Date | null;
+  automation_run_started_at: Date | null;
+  automation_run_ends_at: Date | null;
+  automation_completed_at: Date | null;
+  automation_checks_completed: number | null;
+  automation_delay_reason: string | null;
+  automation_updated_at: Date | null;
+};
+
+type AutomationRow = {
+  automation_id: string;
+  trip_id: string;
+  user_id: string;
+  conversation_id: string | null;
+  title: string;
+  trip_status: string;
+  brief: Record<string, unknown>;
+  purpose: AdminAutomationState["purpose"];
+  status: AdminAutomationState["status"];
+  digest_hour_local: number | null;
+  digest_time_zone: string | null;
+  next_run_at: Date | null;
+  last_run_at: Date | null;
+  run_started_at: Date;
+  run_ends_at: Date;
+  completed_at: Date | null;
+  checks_completed: number;
+  delay_reason: string | null;
+  updated_at: Date;
+  telegram_user_id: string | null;
+  username: string | null;
+  first_name: string | null;
+  last_name: string | null;
 };
 
 const CONVERSATION_SELECT = `
@@ -358,6 +413,51 @@ const CONVERSATION_SELECT = `
   order by coalesce(latest.created_at, conversation.created_at) desc, conversation.id desc
 `;
 
+const AUTOMATION_SELECT = `
+  select
+    watch.id as automation_id,
+    watch.trip_id,
+    trip.user_id,
+    conversation.id as conversation_id,
+    trip.title,
+    trip.status as trip_status,
+    trip.brief,
+    watch.purpose,
+    watch.status,
+    watch.digest_hour_local,
+    watch.digest_time_zone,
+    watch.next_check_at as next_run_at,
+    watch.last_check_at as last_run_at,
+    watch.run_started_at,
+    watch.run_ends_at,
+    watch.completed_at,
+    watch.checks_completed,
+    watch.delay_reason,
+    watch.updated_at,
+    telegram.telegram_user_id::text,
+    telegram.username,
+    telegram.first_name,
+    telegram.last_name
+  from captain.watches watch
+  join captain.trips trip on trip.id = watch.trip_id
+  join captain.users captain_user on captain_user.id = trip.user_id
+  left join captain.conversations conversation on conversation.user_id = trip.user_id
+  left join captain.telegram_accounts telegram on telegram.user_id = captain_user.id
+  where ($1::text is null or (
+    watch.id::text ilike $1
+    or watch.trip_id::text ilike $1
+    or trip.user_id::text ilike $1
+    or trip.title ilike $1
+    or trip.brief::text ilike $1
+    or watch.status ilike $1
+    or replace(watch.purpose, '_', ' ') ilike $1
+    or coalesce(telegram.username, '') ilike $1
+    or coalesce(telegram.first_name, '') ilike $1
+    or coalesce(telegram.last_name, '') ilike $1
+  ))
+  order by watch.updated_at desc, watch.id desc
+`;
+
 const TRIP_SELECT = `
   select
     trip.id as trip_id,
@@ -373,11 +473,25 @@ const TRIP_SELECT = `
     telegram.last_name,
     coalesce(flight_stats.flight_count, 0)::text as flight_count,
     latest_activity.event_type as latest_event_type,
-    latest_activity.body as latest_event_body
+    latest_activity.body as latest_event_body,
+    watch.id as automation_id,
+    watch.purpose as automation_purpose,
+    watch.status as automation_status,
+    watch.digest_hour_local as automation_digest_hour_local,
+    watch.digest_time_zone as automation_digest_time_zone,
+    watch.next_check_at as automation_next_run_at,
+    watch.last_check_at as automation_last_run_at,
+    watch.run_started_at as automation_run_started_at,
+    watch.run_ends_at as automation_run_ends_at,
+    watch.completed_at as automation_completed_at,
+    watch.checks_completed as automation_checks_completed,
+    watch.delay_reason as automation_delay_reason,
+    watch.updated_at as automation_updated_at
   from captain.trips trip
   join captain.users captain_user on captain_user.id = trip.user_id
   left join captain.conversations conversation on conversation.user_id = trip.user_id
   left join captain.telegram_accounts telegram on telegram.user_id = captain_user.id
+  left join captain.watches watch on watch.trip_id = trip.id
   left join lateral (
     select
       (
@@ -402,6 +516,8 @@ const TRIP_SELECT = `
     trip.id::text ilike $1
     or trip.title ilike $1
     or trip.status ilike $1
+    or coalesce(watch.status, '') ilike $1
+    or replace(coalesce(watch.purpose, ''), '_', ' ') ilike $1
     or captain_user.id::text ilike $1
     or coalesce(telegram.username, '') ilike $1
     or coalesce(telegram.first_name, '') ilike $1
@@ -662,6 +778,31 @@ export class PostgresCaptainAdminStore implements CaptainAdminStore {
     };
   }
 
+  async listAutomations(input: {
+    query?: string;
+    cursor?: string;
+    limit: number;
+  }): Promise<AdminAutomationPage> {
+    const query = input.query?.trim().slice(0, 120);
+    const rows = await this.#automationRows(query ? `%${query}%` : null);
+    const cursor = decodeCursor(input.cursor);
+    const afterCursor = cursor
+      ? rows.filter((row) => automationAfterCursor(row, cursor))
+      : rows;
+    const limit = Math.max(1, Math.min(input.limit, 50));
+    const selected = afterCursor.slice(0, limit + 1);
+    const hasMore = selected.length > limit;
+    const pageRows = selected.slice(0, limit);
+    const automations = pageRows.map(toAutomationSummary);
+    const last = pageRows.at(-1);
+    return {
+      automations,
+      nextCursor: hasMore && last
+        ? encodeCursor({ at: last.updated_at.toISOString(), id: last.automation_id })
+        : null
+    };
+  }
+
   async listTrips(input: {
     query?: string;
     cursor?: string;
@@ -822,6 +963,10 @@ export class PostgresCaptainAdminStore implements CaptainAdminStore {
     return this.#sql.unsafe(CONVERSATION_SELECT, [search, conversationId]);
   }
 
+  #automationRows(search: string | null): Promise<AutomationRow[]> {
+    return this.#sql.unsafe(AUTOMATION_SELECT, [search]);
+  }
+
   #tripRows(search: string | null, tripId: string | null): Promise<TripRow[]> {
     return this.#sql.unsafe(TRIP_SELECT, [search, tripId]);
   }
@@ -965,6 +1110,43 @@ function tripAfterCursor(row: TripRow, cursor: Cursor): boolean {
   return at < cursor.at || (at === cursor.at && row.trip_id < cursor.id);
 }
 
+function automationAfterCursor(row: AutomationRow, cursor: Cursor): boolean {
+  const at = row.updated_at.toISOString();
+  return at < cursor.at || (at === cursor.at && row.automation_id < cursor.id);
+}
+
+function toAutomationSummary(row: AutomationRow): AdminAutomationSummary {
+  const displayName = [row.first_name, row.last_name].filter(Boolean).join(" ").trim()
+    || (row.username ? `@${row.username}` : "")
+    || row.user_id;
+  return {
+    automationId: row.automation_id,
+    tripId: row.trip_id,
+    userId: row.user_id,
+    conversationId: row.conversation_id,
+    title: row.title,
+    tripStatus: row.trip_status,
+    routeLabel: routeLabelFromBrief(row.brief),
+    purpose: row.purpose,
+    status: row.status,
+    digestHourLocal: row.digest_hour_local === null ? null : integer(row.digest_hour_local),
+    digestTimeZone: row.digest_time_zone,
+    nextRunAt: row.next_run_at?.toISOString() ?? null,
+    lastRunAt: row.last_run_at?.toISOString() ?? null,
+    runStartedAt: row.run_started_at.toISOString(),
+    runEndsAt: row.run_ends_at.toISOString(),
+    completedAt: row.completed_at?.toISOString() ?? null,
+    checksCompleted: integer(row.checks_completed),
+    delayReason: row.delay_reason,
+    updatedAt: row.updated_at.toISOString(),
+    identities: row.telegram_user_id ? [{
+      channel: "telegram",
+      displayName,
+      username: row.username
+    }] : []
+  };
+}
+
 function toTripSummary(row: TripRow): AdminTripSummary {
   const displayName = [row.first_name, row.last_name].filter(Boolean).join(" ").trim()
     || (row.username ? `@${row.username}` : "")
@@ -984,7 +1166,36 @@ function toTripSummary(row: TripRow): AdminTripSummary {
     }] : [],
     flightCount: integer(row.flight_count),
     latestActivityLabel: row.latest_event_body?.trim()
-      || (row.latest_event_type ? humanize(row.latest_event_type) : null)
+      || (row.latest_event_type ? humanize(row.latest_event_type) : null),
+    automation: tripAutomation(row)
+  };
+}
+
+function tripAutomation(row: TripRow): AdminAutomationState | null {
+  if (
+    !row.automation_id
+    || !row.automation_purpose
+    || !row.automation_status
+    || !row.automation_run_started_at
+    || !row.automation_run_ends_at
+    || !row.automation_updated_at
+  ) return null;
+  return {
+    automationId: row.automation_id,
+    purpose: row.automation_purpose,
+    status: row.automation_status,
+    digestHourLocal: row.automation_digest_hour_local === null
+      ? null
+      : integer(row.automation_digest_hour_local),
+    digestTimeZone: row.automation_digest_time_zone,
+    nextRunAt: row.automation_next_run_at?.toISOString() ?? null,
+    lastRunAt: row.automation_last_run_at?.toISOString() ?? null,
+    runStartedAt: row.automation_run_started_at.toISOString(),
+    runEndsAt: row.automation_run_ends_at.toISOString(),
+    completedAt: row.automation_completed_at?.toISOString() ?? null,
+    checksCompleted: integer(row.automation_checks_completed),
+    delayReason: row.automation_delay_reason,
+    updatedAt: row.automation_updated_at.toISOString()
   };
 }
 

@@ -122,3 +122,13 @@ export function TripsIcon() {
     </svg>
   );
 }
+
+export function AutomationsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20 12a8 8 0 1 1-2.35-5.65" />
+      <path d="M20 4v5h-5" />
+      <path d="M12 7.5V12l3 2" />
+    </svg>
+  );
+}

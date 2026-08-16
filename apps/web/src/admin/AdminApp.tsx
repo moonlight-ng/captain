@@ -1,6 +1,8 @@
 import { Fragment, useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 
 import type {
+  AdminAutomationPage,
+  AdminAutomationSummary,
   AdminConversationDetail,
   AdminConversationPage,
   AdminConversationSummary,
@@ -13,10 +15,11 @@ import type {
   AdminTripSummary,
 } from "@agents/flight-domain/admin";
 
-import { CheckIcon, ChevronRightIcon, CloseIcon, ConversationsIcon, CopyIcon, CostsIcon, OverviewIcon, SearchIcon, SettingsIcon, TripsIcon } from "../components/icons";
+import { AutomationsIcon, CheckIcon, ChevronRightIcon, CloseIcon, ConversationsIcon, CopyIcon, CostsIcon, OverviewIcon, SearchIcon, SettingsIcon, TripsIcon } from "../components/icons";
 import { feedPostsFromActivity } from "../feed-posts";
 import type { TripActivity } from "../domain";
 import { AdminApi, AdminApiError, loadErrorCopy } from "./api";
+import { automationPurposeLabel, automationScheduleLabel, automationStatusLabel, tripResultStatusLabel } from "./automation-copy";
 import { parseAdminRoute, type AdminRoute } from "./routing";
 import "./admin.css";
 
@@ -116,6 +119,7 @@ export function AdminApp() {
       {route.page === "overview" && <OverviewPage api={api} navigate={navigate} />}
       {route.page === "conversations" && <ConversationsPage api={api} navigate={navigate} />}
       {route.page === "conversation" && <ConversationPage api={api} id={route.id} navigate={navigate} />}
+      {route.page === "automations" && <AutomationsPage api={api} navigate={navigate} />}
       {route.page === "trips" && <TripsPage api={api} navigate={navigate} />}
       {route.page === "trip" && <TripPage api={api} id={route.id} navigate={navigate} />}
       {route.page === "costs" && <CostsPage api={api} navigate={navigate} />}
@@ -213,6 +217,7 @@ function AdminShell({ identity, route, navigate, children }: {
         <nav aria-label="Admin navigation">
           <NavButton active={route.page === "overview"} onClick={() => navigate("/admin")} label="Overview" icon={<OverviewIcon />} />
           <NavButton active={route.page === "conversations" || route.page === "conversation"} onClick={() => navigate("/admin/conversations")} label="Conversations" icon={<ConversationsIcon />} />
+          <NavButton active={route.page === "automations"} onClick={() => navigate("/admin/automations")} label="Automations" icon={<AutomationsIcon />} />
           <NavButton active={route.page === "trips" || route.page === "trip"} onClick={() => navigate("/admin/trips")} label="Trips" icon={<TripsIcon />} />
           <NavButton active={route.page === "costs"} onClick={() => navigate("/admin/costs")} label="Costs" icon={<CostsIcon />} />
         </nav>
@@ -227,6 +232,7 @@ function AdminShell({ identity, route, navigate, children }: {
         <nav aria-label="Admin navigation">
           <button aria-current={route.page === "overview" ? "page" : undefined} onClick={() => navigate("/admin")}>Overview</button>
           <button aria-current={route.page === "conversations" || route.page === "conversation" ? "page" : undefined} onClick={() => navigate("/admin/conversations")}>Chats</button>
+          <button aria-current={route.page === "automations" ? "page" : undefined} onClick={() => navigate("/admin/automations")}>Automations</button>
           <button aria-current={route.page === "trips" || route.page === "trip" ? "page" : undefined} onClick={() => navigate("/admin/trips")}>Trips</button>
           <button aria-current={route.page === "costs" ? "page" : undefined} onClick={() => navigate("/admin/costs")}>Costs</button>
         </nav>
@@ -368,6 +374,53 @@ function ConversationPage({ api, id, navigate }: { api: AdminApi; id: string; na
   );
 }
 
+function AutomationsPage({ api, navigate }: { api: AdminApi; navigate: (path: string) => void }) {
+  const [queryInput, setQueryInput] = useState("");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState<AdminAutomationPage | null>(() => readAdminCache("automations:"));
+  const [error, setError] = useState<{ title: string; body: string } | null>(null);
+  const [loading, setLoading] = useState(() => !readAdminCache("automations:"));
+  const load = useCallback(async (cursor?: string, append = false) => {
+    const cacheKey = `automations:${query}`;
+    if (!cursor && !append) {
+      const cached = readAdminCache<AdminAutomationPage>(cacheKey);
+      setPage(cached);
+      setLoading(!cached);
+    } else setLoading(true);
+    setError(null);
+    try {
+      const next = await api.automations({
+        limit: 25,
+        ...(query ? { query } : {}),
+        ...(cursor ? { cursor } : {})
+      });
+      setPage((current) => {
+        const merged = append && current
+          ? { automations: [...current.automations, ...next.automations], nextCursor: next.nextCursor }
+          : next;
+        return writeAdminCache(cacheKey, merged);
+      });
+    } catch (caught) { setError(loadErrorCopy(caught)); }
+    finally { setLoading(false); }
+  }, [api, query]);
+  useEffect(() => { void load(); }, [load]);
+  return (
+    <Page title="Automations" action={<RefreshButton onClick={() => void load()} />}>
+      <form className="admin-omnibox" onSubmit={(event) => { event.preventDefault(); setQuery(queryInput.trim()); }}>
+        <label htmlFor="automation-search" className="sr-only">Search automations</label>
+        <span className="admin-omnibox-icon" aria-hidden="true"><SearchIcon /></span>
+        <input id="automation-search" value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="Search route, traveller, purpose, or status…" autoComplete="off" spellCheck={false} enterKeyHint="search" />
+        {queryInput && <button type="button" className="admin-omnibox-clear" aria-label="Clear search" onClick={() => { setQueryInput(""); setQuery(""); }}><CloseIcon /></button>}
+      </form>
+      {error && !page ? <ErrorState onRetry={() => void load()} title={error.title} body={error.body} /> : loading && !page ? <Loading /> : <>
+        {query && <p className="admin-result-note">Results for “{query}”</p>}
+        <AutomationTable automations={page?.automations ?? []} navigate={navigate} empty={query ? "No matching automations." : "No automations yet."} />
+        {page?.nextCursor && <div className="admin-load-more"><button className="admin-button" disabled={loading} onClick={() => void load(page.nextCursor!, true)}>{loading ? "Loading…" : "Load more"}</button></div>}
+      </>}
+    </Page>
+  );
+}
+
 function TripsPage({ api, navigate }: { api: AdminApi; navigate: (path: string) => void }) {
   const [queryInput, setQueryInput] = useState("");
   const [query, setQuery] = useState("");
@@ -468,12 +521,22 @@ function TripPage({ api, id, navigate }: { api: AdminApi; id: string; navigate: 
         </div>
         <aside className="admin-detail-sidebar">
           <DetailCard title="Trip">
-            <Fact label="Status" value={labelStatus(detail.trip.status)} />
+            <Fact label={detail.trip.automation ? "Result state" : "Status"} value={tripResultStatusLabel(detail.trip.status)} />
             <Fact label="Route" value={detail.trip.routeLabel} />
             <Fact label="Title" value={detail.trip.title || "—"} />
             <Fact label="Updated" value={formatDateTime(detail.trip.updatedAt)} />
             <Fact label="Trip ID" value={shortId(detail.trip.tripId)} title={detail.trip.tripId} />
           </DetailCard>
+          {detail.trip.automation && <DetailCard title="Automation">
+            <Fact label="Type" value={automationPurposeLabel(detail.trip.automation.purpose)} />
+            <Fact label="Status" value={automationStatusLabel(detail.trip.automation)} />
+            <Fact label="Schedule" value={automationScheduleLabel(detail.trip.automation)} />
+            <Fact label="Next run" value={detail.trip.automation.nextRunAt ? formatZonedDateTime(detail.trip.automation.nextRunAt, detail.trip.automation.digestTimeZone) : "No next run"} />
+            <Fact label="Last run" value={detail.trip.automation.lastRunAt ? formatZonedDateTime(detail.trip.automation.lastRunAt, detail.trip.automation.digestTimeZone) : "Not run yet"} />
+            <Fact label="Checks" value={String(detail.trip.automation.checksCompleted)} />
+            <Fact label="Ends" value={formatZonedDateTime(detail.trip.automation.runEndsAt, detail.trip.automation.digestTimeZone)} />
+            {detail.trip.automation.delayReason ? <Fact label="Attention" value={detail.trip.automation.delayReason} /> : null}
+          </DetailCard>}
           <DetailCard title="User">
             <Fact label="Internal ID" value={shortId(detail.trip.userId)} title={detail.trip.userId} />
             {detail.trip.identities.map((channel) => (
@@ -599,11 +662,34 @@ function ConversationTable({ conversations, navigate, empty }: { conversations: 
   return <div className="admin-table"><div className="admin-table-head"><span>User</span><span>Latest message</span><span>Activity</span><span>Spend</span></div>{conversations.map((conversation) => <button className="admin-table-row" key={conversation.conversationId} onClick={() => navigate(`/admin/conversations/${conversation.conversationId}`)}><span className="admin-user-cell"><i>{conversationName(conversation).slice(0, 1).toUpperCase()}</i><span><strong>{conversationName(conversation)}</strong></span></span><span className="admin-latest">{conversation.lastMessage?.content ?? "No messages"}</span><span>{relativeTime(conversation.lastActivityAt)}</span><span className="admin-spend">{formatUsd(conversation.costUsd)}{conversation.unresolvedCostCount > 0 && <small>{conversation.unresolvedCostCount} pending</small>}</span></button>)}</div>;
 }
 
+function AutomationTable({ automations, navigate, empty }: { automations: AdminAutomationSummary[]; navigate: (path: string) => void; empty: string }) {
+  if (automations.length === 0) return <EmptyState text={empty} />;
+  return (
+    <div className="admin-table admin-automation-table">
+      <div className="admin-table-head"><span>User</span><span>Tracking</span><span>Status</span><span>Next run</span></div>
+      {automations.map((automation) => (
+        <button className="admin-table-row" key={automation.automationId} onClick={() => navigate(`/admin/trips/${automation.tripId}`)}>
+          <span className="admin-user-cell">
+            <i>{automationName(automation).slice(0, 1).toUpperCase()}</i>
+            <span><strong>{automationName(automation)}</strong></span>
+          </span>
+          <span className="admin-latest">
+            <strong>{automation.title || automation.routeLabel}</strong>
+            <small>{automation.routeLabel} · {automationScheduleLabel(automation)}</small>
+          </span>
+          <span className={`admin-automation-status ${automation.status}`}><i />{automationStatusLabel(automation)}</span>
+          <span className="admin-automation-next">{automation.nextRunAt ? formatZonedDateTime(automation.nextRunAt, automation.digestTimeZone) : "No next run"}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function TripTable({ trips, navigate, empty }: { trips: AdminTripSummary[]; navigate: (path: string) => void; empty: string }) {
   if (trips.length === 0) return <EmptyState text={empty} />;
   return (
     <div className="admin-table admin-trip-table">
-      <div className="admin-table-head"><span>User</span><span>Trip</span><span>Status</span><span>Updated</span></div>
+      <div className="admin-table-head"><span>User</span><span>Trip</span><span>Automation / status</span><span>Updated</span></div>
       {trips.map((trip) => (
         <button className="admin-table-row" key={trip.tripId} onClick={() => navigate(`/admin/trips/${trip.tripId}`)}>
           <span className="admin-user-cell">
@@ -614,7 +700,7 @@ function TripTable({ trips, navigate, empty }: { trips: AdminTripSummary[]; navi
             <strong>{trip.title || trip.routeLabel}</strong>
             <small>{trip.routeLabel}{trip.flightCount > 0 ? ` · ${trip.flightCount} flight${trip.flightCount === 1 ? "" : "s"}` : ""}</small>
           </span>
-          <span>{labelStatus(trip.status)}</span>
+          <span>{trip.automation ? automationStatusLabel(trip.automation) : tripResultStatusLabel(trip.status)}</span>
           <span>{relativeTime(trip.updatedAt)}</span>
         </button>
       ))}
@@ -685,8 +771,8 @@ function conversationName(conversation: AdminConversationSummary): string {
 function tripName(trip: AdminTripSummary): string {
   return trip.identities[0]?.displayName || shortId(trip.userId);
 }
-function labelStatus(value: string): string {
-  return value.replaceAll("_", " ").replace(/\b\w/gu, (letter) => letter.toUpperCase());
+function automationName(automation: AdminAutomationSummary): string {
+  return automation.identities[0]?.displayName || shortId(automation.userId);
 }
 function formatMoneyAmount(amount: string, currency: string): string {
   const parsed = Number(amount);
@@ -702,6 +788,14 @@ function formatUsd(value: number): string { return new Intl.NumberFormat(undefin
 function formatNumber(value: number): string { return new Intl.NumberFormat().format(value); }
 function formatCompact(value: number): string { return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value); }
 function formatDateTime(value: string): string { return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)); }
+function formatZonedDateTime(value: string, timeZone: string | null): string {
+  if (!timeZone) return formatDateTime(value);
+  try {
+    return `${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short", timeZone }).format(new Date(value))} · ${timeZone}`;
+  } catch {
+    return formatDateTime(value);
+  }
+}
 function formatDate(value: string): string { return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeZone: /^\d{4}-\d{2}-\d{2}$/u.test(value) ? "UTC" : undefined }).format(new Date(value)); }
 function shortDate(value: string): string { return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`)); }
 function relativeTime(value: string): string {

@@ -152,6 +152,22 @@ describe("Captain administrator API", () => {
     expect(body.activity[0]?.body).toBe("Tracking is live for Lagos → London.");
     expect(body.activity[0]?.channel).toBe("telegram");
   });
+
+  it("forwards automation search pagination", async () => {
+    const listAutomations = vi.fn(async () => ({ automations: [], nextCursor: null }));
+    (state.services as { adminStore: { listAutomations: unknown } }).adminStore.listAutomations = listAutomations;
+
+    const response = await invoke(
+      "/api/admin/automations",
+      authenticated("?query=daily%20digest&limit=999&cursor=next")
+    );
+    expect(response.status).toBe(200);
+    expect(listAutomations).toHaveBeenCalledWith({
+      query: "daily digest",
+      cursor: "next",
+      limit: 50
+    });
+  });
 });
 
 function servicesFixture() {
@@ -194,6 +210,7 @@ function servicesFixture() {
       }),
       listConversations: async () => ({ conversations: [], nextCursor: null }),
       getConversation: async () => null,
+      listAutomations: async () => ({ automations: [], nextCursor: null }),
       listTrips: async () => ({ trips: [], nextCursor: null }),
       getTrip: async () => null,
       getCosts: async () => ({})

@@ -76,6 +76,7 @@ describe("Captain administrator usage storage", () => {
 
   it("exposes empty trip list and detail stubs in memory mode", async () => {
     const store = new MemoryCaptainAdminStore();
+    expect(await store.listAutomations({ limit: 25 })).toEqual({ automations: [], nextCursor: null });
     expect(await store.listTrips({ limit: 25 })).toEqual({ trips: [], nextCursor: null });
     expect(await store.getTrip({ tripId: "22222222-2222-4222-8222-222222222222" })).toBeNull();
   });

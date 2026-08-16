@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { AdminApiError, loadErrorCopy } from "../src/admin/api.js";
+import { automationScheduleLabel, automationStatusLabel, tripResultStatusLabel } from "../src/admin/automation-copy.js";
 import { parseAdminRoute } from "../src/admin/routing.js";
 
 describe("Captain administrator routing", () => {
@@ -9,6 +10,8 @@ describe("Captain administrator routing", () => {
     ["/admin/", { page: "overview" }],
     ["/admin/conversations", { page: "conversations" }],
     ["/admin/conversations/", { page: "conversations" }],
+    ["/admin/automations", { page: "automations" }],
+    ["/admin/automations/", { page: "automations" }],
     ["/admin/trips", { page: "trips" }],
     ["/admin/trips/", { page: "trips" }],
     ["/admin/costs", { page: "costs" }],
@@ -17,6 +20,29 @@ describe("Captain administrator routing", () => {
     ["/admin/trips/11111111-1111-4111-8111-111111111111", { page: "trip", id: "11111111-1111-4111-8111-111111111111" }]
   ])("maps %s into the isolated administrator application", (pathname, expected) => {
     expect(parseAdminRoute(pathname as string)).toEqual(expected);
+  });
+});
+
+describe("administrator automation copy", () => {
+  it("shows an active fare digest instead of the trip recommendation state", () => {
+    expect(automationStatusLabel({ purpose: "fare_digest", status: "active" }))
+      .toBe("Daily digest active");
+    expect(automationScheduleLabel({
+      purpose: "fare_digest",
+      digestHourLocal: 9,
+      digestTimeZone: "Africa/Lagos"
+    })).toBe("Daily at 09:00 · Africa/Lagos");
+    expect(tripResultStatusLabel("recommended")).toBe("Recommendation ready");
+  });
+
+  it("keeps price-change watches and inactive states explicit", () => {
+    expect(automationStatusLabel({ purpose: "price_changes", status: "paused" }))
+      .toBe("Price tracking paused");
+    expect(automationScheduleLabel({
+      purpose: "price_changes",
+      digestHourLocal: null,
+      digestTimeZone: null
+    })).toBe("Every 24 hours");
   });
 });
 

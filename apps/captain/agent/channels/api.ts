@@ -53,6 +53,7 @@ export default defineChannel({
     GET("/admin", serveIndex),
     GET("/admin/conversations", serveIndex),
     GET("/admin/conversations/:id", serveIndex),
+    GET("/admin/automations", serveIndex),
     GET("/admin/trips", serveIndex),
     GET("/admin/trips/:id", serveIndex),
     GET("/admin/costs", serveIndex),
@@ -64,6 +65,7 @@ export default defineChannel({
     GET("/api/admin/overview", adminAuthenticated(adminOverview)),
     GET("/api/admin/conversations", adminAuthenticated(adminConversations)),
     GET("/api/admin/conversations/:conversationId", adminAuthenticated(adminConversation)),
+    GET("/api/admin/automations", adminAuthenticated(adminAutomations)),
     GET("/api/admin/trips", adminAuthenticated(adminTrips)),
     GET("/api/admin/trips/:tripId", adminAuthenticated(adminTrip)),
     GET("/api/admin/costs", adminAuthenticated(adminCosts)),
@@ -279,6 +281,19 @@ async function adminTrips(request: Request): Promise<Response> {
   const query = search.get("query")?.trim().slice(0, 120) || undefined;
   const cursor = search.get("cursor")?.trim() || undefined;
   return adminJson(await services.adminStore.listTrips({
+    limit,
+    ...(query ? { query } : {}),
+    ...(cursor ? { cursor } : {})
+  }));
+}
+
+async function adminAutomations(request: Request): Promise<Response> {
+  const services = await getCaptainServices();
+  const search = new URL(request.url).searchParams;
+  const limit = boundedInteger(search.get("limit"), 25, 1, 50);
+  const query = search.get("query")?.trim().slice(0, 120) || undefined;
+  const cursor = search.get("cursor")?.trim() || undefined;
+  return adminJson(await services.adminStore.listAutomations({
     limit,
     ...(query ? { query } : {}),
     ...(cursor ? { cursor } : {})
