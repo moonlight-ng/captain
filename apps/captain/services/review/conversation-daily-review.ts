@@ -394,7 +394,7 @@ export function buildConversationReviewEmail(input: {
   const html = `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-body{margin:0;background:#fff;color:#111;font-family:Arial,sans-serif;font-size:14px;line-height:1.45}main{max-width:760px;margin:0 auto;padding:24px}h1{font-size:20px;margin:0 0 2px}h2{font-size:15px;margin:28px 0 8px;padding-bottom:4px;border-bottom:1px solid #bbb}.date{margin:0;color:#555}table{width:100%;border-collapse:collapse;margin:8px 0 16px}th,td{border:1px solid #bbb;padding:7px;text-align:left;vertical-align:top}th{background:#f5f5f5;font-weight:700}small{color:#555}ul{margin:8px 0;padding-left:20px}li{margin:0 0 8px}.attention{margin:0 0 18px}.attention p{margin:6px 0}blockquote{margin:7px 0;padding-left:10px;border-left:2px solid #999;color:#333}a{color:#0645ad}
+body{margin:0;background:#fff;color:#111;font-family:Arial,sans-serif;font-size:14px;line-height:1.45}main{max-width:760px;margin:0 auto;padding:24px}h1{font-size:20px;margin:0 0 2px}h2{font-size:15px;margin:28px 0 8px}.date{margin:0;color:#555}table{width:100%;border-collapse:collapse;margin:8px 0 16px}th,td{border:1px solid #bbb;padding:7px;text-align:left;vertical-align:top}th{background:#f5f5f5;font-weight:700}small{color:#555}ul{margin:8px 0;padding-left:20px}li{margin:0 0 8px}.attention{margin:0 0 18px}.attention p{margin:6px 0}blockquote{margin:7px 0;padding-left:10px;border-left:2px solid #999;color:#333}a{color:#0645ad}
 </style></head><body><main>
   <h1>Captain conversation review</h1>
   <p class="date">${escapeHtml(longDate(input.date))} · ${escapeHtml(input.timeZone)}</p>

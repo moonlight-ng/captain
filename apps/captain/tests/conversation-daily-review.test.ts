@@ -141,6 +141,8 @@ describe("Captain conversation daily review", () => {
     expect(email.html).toContain("<table>");
     expect(email.html).toContain("<th>Tracked AI spend</th>");
     expect(email.html).not.toContain("class=\"metrics\"");
+    const headingStyles = email.html.match(/h2\{([^}]*)\}/u)?.[1];
+    expect(headingStyles).not.toContain("border-bottom");
   });
 
   it("claims, narrates, sends, and records one delivery", async () => {
