@@ -2087,7 +2087,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         if (this.#enqueueSimpleNotification(
           trip,
           "fare_digest",
-          `${trip.id}:fare_digest:${localIsoDate(now, watch.digestTimeZone)}`,
+          `${trip.id}:fare_digest:${localIsoDate(now, watch.digestTimeZone)}:gap`,
           {
             firstDigest: watch.checksCompleted <= 1,
             intro: watch.digestIntro,
@@ -2170,7 +2170,7 @@ export class MemoryCaptainPlatformStore implements CaptainPlatformStore {
         if (this.#enqueueSimpleNotification(
           trip,
           "fare_digest",
-          `${trip.id}:fare_digest:${localIsoDate(now, watch.digestTimeZone)}`,
+          `${trip.id}:fare_digest:${localIsoDate(now, watch.digestTimeZone)}:verified`,
           {
             ...recommendation,
             range: offerRangeSummary(offers),

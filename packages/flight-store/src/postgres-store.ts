@@ -2622,7 +2622,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
             userId: trip.userId,
             tripId: trip.id,
             kind: "fare_digest",
-            dedupKey: `${trip.id}:fare_digest:${localIsoDate(now, watch.digestTimeZone)}`,
+            dedupKey: `${trip.id}:fare_digest:${localIsoDate(now, watch.digestTimeZone)}:verified`,
             payload: {
               ...notificationGoalPayload(trip, profile),
               ...recommendation,
@@ -3008,7 +3008,7 @@ export class PostgresCaptainPlatformStore implements CaptainPlatformStore {
           userId: row.user_id,
           tripId: row.trip_id,
           kind: "fare_digest",
-          dedupKey: `${row.trip_id}:fare_digest:${localIsoDate(now, row.digest_time_zone)}`,
+          dedupKey: `${row.trip_id}:fare_digest:${localIsoDate(now, row.digest_time_zone)}:gap`,
           payload: {
             ...notificationGoalPayload(trip, profile),
             firstDigest: row.checks_completed <= 1,
