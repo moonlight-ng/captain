@@ -32,6 +32,21 @@ describe("expandSearchDateCombinations", () => {
       { departureStart: "2026-08-15", departureEnd: "2026-08-15" }
     ]), 48)).toThrow(/49 date combinations/u);
   });
+
+  it("samples a fare digest across the full window without exhausting provider limits", () => {
+    const digest = {
+      ...request([{ departureStart: "2026-08-16", departureEnd: "2026-09-13" }]),
+      fareContext: "fare_digest" as const
+    };
+    const expanded = expandSearchDateCombinations(digest);
+    expect(expanded.map((item) => item.slices[0]?.departureStart)).toEqual([
+      "2026-08-16",
+      "2026-08-23",
+      "2026-08-30",
+      "2026-09-06",
+      "2026-09-13"
+    ]);
+  });
 });
 
 function request(

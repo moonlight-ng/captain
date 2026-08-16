@@ -1,6 +1,8 @@
 import type { SearchSpecRequest } from "./search-spec.js";
 
 export const MAX_EXHAUSTIVE_DATE_COMBINATIONS = 49;
+/** Five evenly spaced dates keep one daily digest inside provider rate budgets. */
+export const FARE_DIGEST_DATE_SAMPLE_SIZE = 5;
 
 export class SearchWindowCombinationError extends Error {
   constructor(message: string) {
@@ -24,7 +26,9 @@ export function expandSearchDateCombinations(
         `Invalid departure window ${slice.departureStart}–${slice.departureEnd}`
       );
     }
-    return dates;
+    return request.fareContext === "fare_digest"
+      ? evenlySpacedDates(dates, FARE_DIGEST_DATE_SAMPLE_SIZE)
+      : dates;
   });
   const combinationCount = datesBySlice.reduce((count, dates) => count * dates.length, 1);
   if (combinationCount > maximum) {
@@ -46,6 +50,13 @@ export function expandSearchDateCombinations(
       departureEnd: dates[index]!
     }))
   }));
+}
+
+function evenlySpacedDates(dates: string[], maximum: number): string[] {
+  if (dates.length <= maximum) return dates;
+  return Array.from({ length: maximum }, (_, index) =>
+    dates[Math.round(index * (dates.length - 1) / (maximum - 1))]!
+  );
 }
 
 function isoDateRange(start: string, end: string): string[] {

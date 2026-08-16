@@ -922,6 +922,7 @@ describe("flight worker orchestration", () => {
       notified: 1
     });
     expect(search).toHaveBeenCalledTimes(2);
+    expect(search.mock.calls[1]?.[0].fareContext).toBe("fare_digest");
     expect(search.mock.calls[1]?.[0].slices[0]?.departureStart).toBe("2026-08-17");
     expect(sent).toHaveLength(2);
     expect(sent[1]!.text).not.toContain("Fixed —");

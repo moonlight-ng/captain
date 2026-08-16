@@ -480,6 +480,7 @@ export function rollingSearchRequest(
   if (!notBeforeDate) return request;
   return {
     ...request,
+    fareContext: "fare_digest",
     slices: request.slices.map((slice) => ({
       ...slice,
       departureStart: slice.departureStart < notBeforeDate

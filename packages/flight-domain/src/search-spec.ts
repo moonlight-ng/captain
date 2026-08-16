@@ -23,7 +23,7 @@ export type SearchSpecRequest = {
   maxConnections: number;
   currency: string;
   maximumPrice: number | null;
-  fareContext: "public_beta";
+  fareContext: "public_beta" | "fare_digest";
 };
 
 export type SearchSpec = {
