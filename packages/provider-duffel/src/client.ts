@@ -354,7 +354,11 @@ async function mapOffer(
     ?? "XX"
   ).toUpperCase();
   const itineraryKey = createHash("sha256")
-    .update(JSON.stringify({ slices, primaryAirlineCode: primary }))
+    .update(JSON.stringify({
+      slices,
+      primaryAirlineCode: primary,
+      passenger: request.passenger
+    }))
     .digest("hex");
 
   const candidate = verifiedOfferCandidateSchema.parse({
@@ -363,7 +367,7 @@ async function mapOffer(
     expiresAt: parsed.data.expires_at ?? null,
     priceAmount: formatAmount(priceAmount, currency),
     currency,
-    fareBasis: "one_adult_total",
+    fareBasis: request.passenger.adults === 1 ? "one_adult_total" : "party_total",
     cabin: request.cabin,
     slices,
     primaryAirlineCode: primary,

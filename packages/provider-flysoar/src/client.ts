@@ -421,7 +421,11 @@ function mapOffer(
   )].sort();
   const primary = participating[0] ?? "XX";
   const itineraryKey = createHash("sha256")
-    .update(JSON.stringify({ slices, primaryAirlineCode: primary }))
+    .update(JSON.stringify({
+      slices,
+      primaryAirlineCode: primary,
+      passenger: request.passenger
+    }))
     .digest("hex");
   return verifiedOfferCandidateSchema.parse({
     itineraryKey,
@@ -429,7 +433,7 @@ function mapOffer(
     expiresAt: normalizeExpiry(offer.expires_at),
     priceAmount: convertedAmount.toFixed(2),
     currency: targetCurrency,
-    fareBasis: "one_adult_total",
+    fareBasis: request.passenger.adults === 1 ? "one_adult_total" : "party_total",
     cabin: request.cabin,
     slices,
     primaryAirlineCode: primary,

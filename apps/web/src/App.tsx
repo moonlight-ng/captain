@@ -848,7 +848,7 @@ export function App() {
                 </a>
               </h1>
               <p className="trip-meta">
-                {dateLabel(trip.brief.departureWindow.start)} · {label(trip.brief.cabin)} · {trip.brief.currency}
+                {dateLabel(trip.brief.departureWindow.start)} · {trip.brief.travellers.adults} {trip.brief.travellers.adults === 1 ? "adult" : "adults"} · {label(trip.brief.cabin)} · {trip.brief.currency}
               </p>
             </div>
           </section>
@@ -1071,6 +1071,7 @@ function WatchlistDetail({
           {mode ? `${label(mode)} · ` : ""}
           {airlineName(offer.primaryAirlineCode, [offer])}
           {isMixed(offer) ? ` · Mixed · ${offer.participatingAirlineCodes.join(", ")}` : ""}
+          {offer.fareBasis === "party_total" ? " · Party total" : ""}
         </p>
         <div className="metrics">
           <span>{duration(offer)}</span>
@@ -1264,7 +1265,7 @@ function BookHandoff({
         {offer ? (
           <>
             <p className="set-note">
-              This fare was {money(offer)} when Captain last verified it
+              This fare was {money(offer)}{offer.fareBasis === "party_total" ? " for your party" : ""} when Captain last verified it
               {" "}({relativeTime(offer.verifiedAt)}). Prices change between checks, so
               confirm the total before you pay.
             </p>
@@ -1505,6 +1506,7 @@ function OfferRow({
       <div className="card-top">
         <span className="mode-label">{airlineName(offer.primaryAirlineCode, [offer])}</span>
         {watching ? <span className="pill">Watching</span> : null}
+        {offer.fareBasis === "party_total" ? <span className="pill">Party total</span> : null}
         {!watching && isMixed(offer) ? <span className="pill">Mixed</span> : null}
       </div>
       <strong className="price">{money(offer)}</strong>

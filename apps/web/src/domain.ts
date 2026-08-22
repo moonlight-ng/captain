@@ -1,5 +1,6 @@
 export type RankingMode = "cheapest" | "balanced" | "fastest";
 export type NotificationMode = "changes_only" | "off";
+export const MAX_ADULT_TRAVELLERS = 9;
 
 export type TravellerProfile = {
   userId: string;
@@ -62,7 +63,7 @@ export type Trip = {
       maximum: number;
     } | null;
     travellers: {
-      adults: 1;
+      adults: number;
       childrenAges: never[];
       infants: 0;
     };
@@ -204,7 +205,7 @@ export type VerifiedOffer = {
   price: number;
   priceAmount: string;
   currency: string;
-  fareBasis: "one_adult_total";
+  fareBasis: "one_adult_total" | "party_total";
   primaryAirlineCode: string;
   participatingAirlineCodes: string[];
   evidence: Array<{ url: string; title: string; domain: string }>;

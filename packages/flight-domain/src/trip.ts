@@ -4,6 +4,7 @@ import type { FlightSearchProviderId } from "./provider.js";
 
 export const MAX_ACTIVE_TRIPS_PER_USER = 1;
 export const MAX_SEARCH_COMBINATIONS = 1;
+export const MAX_ADULT_TRAVELLERS = 9;
 
 const iataCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/);
 const airlineCodeSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,3}$/);
@@ -38,7 +39,7 @@ export const tripLegSchema = z.object({
 export type TripLeg = z.infer<typeof tripLegSchema>;
 
 export const travellersSchema = z.object({
-  adults: z.literal(1),
+  adults: z.number().int().min(1).max(MAX_ADULT_TRAVELLERS),
   childrenAges: z.array(z.never()).max(0).default([]),
   infants: z.literal(0).default(0)
 }).strict();
@@ -177,7 +178,7 @@ export type OfferSnapshot = {
   price: number;
   priceAmount: string;
   currency: string;
-  fareBasis: "one_adult_total";
+  fareBasis: "one_adult_total" | "party_total";
   primaryAirlineCode: string;
   participatingAirlineCodes: string[];
   evidence: Array<{ url: string; title: string; domain: string }>;

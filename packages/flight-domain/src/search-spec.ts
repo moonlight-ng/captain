@@ -18,7 +18,7 @@ export type SearchSpecRequest = {
   tripType: TripBrief["tripType"];
   slices: SearchSlice[];
   stayNights: TripBrief["stayNights"];
-  passenger: { adults: 1; childrenAges: []; infants: 0 };
+  passenger: TripBrief["travellers"];
   cabin: TripBrief["cabin"];
   maxConnections: number;
   currency: string;
@@ -60,7 +60,11 @@ export function buildSearchSpecs(brief: TripBrief, _liveMode = true): SearchSpec
   > = {
     provider: "official_duffel",
     apiVersion: "v1",
-    passenger: { adults: 1, childrenAges: [], infants: 0 },
+    passenger: {
+      adults: brief.travellers.adults,
+      childrenAges: [...brief.travellers.childrenAges],
+      infants: brief.travellers.infants
+    },
     cabin: brief.cabin,
     maxConnections: brief.maxStops,
     currency: brief.currency,

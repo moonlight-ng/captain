@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   EMPTY_TRIP_DRAFT_STATE,
+  MAX_ADULT_TRAVELLERS,
   type TripDraftState
 } from "@agents/flight-domain";
 
@@ -23,7 +24,7 @@ const extractionSchema = z.object({
   tripType: z.enum(["one_way", "round_trip", "multi_city"]).nullable(),
   legs: z.array(legSchema).max(6),
   travellers: z.object({
-    adults: z.number().int().min(1).max(9),
+    adults: z.number().int().min(1).max(MAX_ADULT_TRAVELLERS),
     childrenAges: z.array(z.number().int().min(2).max(17)).max(8),
     infants: z.number().int().min(0).max(4)
   }).strict().nullable(),

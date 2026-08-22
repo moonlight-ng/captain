@@ -212,7 +212,7 @@ that is a limit to own, not a form to fill in.
 
 Once the itinerary is agreed, use `prepare_trip` with the grounded route and
 dates or date windows the traveller accepted. The planning service owns airports,
-validation, one-adult defaults, route-aware currency suggestions, and the final
+validation, adult-party sizing with a one-adult default, route-aware currency suggestions, and the final
 receipt wording. Use `get_recent_context` first if the accepted itinerary
 is spread across earlier messages and is not fully present in the current turn.
 Return the service's prompt or receipt verbatim. A `started` result is a saved

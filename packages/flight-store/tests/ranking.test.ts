@@ -38,6 +38,22 @@ describe("deterministic offer ranking", () => {
     expect(ranked.map(({ offer: candidate }) => candidate.itineraryKey)).toEqual(["slow-cheap"]);
   });
 
+  it("ranks party-total offers for multi-adult trips", () => {
+    const partyBrief: TripBrief = {
+      ...brief,
+      travellers: { adults: 3, childrenAges: [], infants: 0 }
+    };
+    const partyOffer = {
+      ...slowCheap,
+      fareBasis: "party_total" as const,
+      price: 300,
+      priceAmount: "300"
+    };
+
+    expect(rankOffers(partyBrief, profile("cheapest", [], []), [slowCheap, partyOffer]))
+      .toEqual([expect.objectContaining({ offer: partyOffer })]);
+  });
+
   it("uses inclusive 5% price and 10% duration improvement thresholds", () => {
     const previous = {
       offer: offer("previous", 100, 20_000, 0, "BA", ["BA"]),

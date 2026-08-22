@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 
 import { ApiError, updateTripBrief } from "../api";
-import type { TripPayload } from "../domain";
+import { MAX_ADULT_TRAVELLERS, type TripPayload } from "../domain";
 import { routeLabel } from "../format";
 import {
   addMultiCityLeg,
@@ -225,7 +225,26 @@ export function TripPlanEditor({
             </div>
           ) : null}
 
-          <div className="form-grid two">
+          <div className="form-grid three">
+            <label>
+              Adults
+              <input
+                type="number"
+                min={1}
+                max={MAX_ADULT_TRAVELLERS}
+                value={brief.travellers.adults}
+                onChange={(event) => setBrief({
+                  ...brief,
+                  travellers: {
+                    ...brief.travellers,
+                    adults: Math.min(
+                      MAX_ADULT_TRAVELLERS,
+                      Math.max(1, Number(event.target.value) || 1)
+                    )
+                  }
+                })}
+              />
+            </label>
             <label>
               Cabin
               <select
@@ -264,7 +283,7 @@ export function TripPlanEditor({
               />
             </label>
             <label>
-              Maximum fare
+              {brief.travellers.adults === 1 ? "Maximum fare" : "Maximum party fare"}
               <input
                 type="number"
                 min={1}

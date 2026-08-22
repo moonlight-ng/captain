@@ -37,7 +37,7 @@ export const verifiedOfferCandidateSchema = z.object({
   expiresAt: z.iso.datetime({ offset: true }).nullable().optional(),
   priceAmount: decimalAmountSchema,
   currency: currencyCodeSchema,
-  fareBasis: z.literal("one_adult_total"),
+  fareBasis: z.enum(["one_adult_total", "party_total"]),
   cabin: z.enum(["economy", "premium_economy", "business", "first"]),
   slices: z.array(verifiedSliceSchema).min(1).max(6),
   primaryAirlineCode: airlineCodeSchema,

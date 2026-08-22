@@ -102,6 +102,7 @@ describe("start_fare_digest", () => {
       monitorThrough: "2026-09-13",
       dailyUpdateHourLocal: 9,
       timeZone: "Africa/Lagos",
+      adults: 3,
       cabin: "economy",
       maxStops: 2,
       currency: "USD",
@@ -130,13 +131,14 @@ describe("start_fare_digest", () => {
       destinationAirports: ["SYD"],
       tripType: "one_way",
       departureWindow: { start: "2026-08-16", end: "2026-09-13" },
-      travellers: { adults: 1 }
+      travellers: { adults: 3 }
     });
     expect(JSON.stringify(trip?.brief)).not.toContain("HUH");
     await expect(store.getWatch(user.id, result.tripId)).resolves.toMatchObject({
       purpose: "fare_digest",
       digestHourLocal: 9,
       digestTimeZone: "Africa/Lagos",
+      digestIntro: expect.stringContaining("3-adult fares"),
       runEndsAt: "2026-09-13T23:00:00.000Z",
       nextCheckAt: "2026-08-17T08:00:00.000Z",
       checksCompleted: 0
@@ -147,7 +149,7 @@ describe("start_fare_digest", () => {
       notBeforeDate: "2026-08-16",
       request: {
         tripType: "one_way",
-        passenger: { adults: 1 },
+        passenger: { adults: 3 },
         slices: [{
           originAirports: ["LOS"],
           destinationAirports: ["SYD"],

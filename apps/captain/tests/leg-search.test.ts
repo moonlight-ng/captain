@@ -78,6 +78,23 @@ describe("manual multi-day leg search", () => {
       .map((revision) => revision.analysis.datesCompleted.length)).toEqual([0, 1, 2, 3, 4]);
   });
 
+  it("searches every multi-city leg for the trip's full adult party", async () => {
+    const store = new FakeLegSearchStore("2026-11-15", "2026-11-15", 4);
+    const provider = fakeProvider(async (request) =>
+      providerResult(request, [offer("2026-11-15", 800, 360)])
+    );
+    const service = createService(store, provider);
+
+    await service.search(USER_ID, { tripId: TRIP_ID, legId: LEG_ID });
+
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]?.passenger).toEqual({
+      adults: 4,
+      childrenAges: [],
+      infants: 0
+    });
+  });
+
   it("preserves successful dates when one exact-date provider search fails", async () => {
     const store = new FakeLegSearchStore("2026-11-15", "2026-11-18");
     const provider = fakeProvider(async (request) => {
@@ -220,7 +237,7 @@ class FakeLegSearchStore {
   createCalls = 0;
   latest: LegSearchSnapshot | null = null;
 
-  constructor(start: string, end: string) {
+  constructor(start: string, end: string, adults = 1) {
     this.trip = {
       id: TRIP_ID,
       userId: USER_ID,
@@ -233,7 +250,7 @@ class FakeLegSearchStore {
         tripType: "one_way",
         departureWindow: { start, end },
         stayNights: null,
-        travellers: { adults: 1, childrenAges: [], infants: 0 },
+        travellers: { adults, childrenAges: [], infants: 0 },
         cabin: "economy",
         maxStops: 2,
         currency: "GBP",

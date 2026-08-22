@@ -91,7 +91,10 @@ function eligibleOffer(
   profile: Pick<TravellerProfile, "excludedAirlineCodes">,
   offer: OfferSnapshot
 ): boolean {
-  if (offer.currency !== brief.currency || offer.fareBasis !== "one_adult_total") return false;
+  const expectedFareBasis = brief.travellers.adults === 1
+    ? "one_adult_total"
+    : "party_total";
+  if (offer.currency !== brief.currency || offer.fareBasis !== expectedFareBasis) return false;
   const excluded = new Set([...brief.excludedAirlines, ...profile.excludedAirlineCodes]);
   if (offer.participatingAirlineCodes.some((code) => excluded.has(code))) return false;
   return brief.maximumPrice === null || offer.price <= brief.maximumPrice;

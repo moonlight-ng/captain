@@ -16,7 +16,7 @@ seller fare—not a booking guarantee.
 The hard product limits are:
 
 - one active trip per traveller;
-- one adult, with no children or infants;
+- one to nine adults, with no children or infants;
 - USD or GBP fare tracking;
 - at most six flight legs and seven departure dates per leg;
 - at most 49 Cartesian date combinations in one plan-wide provider search.

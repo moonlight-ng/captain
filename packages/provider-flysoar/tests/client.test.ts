@@ -115,6 +115,28 @@ describe("Flysoar MCP flight provider", () => {
     });
   });
 
+  it("passes the full adult party to fallback search", async () => {
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        params: { arguments: { passengers: number } };
+      };
+      expect(body.params.arguments.passengers).toBe(4);
+      return Response.json({
+        jsonrpc: "2.0",
+        id: "party",
+        result: { structuredContent: SOAR_PAYLOAD, content: [] }
+      });
+    });
+    const provider = new FlysoarMcpFlightSearchProvider({ fetch });
+
+    const result = await provider.search({
+      ...REQUEST,
+      passenger: { adults: 4, childrenAges: [], infants: 0 }
+    });
+
+    expect(result.offers[0]?.fareBasis).toBe("party_total");
+  });
+
   it("searches every exact date when it receives a fallback window", async () => {
     const dates: string[] = [];
     const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

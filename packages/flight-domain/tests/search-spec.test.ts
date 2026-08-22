@@ -26,6 +26,19 @@ describe("shared Duffel search specifications", () => {
     expect(request.passenger).toEqual({ adults: 1, childrenAges: [], infants: 0 });
   });
 
+  it("keeps the confirmed adult count in every provider request", () => {
+    const [spec] = buildSearchSpecs({
+      ...brief,
+      travellers: { adults: 4, childrenAges: [], infants: 0 }
+    });
+
+    expect(spec?.request.passenger).toEqual({
+      adults: 4,
+      childrenAges: [],
+      infants: 0
+    });
+  });
+
   it("uses one bounded specification for a Trip", () => {
     expect(buildSearchSpecs({
       ...brief,
