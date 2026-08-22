@@ -400,7 +400,11 @@ function searchRequest(
       departureEnd: date
     }],
     stayNights: null,
-    passenger: { adults: 1, childrenAges: [], infants: 0 },
+    passenger: {
+      adults: trip.brief.travellers.adults,
+      childrenAges: [...trip.brief.travellers.childrenAges],
+      infants: trip.brief.travellers.infants
+    },
     cabin: trip.brief.cabin,
     maxConnections: trip.brief.maxStops,
     currency: trip.brief.currency,

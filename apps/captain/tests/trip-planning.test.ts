@@ -1326,16 +1326,20 @@ describe("Captain trip planning", () => {
     expect(corrected.draft.confirmationSnapshot?.departureDate).toBe("2026-09-06");
   });
 
-  it("does not silently create a multi-traveller trip in the one-adult beta", async () => {
+  it("prepares a fare search for multiple adults", async () => {
     const { planning, trips, user } = await setup();
     const result = await planning.prepare(
       user.id,
       "Create a one-way trip from Lagos to New York on August 17 2025 for two adults."
     );
-    expect(result.status).toBe("needs_input");
-    if (result.status !== "needs_input") throw new Error("Expected one-adult clarification");
-    expect(result.prompt).toContain("exactly one adult");
-    expect(result.missingFields).toContain("travellers");
+    expect(result.status).toBe("awaiting_confirmation");
+    if (result.status !== "awaiting_confirmation") throw new Error("Expected confirmation");
+    expect(result.draft.confirmationSnapshot?.input.brief.travellers).toEqual({
+      adults: 2,
+      childrenAges: [],
+      infants: 0
+    });
+    expect(result.confirmation).toContain("Travellers: 2");
     expect(await trips.list(user.id)).toHaveLength(0);
   });
 

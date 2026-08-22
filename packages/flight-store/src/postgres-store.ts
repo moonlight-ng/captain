@@ -3494,7 +3494,7 @@ type OfferRow = {
   id: string; search_run_id: string; search_spec_id: string; itinerary_key: string;
   provider: FlightSearchProviderId; provider_offer_id: string; provider_search_id: string;
   price: string | number; currency: string; expires_at: Date | null; observed_at: Date;
-  fare_basis: "one_adult_total"; primary_airline_code: string;
+  fare_basis: OfferSnapshot["fareBasis"]; primary_airline_code: string;
   participating_airline_codes: string[];
   evidence: OfferSnapshot["evidence"];
   discovery_response_id: string; verification_response_id: string;

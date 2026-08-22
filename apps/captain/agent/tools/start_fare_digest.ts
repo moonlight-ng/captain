@@ -1,5 +1,6 @@
 import { defineTool } from "eve/tools";
 import {
+  MAX_ADULT_TRAVELLERS,
   buildSearchSpecs,
   formatTripRoute,
   type Trip,
@@ -25,6 +26,7 @@ export const startFareDigestInputSchema = z.object({
   monitorThrough: z.iso.date().optional(),
   dailyUpdateHourLocal: z.number().int().min(0).max(23).default(9),
   timeZone: z.string().trim().min(1).max(100).optional(),
+  adults: z.number().int().min(1).max(MAX_ADULT_TRAVELLERS).default(1),
   cabin: z.enum(["economy", "premium_economy", "business", "first"]).default("economy"),
   maxStops: z.number().int().min(0).max(2).default(2),
   currency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/u).optional(),
@@ -51,7 +53,7 @@ export default defineTool({
     "Start or repair an opt-in daily fare digest for a broad route and departure-date window.",
     "Use this when the traveller wants a daily market update, cheapest-fare summary, or recurring route research without choosing a flight.",
     "This is not prepare_trip and not a selected-flight price watch: connections remain inside returned flight options and never become itinerary legs.",
-    "Use one adult and one-way travel unless the traveller explicitly asked for another supported digest shape.",
+    "Use one adult and one-way travel by default; pass the requested adult count when the traveller is searching for a group.",
     "Supply the dates already given, use 09:00 in the traveller’s timezone when they did not name a time, and do not ask a confirmation question.",
     "The tool replaces a conflicting active trip, queues the first verified search immediately, and then runs every local day through monitorThrough.",
     "After it succeeds, do not invent prices or send another setup explanation: the first verified Telegram digest says what was fixed, summarizes current prices, promises tomorrow’s update, and includes Browse trip."
@@ -91,7 +93,7 @@ export default defineTool({
         departureWindow: input.departureWindow,
         stayNights: null,
         legs: [],
-        travellers: { adults: 1, childrenAges: [], infants: 0 },
+        travellers: { adults: input.adults, childrenAges: [], infants: 0 },
         cabin: input.cabin,
         maxStops: input.maxStops,
         currency: input.currency ?? profile.defaultCurrency,
@@ -133,7 +135,13 @@ export default defineTool({
           hourLocal: input.dailyUpdateHourLocal,
           timeZone,
           monitorThrough,
-          intro: digestIntro(origin, destination, removedDestinations, input.connectionExamples)
+          intro: digestIntro(
+            origin,
+            destination,
+            input.adults,
+            removedDestinations,
+            input.connectionExamples
+          )
         },
         new Date()
       );
@@ -161,6 +169,7 @@ function digestContext(connectionExamples: string[], monitorThrough: string): st
 function digestIntro(
   origin: string,
   destination: string,
+  adults: number,
   removedDestinations: string[],
   connectionExamples: string[]
 ): string {
@@ -170,7 +179,7 @@ function digestIntro(
   const connection = connectionExamples.length > 0
     ? `${connectionExamples.join(" and ")} will only appear when ${connectionExamples.length === 1 ? "it’s a connection" : "they’re connections"} within a flight.`
     : "Connections will stay within each flight option; they won’t be added as destinations.";
-  return `Fixed — ${correction} to one-adult fares from ${origin} to ${destination}. ${connection}`;
+  return `Fixed — ${correction} to ${adults}-adult fares from ${origin} to ${destination}. ${connection}`;
 }
 
 function removedRouteStops(trip: Trip, origin: string, destination: string): string[] {

@@ -182,7 +182,7 @@ structure can be verified before the simplified view is enabled.
 ## Public beta limits
 
 - Maximum 25 travellers.
-- One active trip and one adult in USD or GBP.
+- One active trip for up to nine adults in USD or GBP.
 - Up to seven departure dates per leg search.
 - Independent city-pair searches; bundled multi-city fares are not compared.
 - Automatic fare watches and material-change alerts after plan confirmation;

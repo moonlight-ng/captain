@@ -368,8 +368,7 @@ export class TripPlanningService {
     const unsupportedParty = Boolean(
       state.travellers
       && (
-        state.travellers.adults !== 1
-        || state.travellers.childrenAges.length > 0
+        state.travellers.childrenAges.length > 0
         || state.travellers.infants !== 0
       )
     );
@@ -417,7 +416,7 @@ export class TripPlanningService {
       ? tripLimitReached
         ? replacementPrompt(activeTrips[0]!, confirmationSnapshot!)
         : [unsupportedParty
-            ? "Captain’s beta currently tracks fares for exactly one adult. Reply “just me” to continue, or cancel this trip."
+            ? "Captain currently searches adult fares only. Tell me how many adults are travelling, or cancel this trip."
             : unsupportedCurrency
               ? SUPPORTED_CURRENCY_MESSAGE
               : questionLimitReached

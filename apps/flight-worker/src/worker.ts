@@ -158,9 +158,9 @@ export class FlightWorker {
             stops: metrics.stops,
             durationSeconds: metrics.durationSeconds,
             conditions: {
-              fareBasis: result.provider === "official_duffel"
-                ? "One-adult Duffel total converted into trip currency when needed"
-                : "One-adult Flysoar total converted into trip currency when needed"
+              fareBasis: `${run.request.passenger.adults}-adult ${
+                result.provider === "official_duffel" ? "Duffel" : "Flysoar"
+              } party total converted into trip currency when needed`
             },
             segments: metrics.segments,
             slices: offer.slices

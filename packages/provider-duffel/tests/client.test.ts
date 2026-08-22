@@ -67,6 +67,53 @@ describe("DuffelFlightSearchProvider", () => {
     expect(result.promptVersion).toBe("duffel-exhaustive-window-v3");
   });
 
+  it("submits every adult and marks the returned amount as a party total", async () => {
+    let submittedPassengers: Array<{ type: string }> = [];
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/air/offer_requests")) {
+        const body = JSON.parse(String(init?.body)) as {
+          data: { passengers: Array<{ type: string }> };
+        };
+        submittedPassengers = body.data.passengers;
+        return Response.json({ data: { id: "orq_party" } });
+      }
+      return Response.json({
+        data: [testOffer("off_party", [{
+          origin: "SFO",
+          destination: "JFK",
+          date: "2026-09-01"
+        }])],
+        meta: { after: null }
+      });
+    });
+    const provider = new DuffelFlightSearchProvider({ accessToken: "test", fetch });
+
+    const result = await provider.search({
+      ...testRequest([{
+        originAirports: ["SFO"],
+        destinationAirports: ["NYC"],
+        departureStart: "2026-09-01",
+        departureEnd: "2026-09-01"
+      }]),
+      passenger: { adults: 3, childrenAges: [], infants: 0 }
+    });
+
+    expect(submittedPassengers).toEqual([
+      { type: "adult" },
+      { type: "adult" },
+      { type: "adult" }
+    ]);
+    expect(result.offers[0]?.fareBasis).toBe("party_total");
+    const soloResult = await provider.search(testRequest([{
+      originAirports: ["SFO"],
+      destinationAirports: ["NYC"],
+      departureStart: "2026-09-01",
+      departureEnd: "2026-09-01"
+    }]));
+    expect(soloResult.offers[0]?.itineraryKey)
+      .not.toBe(result.offers[0]?.itineraryKey);
+  });
+
   it("searches the Cartesian product of multi-city departure windows", async () => {
     const requestedCombinations: string[][] = [];
     const requestDates = new Map<string, string[]>();
