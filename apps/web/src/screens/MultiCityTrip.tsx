@@ -38,7 +38,8 @@ import {
 import {
   bestOffer,
   planTimelineItems,
-  tripDateSpan
+  tripDateSpan,
+  uniqueCityCount
 } from "../multi-city-view";
 
 type SearchProgress = Record<string, LegSearchSnapshot>;
@@ -64,6 +65,7 @@ export function MultiCityTripOverview(props: SharedTripProps) {
   const legs = sort(props.legs);
   const byId = new Map(cities.map((city) => [city.id, city]));
   const span = tripDateSpan(cities, legs);
+  const cityCount = uniqueCityCount(cities);
 
   return (
     <section className="multi-city-page">
@@ -71,7 +73,7 @@ export function MultiCityTripOverview(props: SharedTripProps) {
         <p className="eyebrow">Your trip</p>
         <h1>{props.trip.title}</h1>
         <p>
-          {cities.length} {cities.length === 1 ? "city" : "cities"}
+          {cityCount} {cityCount === 1 ? "city" : "cities"}
           {" · "}
           {legs.length} {legs.length === 1 ? "flight" : "flights"}
           {span ? ` · ${span}` : ""}
@@ -112,12 +114,13 @@ export function MultiCityPlanSummary({
 }: Pick<SharedTripProps, "cities" | "legs" | "trip">) {
   const cities = sort(unsortedCities);
   const legs = sort(unsortedLegs);
+  const cityCount = uniqueCityCount(cities);
 
   return (
     <header className="plan-summary">
       <p>{label(trip.status)}</p>
       <p>
-        {cities.length} {cities.length === 1 ? "city" : "cities"}
+        {cityCount} {cityCount === 1 ? "city" : "cities"}
         {" · "}
         {legs.length} {legs.length === 1 ? "flight" : "flights"}
       </p>
