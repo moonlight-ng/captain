@@ -18,7 +18,8 @@ import {
   groupFlightsByDate,
   planTimelineItems,
   priceDateStatus,
-  tripDateSpan
+  tripDateSpan,
+  uniqueCityCount
 } from "../src/multi-city-view.js";
 
 describe("multi-city web view models", () => {
@@ -31,6 +32,16 @@ describe("multi-city web view models", () => {
     const legs: TripCityLeg[] = [leg("leg-1", 0, "nairobi", "entebbe", "2026-11-15", "2026-11-18")];
 
     expect(tripDateSpan(cities, legs)).toBe("Nov 15, 2026 – Dec 10, 2026");
+  });
+
+  it("counts a returning origin once in the city total", () => {
+    const cities = [
+      city("birmingham-outbound", 0, null, { start: "2026-10-24", end: "2026-10-24" }, ["BHX"]),
+      city("zurich", 1, { start: "2026-10-24", end: "2026-10-24" }, { start: "2026-10-29", end: "2026-10-29" }, ["ZRH"]),
+      city("birmingham-return", 2, { start: "2026-10-29", end: "2026-10-29" }, null, ["BHX"])
+    ];
+
+    expect(uniqueCityCount(cities)).toBe(2);
   });
 
   it("keeps single flight dates separate from in-between event windows", () => {
@@ -134,14 +145,15 @@ function city(
   id: string,
   position: number,
   arrivalWindow: TripCity["arrivalWindow"],
-  departureWindow: TripCity["departureWindow"]
+  departureWindow: TripCity["departureWindow"],
+  airportCodes: string[] = ["AAA"]
 ): TripCity {
   return {
     id,
     tripId: "trip-1",
     position,
     label: id,
-    airportCodes: ["AAA"],
+    airportCodes,
     arrivalWindow,
     departureWindow
   };

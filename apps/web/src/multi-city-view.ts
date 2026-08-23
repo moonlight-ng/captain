@@ -29,6 +29,11 @@ export function tripDateSpan(cities: TripCity[], legs: TripCityLeg[]): string | 
   return dates.length > 0 ? dateRangeLabel(dates[0]!, dates.at(-1)!) : null;
 }
 
+/** Count physical cities, rather than route occurrences such as BHX → ZRH → BHX. */
+export function uniqueCityCount(cities: TripCity[]): number {
+  return new Set(cities.map((city) => [...city.airportCodes].sort().join("|"))).size;
+}
+
 /**
  * Keep flight points and the date-range context between them visually
  * distinct. The first city contributes its departure; every later city
