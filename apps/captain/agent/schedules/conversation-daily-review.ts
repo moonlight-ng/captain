@@ -8,6 +8,7 @@ export default defineSchedule({
   cron: "15 6 * * *",
   async run() {
     const services = await getCaptainServices();
+    if (services.env.archivedMode) return;
     if (!services.env.conversationReviewEnabled) return;
     if (!services.conversationReview) {
       logEvent("warn", "captain.conversation_review_skipped", {

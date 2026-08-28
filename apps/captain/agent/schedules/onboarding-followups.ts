@@ -8,6 +8,7 @@ export default defineSchedule({
   cron: "*/5 * * * *",
   async run() {
     const services = await getCaptainServices();
+    if (services.env.archivedMode) return;
     if (!services.env.telegramBotToken) {
       logEvent("warn", "captain.onboarding_followup_skipped", {
         reason: "telegram_not_configured"

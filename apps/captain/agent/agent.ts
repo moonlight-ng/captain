@@ -6,6 +6,9 @@ export default defineAgent({
     fallback: "anthropic/claude-sonnet-5",
     events: { "session.started": () => process.env.AI_MODEL?.trim() || null }
   }),
+  // The current AI Gateway catalog does not publish this preview model's
+  // limits. Eve needs the explicit window to compile the compaction trigger.
+  modelContextWindowTokens: 1_000_000,
   modelOptions: {
     providerOptions: {
       gateway: {

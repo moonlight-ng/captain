@@ -18,6 +18,11 @@ import { ZodError, z } from "zod";
 
 import { getCaptainServices } from "../../services/app/services.js";
 import {
+  CAPTAIN_ARCHIVED_ERROR,
+  CAPTAIN_ARCHIVED_MESSAGE,
+  isCaptainArchivedMode
+} from "../../services/app/archive.js";
+import {
   FeedbackBridgeUnavailableError,
   FeedbackDeliveryError
 } from "../../services/feedback/telegram-bridge.js";
@@ -34,22 +39,26 @@ const PUBLIC_DIST_FILE = /^[a-zA-Z0-9._-]+\.(?:avif|gif|ico|jpe?g|png|svg|webp|w
 export default defineChannel({
   kindHint: "captain-api",
   routes: [
-    GET("/health", async () => Response.json({ status: "ok" })),
+    GET("/health", async () => Response.json({
+      status: "ok",
+      mode: isCaptainArchivedMode() ? "archived" : "active"
+    })),
     GET("/ready", readiness),
-    GET("/trips", serveIndex),
-    GET("/trip", serveIndex),
-    GET("/trip/:id", serveIndex),
-    GET("/trip/:id/settings", serveIndex),
-    GET("/trip/:id/leg/:legId", serveIndex),
-    GET("/trip/:id/flight/:itineraryKey", serveIndex),
-    GET("/trip/:id/flight/:itineraryKey/book", serveIndex),
-    GET("/flight/:flightKey", serveIndex),
-    GET("/profile", serveIndex),
-    GET("/feedback", serveIndex),
-    GET("/settings", serveIndex),
-    GET("/preferences", serveIndex),
-    GET("/travellers", serveIndex),
-    GET("/payment", serveIndex),
+    GET("/", servePublicIndex),
+    GET("/trips", servePublicIndex),
+    GET("/trip", servePublicIndex),
+    GET("/trip/:id", servePublicIndex),
+    GET("/trip/:id/settings", servePublicIndex),
+    GET("/trip/:id/leg/:legId", servePublicIndex),
+    GET("/trip/:id/flight/:itineraryKey", servePublicIndex),
+    GET("/trip/:id/flight/:itineraryKey/book", servePublicIndex),
+    GET("/flight/:flightKey", servePublicIndex),
+    GET("/profile", servePublicIndex),
+    GET("/feedback", servePublicIndex),
+    GET("/settings", servePublicIndex),
+    GET("/preferences", servePublicIndex),
+    GET("/travellers", servePublicIndex),
+    GET("/payment", servePublicIndex),
     GET("/admin", serveIndex),
     GET("/admin/conversations", serveIndex),
     GET("/admin/conversations/:id", serveIndex),
@@ -81,7 +90,7 @@ export default defineChannel({
     POST("/api/me/trip/legs/:legId/searches", authenticatedMutation(startTripLegSearch)),
     GET("/api/me/trip/legs/:legId/searches/:searchId", authenticated(getTripLegSearch)),
     POST("/api/me/trip/legs/:legId/selection", authenticatedMutation(setTripLegSelection)),
-    GET("/api/flights/:flightKey", safely(getCanonicalFlight)),
+    GET("/api/flights/:flightKey", availableWhenActive(safely(getCanonicalFlight))),
     DELETE("/api/me/account", authenticatedMutation(requireSession(deleteAccount))),
     // After SPA/API routes so `/trip` etc. keep winning; only extensioned
     // public files from `dist/` (Vite's copy of `apps/web/public`) land here.
@@ -141,6 +150,12 @@ function safely(handler: Handler): Handler {
   };
 }
 
+function availableWhenActive(handler: Handler): Handler {
+  return async (request, context) => isCaptainArchivedMode()
+    ? archivedApiResponse()
+    : handler(request, context);
+}
+
 function authenticated(handler: UserHandler): Handler {
   return safely(async (request, context) => {
     const services = await getCaptainServices();
@@ -154,17 +169,19 @@ function authenticated(handler: UserHandler): Handler {
     if (!user || user.status !== "active") {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
-    await services.platformStore.disableOnboardingFollowups(
-      auth.userId,
-      "workspace_opened",
-      new Date()
-    );
+    if (!services.env.archivedMode) {
+      await services.platformStore.disableOnboardingFollowups(
+        auth.userId,
+        "workspace_opened",
+        new Date()
+      );
+    }
     return handler(request, context, auth.userId, auth);
   });
 }
 
 function authenticatedMutation(handler: UserHandler): Handler {
-  return authenticated(async (request, context, userId, auth) => {
+  return availableWhenActive(authenticated(async (request, context, userId, auth) => {
     const services = await getCaptainServices();
     // Cookie sessions make a missing Origin exploitable (cross-site POSTs without
     // Origin used to pass). SameSite=Lax + mandatory Origin match + JSON-only bodies
@@ -174,7 +191,7 @@ function authenticatedMutation(handler: UserHandler): Handler {
       return Response.json({ error: "invalid_origin" }, { status: 403 });
     }
     return handler(request, context, userId, auth);
-  });
+  }));
 }
 
 function adminAuthenticated(handler: AdminHandler): Handler {
@@ -225,7 +242,7 @@ async function adminOverview(): Promise<Response> {
     agent: {
       name: "Captain",
       environment: "production",
-      status: "operational",
+      status: services.env.archivedMode ? "archived" : "operational",
       model: services.env.aiModel,
       lastActivityAt: overview.lastActivityAt,
       activeTurns: overview.activeTurns
@@ -355,7 +372,8 @@ async function readiness(): Promise<Response> {
     const services = await getCaptainServices();
     return Response.json({
       status: "ready",
-      storage: services.env.databaseUrl ? "postgres" : "memory"
+      storage: services.env.databaseUrl ? "postgres" : "memory",
+      mode: services.env.archivedMode ? "archived" : "active"
     });
   } catch {
     return Response.json({ status: "unavailable" }, { status: 503 });
@@ -777,6 +795,52 @@ async function serveIndex(): Promise<Response> {
   }
 }
 
+async function servePublicIndex(): Promise<Response> {
+  if (!isCaptainArchivedMode()) return serveIndex();
+  return new Response(archivedPage(), {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "x-robots-tag": "noindex, nofollow"
+    }
+  });
+}
+
+function archivedApiResponse(): Response {
+  return Response.json(
+    { error: CAPTAIN_ARCHIVED_ERROR, message: CAPTAIN_ARCHIVED_MESSAGE },
+    { status: 410, headers: noStore() }
+  );
+}
+
+function archivedPage(): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Captain has closed</title>
+  <style>
+    :root { color-scheme: light; font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f5f1e8; color: #1e2928; }
+    main { width: min(34rem, calc(100% - 3rem)); padding: 3rem 0; }
+    p:first-child { margin: 0 0 1.25rem; font-size: .78rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: #5c6b68; }
+    h1 { margin: 0; font: 500 clamp(2.4rem, 8vw, 4.5rem)/.98 Georgia, serif; letter-spacing: -.04em; }
+    p:last-child { margin: 1.5rem 0 0; max-width: 30rem; font-size: 1.08rem; line-height: 1.65; color: #53605e; }
+  </style>
+</head>
+<body>
+  <main>
+    <p>Captain</p>
+    <h1>This journey has ended.</h1>
+    <p>${CAPTAIN_ARCHIVED_MESSAGE}</p>
+  </main>
+</body>
+</html>`;
+}
+
 async function serveAsset(
   _request: Request,
   context: RouteContext
@@ -803,6 +867,9 @@ async function serveDistRootFile(
   context: RouteContext
 ): Promise<Response> {
   const file = context.params.file;
+  if (file === "index.html" && isCaptainArchivedMode()) {
+    return servePublicIndex();
+  }
   if (!file || file === "index.html" || !PUBLIC_DIST_FILE.test(file)) {
     return new Response("Not found", { status: 404 });
   }

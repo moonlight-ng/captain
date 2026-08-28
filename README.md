@@ -1,5 +1,10 @@
 # Captain
 
+> **Archived revision:** this revision puts Captain into a reversible shutdown
+> state when deployed. It preserves historical data and admin access while
+> closing traveller flows and stopping recurring work. See
+> [the archive runbook](docs/archive-runbook.md).
+
 Captain is a private Moonlight repository for a Telegram-first multi-city trip
 planner and real-time flight search product.
 

@@ -16,12 +16,26 @@ describe("Captain public environment", () => {
     vi.stubEnv("CAPTAIN_BETA_USER_LIMIT", undefined);
     vi.stubEnv("CAPTAIN_PUBLIC_BETA_ENABLED", undefined);
     vi.stubEnv("CAPTAIN_SIMPLIFIED_MULTI_CITY_ENABLED", undefined);
+    vi.stubEnv("CAPTAIN_ARCHIVED_MODE", undefined);
     expect(loadEnv()).toMatchObject({
       mode: "production",
       betaUserLimit: 25,
       publicBetaEnabled: false,
       simplifiedMultiCityEnabled: false,
       adminEmails: ["admin@example.com", "ops@example.com"]
+    });
+  });
+
+  it("forces public and scheduled work off in archived mode", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("CAPTAIN_ARCHIVED_MODE", "true");
+    vi.stubEnv("CAPTAIN_PUBLIC_BETA_ENABLED", "true");
+    vi.stubEnv("CAPTAIN_CONVERSATION_REVIEW_ENABLED", "true");
+
+    expect(loadEnv()).toMatchObject({
+      archivedMode: true,
+      publicBetaEnabled: false,
+      conversationReviewEnabled: false
     });
   });
 

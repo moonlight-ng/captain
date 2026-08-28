@@ -8,7 +8,7 @@ import {
 } from "@agents/provider-flysoar";
 import { TelegramLanguageService } from "@agents/telegram-core";
 
-import { loadWorkerEnv } from "./env.js";
+import { assertWorkerArchiveOverride, loadWorkerEnv } from "./env.js";
 import { FlightWorker } from "./worker.js";
 
 const env = loadWorkerEnv({
@@ -18,6 +18,7 @@ const env = loadWorkerEnv({
   FLIGHT_WORKER_CLAIM_LIMIT: process.env.FLIGHT_WORKER_CLAIM_LIMIT ?? "4",
   FLIGHT_WORKER_LEASE_MS: process.env.FLIGHT_WORKER_LEASE_MS ?? "600000"
 });
+assertWorkerArchiveOverride();
 
 const sql = postgres(env.databaseUrl, { max: 1, ssl: "require" });
 const forced = await sql`

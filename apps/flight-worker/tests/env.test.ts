@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { idleTickDelayMs, loadWorkerEnv } from "../src/env.js";
+import {
+  assertWorkerArchiveOverride,
+  idleTickDelayMs,
+  loadWorkerEnv
+} from "../src/env.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgresql://captain",
@@ -27,5 +31,24 @@ describe("flight worker idle schedule", () => {
     expect(env.tickMs).toBe(120_000);
     expect(env.maxIdleTickMs).toBe(120_000);
     expect(env.flysoarMcpUrl).toBe("https://mcp.flysoar.ai/mcp");
+  });
+
+  it("forces tracking off when the project is archived", () => {
+    const env = loadWorkerEnv({
+      ...REQUIRED_ENV,
+      CAPTAIN_ARCHIVED_MODE: "true",
+      TRACKING_KILL_SWITCH: "false"
+    });
+    expect(env.archivedMode).toBe(true);
+    expect(env.trackingEnabled).toBe(false);
+  });
+
+  it("requires an explicit override for archived manual provider scripts", () => {
+    expect(() => assertWorkerArchiveOverride({ CAPTAIN_ARCHIVED_MODE: "true" }))
+      .toThrow("Captain is archived");
+    expect(() => assertWorkerArchiveOverride({
+      CAPTAIN_ARCHIVED_MODE: "true",
+      CAPTAIN_ARCHIVE_OVERRIDE: "true"
+    })).not.toThrow();
   });
 });

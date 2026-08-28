@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { OfferSnapshot } from "@agents/flight-domain";
 import type { RecommendationSnapshot } from "@agents/flight-store";
@@ -25,10 +25,12 @@ import {
   promoteVoiceTranscriptToTelegramTurn,
   renderTelegramAssistantMessage,
   repliedToTelegramMessageId,
+  replyIfCaptainArchived,
   returningTravellerWelcome,
   telegramCommandName,
   tripPlanReviewReplyMarkup
 } from "../agent/channels/telegram.js";
+import { CAPTAIN_ARCHIVED_MESSAGE } from "../services/app/archive.js";
 import {
   explainNotification,
   explainRecommendation
@@ -40,6 +42,15 @@ import {
 } from "../services/onboarding/followups.js";
 
 describe("Telegram profile onboarding", () => {
+  it("answers every archived Telegram message without entering an active flow", async () => {
+    const post = vi.fn(async () => undefined);
+    await expect(replyIfCaptainArchived({ post }, {
+      CAPTAIN_ARCHIVED_MODE: "true"
+    })).resolves.toBe(true);
+    expect(post).toHaveBeenCalledOnce();
+    expect(post).toHaveBeenCalledWith(CAPTAIN_ARCHIVED_MESSAGE);
+  });
+
   it("keeps the original Captain identity during automatic session-budget continuation", () => {
     const initiator = {
       attributes: { captain_user_id: "captain-user-1" }

@@ -41,6 +41,10 @@ import {
 } from "@agents/flight-store";
 
 import { getCaptainServices } from "../../services/app/services.js";
+import {
+  CAPTAIN_ARCHIVED_MESSAGE,
+  isCaptainArchivedMode
+} from "../../services/app/archive.js";
 import { clearTelegramOwnerContext } from "../../services/agent/owner-context.js";
 import { learnLanguageFromDeliveredExchange } from "../../services/agent/language-preference.js";
 import {
@@ -287,6 +291,7 @@ export default telegramChannel({
   uploadPolicy: { maxBytes: MAX_VOICE_BYTES, allowedMediaTypes: ["audio/*"] },
   async onMessage(ctx, message) {
     if (!privateHumanMessage(message)) return null;
+    if (await replyIfCaptainArchived(ctx.telegram)) return null;
     const telegramUserId = safeId(message.from!.id);
     const telegramChatId = safeId(message.chat.id);
     const messageId = safeId(message.messageId);
@@ -609,6 +614,14 @@ export default telegramChannel({
   },
   async onCallbackQuery(ctx, query) {
     if (!privateHumanCallback(query)) return;
+    if (isCaptainArchivedMode()) {
+      await ctx.telegram.answerCallbackQuery({
+        callbackQueryId: query.id,
+        text: "Captain is closed and no longer accepts trip changes."
+      });
+      await ctx.telegram.post(CAPTAIN_ARCHIVED_MESSAGE);
+      return;
+    }
     const action = parseTripPlanCallback(query.data);
     if (!action) return;
     const telegramUserId = safeId(query.from.id);
@@ -951,6 +964,15 @@ export default telegramChannel({
     }
   }
 });
+
+export async function replyIfCaptainArchived(
+  telegram: { post(message: string): Promise<unknown> },
+  source: NodeJS.ProcessEnv = process.env
+): Promise<boolean> {
+  if (!isCaptainArchivedMode(source)) return false;
+  await telegram.post(CAPTAIN_ARCHIVED_MESSAGE);
+  return true;
+}
 
 async function postNewUserOnboarding(
   ctx: TelegramContext,
