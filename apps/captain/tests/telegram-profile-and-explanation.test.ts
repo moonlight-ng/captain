@@ -30,7 +30,7 @@ import {
   telegramCommandName,
   tripPlanReviewReplyMarkup
 } from "../agent/channels/telegram.js";
-import { CAPTAIN_ARCHIVED_MESSAGE } from "../services/app/archive.js";
+import { CAPTAIN_ARCHIVED_TELEGRAM_MESSAGE } from "../services/app/archive.js";
 import {
   explainNotification,
   explainRecommendation
@@ -48,7 +48,7 @@ describe("Telegram profile onboarding", () => {
       CAPTAIN_ARCHIVED_MODE: "true"
     })).resolves.toBe(true);
     expect(post).toHaveBeenCalledOnce();
-    expect(post).toHaveBeenCalledWith(CAPTAIN_ARCHIVED_MESSAGE);
+    expect(post).toHaveBeenCalledWith(CAPTAIN_ARCHIVED_TELEGRAM_MESSAGE);
   });
 
   it("keeps the original Captain identity during automatic session-budget continuation", () => {

@@ -30,7 +30,9 @@ describe("Captain archived HTTP surface", () => {
     const response = await invoke("/trips");
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(await response.text()).toContain("This journey has ended.");
+    const body = await response.text();
+    expect(body).toContain("This journey has ended.");
+    expect(body).toContain('href="https://opemipo.com/2026/08/28/agents-09/"');
   });
 
   it("closes the root and direct index entry points too", async () => {
@@ -43,7 +45,10 @@ describe("Captain archived HTTP surface", () => {
   it("rejects traveller mutations before authentication or storage", async () => {
     const response = await invoke("/api/me/trip/actions", { method: "POST" });
     expect(response.status).toBe(410);
-    expect(await response.json()).toMatchObject({ error: "captain_archived" });
+    expect(await response.json()).toMatchObject({
+      error: "captain_archived",
+      closingPostUrl: "https://opemipo.com/2026/08/28/agents-09/"
+    });
   });
 
   it("retires the public canonical-flight API so stale fares are not presented as live", async () => {

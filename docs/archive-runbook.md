@@ -9,8 +9,8 @@ deploy. It does not cover the separate public website project.
 After both Fly apps are deployed from this revision:
 
 - Telegram text, voice notes, commands, and old trip buttons receive one short
-  closure response. They do not create a traveller, write a message, start an
-  Eve turn, call a model, or change a trip.
+  closure response with a link to the public closing post. They do not create a
+  traveller, write a message, start an Eve turn, call a model, or change a trip.
 - Traveller web routes render a no-cache closure page. Authenticated read APIs
   remain available for controlled recovery and data inspection, while every
   traveller mutation returns HTTP `410` with `captain_archived`.
