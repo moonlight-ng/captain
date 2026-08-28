@@ -42,7 +42,7 @@ import {
 
 import { getCaptainServices } from "../../services/app/services.js";
 import {
-  CAPTAIN_ARCHIVED_MESSAGE,
+  CAPTAIN_ARCHIVED_TELEGRAM_MESSAGE,
   isCaptainArchivedMode
 } from "../../services/app/archive.js";
 import { clearTelegramOwnerContext } from "../../services/agent/owner-context.js";
@@ -619,7 +619,7 @@ export default telegramChannel({
         callbackQueryId: query.id,
         text: "Captain is closed and no longer accepts trip changes."
       });
-      await ctx.telegram.post(CAPTAIN_ARCHIVED_MESSAGE);
+      await ctx.telegram.post(CAPTAIN_ARCHIVED_TELEGRAM_MESSAGE);
       return;
     }
     const action = parseTripPlanCallback(query.data);
@@ -970,7 +970,7 @@ export async function replyIfCaptainArchived(
   source: NodeJS.ProcessEnv = process.env
 ): Promise<boolean> {
   if (!isCaptainArchivedMode(source)) return false;
-  await telegram.post(CAPTAIN_ARCHIVED_MESSAGE);
+  await telegram.post(CAPTAIN_ARCHIVED_TELEGRAM_MESSAGE);
   return true;
 }
 

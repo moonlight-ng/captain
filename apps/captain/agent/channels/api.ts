@@ -20,6 +20,7 @@ import { getCaptainServices } from "../../services/app/services.js";
 import {
   CAPTAIN_ARCHIVED_ERROR,
   CAPTAIN_ARCHIVED_MESSAGE,
+  CAPTAIN_CLOSING_POST_URL,
   isCaptainArchivedMode
 } from "../../services/app/archive.js";
 import {
@@ -809,7 +810,11 @@ async function servePublicIndex(): Promise<Response> {
 
 function archivedApiResponse(): Response {
   return Response.json(
-    { error: CAPTAIN_ARCHIVED_ERROR, message: CAPTAIN_ARCHIVED_MESSAGE },
+    {
+      error: CAPTAIN_ARCHIVED_ERROR,
+      message: CAPTAIN_ARCHIVED_MESSAGE,
+      closingPostUrl: CAPTAIN_CLOSING_POST_URL
+    },
     { status: 410, headers: noStore() }
   );
 }
@@ -835,7 +840,7 @@ function archivedPage(): string {
   <main>
     <p>Captain</p>
     <h1>This journey has ended.</h1>
-    <p>${CAPTAIN_ARCHIVED_MESSAGE}</p>
+    <p>${CAPTAIN_ARCHIVED_MESSAGE} <a href="${CAPTAIN_CLOSING_POST_URL}">Read why Captain closed.</a></p>
   </main>
 </body>
 </html>`;
