@@ -27,6 +27,35 @@ describe("flight worker orchestration", () => {
     vi.useRealTimers();
   });
 
+  it("does no database, provider, or notification work in archived mode", async () => {
+    const store = new MemoryCaptainPlatformStore();
+    const prune = vi.spyOn(store, "pruneWatchData");
+    const dueWork = vi.spyOn(store, "hasDueWorkerWork");
+    const search = vi.fn();
+    const worker = new FlightWorker({
+      store,
+      provider: { provider: "official_duffel", search } as unknown as FlightSearchProvider,
+      telegramBotToken: "test",
+      captainPublicUrl: "https://captain.example.com",
+      trackingEnabled: false,
+      archivedMode: true,
+      workerId: "worker-1",
+      leaseMs: 240_000,
+      freshnessMs: 900_000,
+      claimLimit: 1
+    });
+
+    await expect(worker.tick()).resolves.toEqual({
+      scheduled: 0,
+      processed: 0,
+      notified: 0
+    });
+    expect(worker.lastTickHadDueWork).toBe(false);
+    expect(prune).not.toHaveBeenCalled();
+    expect(dueWork).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
+  });
+
   it("uses only the due-work gate while the worker is idle", async () => {
     const store = new MemoryCaptainPlatformStore();
     const prune = vi.spyOn(store, "pruneWatchData");

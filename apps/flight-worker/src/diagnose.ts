@@ -1,6 +1,10 @@
 import type { SearchSpecRequest } from "@agents/flight-domain";
 import { DuffelFlightSearchProvider } from "@agents/provider-duffel";
 
+import { assertWorkerArchiveOverride } from "./env.js";
+
+assertWorkerArchiveOverride();
+
 const accessToken = process.env.DUFFEL_ACCESS_TOKEN?.trim();
 if (!accessToken) throw new Error("DUFFEL_ACCESS_TOKEN is required");
 

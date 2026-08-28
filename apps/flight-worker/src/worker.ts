@@ -27,6 +27,7 @@ export class FlightWorker {
   readonly #freshnessMs: number;
   readonly #claimLimit: number;
   readonly #language: Pick<TelegramLanguageService, "localize"> | null;
+  readonly #archivedMode: boolean;
   #running = false;
   #lastPrunedAt = 0;
   #lastTickHadDueWork = false;
@@ -41,6 +42,7 @@ export class FlightWorker {
     leaseMs: number;
     freshnessMs: number;
     claimLimit: number;
+    archivedMode?: boolean;
     language?: Pick<TelegramLanguageService, "localize"> | null;
   }) {
     this.#store = options.store;
@@ -52,6 +54,7 @@ export class FlightWorker {
     this.#leaseMs = options.leaseMs;
     this.#freshnessMs = options.freshnessMs;
     this.#claimLimit = options.claimLimit;
+    this.#archivedMode = options.archivedMode ?? false;
     this.#language = options.language ?? null;
   }
 
@@ -68,6 +71,9 @@ export class FlightWorker {
     this.#running = true;
     this.#lastTickHadDueWork = false;
     try {
+      if (this.#archivedMode) {
+        return { scheduled: 0, processed: 0, notified: 0 };
+      }
       if (now.getTime() - this.#lastPrunedAt >= WATCH_DATA_PRUNE_INTERVAL_MS) {
         await this.#store.pruneWatchData(now);
         this.#lastPrunedAt = now.getTime();

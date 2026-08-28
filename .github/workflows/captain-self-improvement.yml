@@ -1,9 +1,7 @@
 name: Captain Self-Improvement
 
 on:
-  workflow_run:
-    workflows: ["Captain Hourly Self-Test"]
-    types: [completed]
+  workflow_dispatch:
 
 permissions:
   actions: read
@@ -16,7 +14,9 @@ concurrency:
 
 jobs:
   prepare-fix:
-    if: github.event.workflow_run.conclusion == 'failure'
+    # Captain is archived. Keep the former repair job for a reversible restore,
+    # but never run it automatically or manually while the archive is in force.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

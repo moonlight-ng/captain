@@ -41,13 +41,14 @@ const worker = new FlightWorker({
   leaseMs: env.leaseMs,
   freshnessMs: env.freshnessMs,
   claimLimit: env.claimLimit,
+  archivedMode: env.archivedMode,
   language: new TelegramLanguageService({
     apiKey: env.aiGatewayApiKey,
     model: env.languageModel
   })
 });
 
-let ready = false;
+let ready = env.archivedMode;
 const scheduler = new InterruptibleWorkerScheduler({
   tickMs: env.tickMs,
   maxIdleTickMs: env.maxIdleTickMs,
@@ -69,13 +70,18 @@ const wakeSql = postgres(env.databaseUrl, {
 
 const server = createServer((request, response) => {
   if (request.url === "/health") {
-    response.writeHead(200, { "content-type": "application/json" }).end('{"status":"ok"}');
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
+      status: "ok",
+      mode: env.archivedMode ? "archived" : "active"
+    }));
     return;
   }
   if (request.url === "/ready") {
     response.writeHead(ready ? 200 : 503, { "content-type": "application/json" })
       .end(JSON.stringify({
         status: ready ? "ready" : "starting",
+        mode: env.archivedMode ? "archived" : "active",
+        trackingEnabled: env.trackingEnabled,
         provider: provider.provider,
         fallbackProvider: fallbackProvider.provider
       }));
@@ -91,6 +97,13 @@ server.listen(env.port, "0.0.0.0", () => {
     provider: provider.provider,
     fallback_provider: fallbackProvider.provider
   });
+  if (env.archivedMode) {
+    logEvent("info", "flight_worker.archived", {
+      worker_id: env.workerId,
+      tracking_enabled: false
+    });
+    return;
+  }
   scheduler.start();
   void wakeSql.listen(
     FLIGHT_WORKER_WAKE_CHANNEL,

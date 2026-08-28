@@ -1,5 +1,10 @@
 # Captain architecture
 
+This revision archives Captain. The runtime below remains the recovery
+contract, while [the archive runbook](archive-runbook.md) defines the production
+override: traveller entry and mutations are closed, recurring work is inert,
+and durable data/admin reads are preserved.
+
 This document describes the runtime that exists in this repository. It is the
 contract for developers and coding agents: when product copy, tests, or a new
 feature disagree with it, reconcile the implementation and this document in the

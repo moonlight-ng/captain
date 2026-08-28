@@ -1,5 +1,10 @@
 # Captain 1.0 production rollout
 
+This is the historical activation procedure. This revision archives Captain;
+use [the archive runbook](archive-runbook.md) for its deployment order and do
+not follow the beta-opening steps below unless an explicit restore has been
+approved.
+
 ## Credentials and ownership
 
 Captain and its worker use the same Captain PostgreSQL database and public

@@ -7,6 +7,7 @@ export type WorkerEnv = {
   captainPublicUrl: string;
   aiGatewayApiKey: string | null;
   languageModel: string;
+  archivedMode: boolean;
   trackingEnabled: boolean;
   workerId: string;
   port: number;
@@ -19,6 +20,7 @@ export type WorkerEnv = {
 
 export function loadWorkerEnv(source: NodeJS.ProcessEnv = process.env): WorkerEnv {
   const tickMs = positive(source, "FLIGHT_WORKER_TICK_MS", 60_000);
+  const archivedMode = booleanValue(source.CAPTAIN_ARCHIVED_MODE, false);
   return {
     databaseUrl: required(source, "DATABASE_URL"),
     duffelAccessToken: required(source, "DUFFEL_ACCESS_TOKEN"),
@@ -28,7 +30,8 @@ export function loadWorkerEnv(source: NodeJS.ProcessEnv = process.env): WorkerEn
     captainPublicUrl: required(source, "CAPTAIN_PUBLIC_URL").replace(/\/$/u, ""),
     aiGatewayApiKey: source.AI_GATEWAY_API_KEY?.trim() || null,
     languageModel: source.CAPTAIN_LANGUAGE_MODEL?.trim() || "openai/gpt-5.6-luna",
-    trackingEnabled: !booleanValue(source.TRACKING_KILL_SWITCH, false),
+    archivedMode,
+    trackingEnabled: !archivedMode && !booleanValue(source.TRACKING_KILL_SWITCH, false),
     workerId: source.FLIGHT_WORKER_ID?.trim() || `worker-${process.pid}`,
     port: positive(source, "PORT", 8080),
     tickMs,
@@ -50,6 +53,19 @@ export function idleTickDelayMs(
   if (consecutiveIdleTicks <= 0) return tickMs;
   const multiplier = 2 ** Math.min(consecutiveIdleTicks, 10);
   return Math.min(maxIdleTickMs, tickMs * multiplier);
+}
+
+export function assertWorkerArchiveOverride(
+  source: NodeJS.ProcessEnv = process.env
+): void {
+  if (
+    booleanValue(source.CAPTAIN_ARCHIVED_MODE, false)
+    && !booleanValue(source.CAPTAIN_ARCHIVE_OVERRIDE, false)
+  ) {
+    throw new Error(
+      "Captain is archived; set CAPTAIN_ARCHIVE_OVERRIDE=true only for an approved manual provider run"
+    );
+  }
 }
 
 function booleanValue(value: string | undefined, fallback: boolean): boolean {

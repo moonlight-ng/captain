@@ -151,7 +151,7 @@ export async function createCaptainServices(): Promise<CaptainServices> {
         secret: env.feedbackBridgeSecret
       })
     : new DisabledFeedbackBridge();
-  const flightProvider = env.duffelAccessToken
+  const flightProvider = !env.archivedMode && env.duffelAccessToken
     ? new DuffelFlightSearchProvider({
         accessToken: env.duffelAccessToken,
         baseUrl: env.duffelBaseUrl,

@@ -1,5 +1,10 @@
 # Captain
 
+> **Archived revision:** when deployed, the production app serves closure
+> responses and retains its data/admin surface without accepting traveller
+> work. Operational details and restoration cautions are in
+> [the archive runbook](../../docs/archive-runbook.md).
+
 Captain is a Telegram-first multi-city trip planner and tracked flight-search
 product. You can send a trip by text or voice note. Captain extracts the ordered
 cities and timing constraints, saves the itinerary for review, and starts fare

@@ -1,5 +1,8 @@
+import { isCaptainArchivedMode } from "./archive.js";
+
 export type CaptainEnv = {
   mode: "development" | "production";
+  archivedMode: boolean;
   publicUrl: string;
   databaseUrl: string | null;
   telegramBotToken: string | null;
@@ -29,6 +32,7 @@ export type CaptainEnv = {
 
 export function loadEnv(): CaptainEnv {
   const mode = process.env.NODE_ENV === "production" ? "production" : "development";
+  const archivedMode = isCaptainArchivedMode();
   const feedbackBridgeUrl = optional("FEEDBACK_BRIDGE_URL");
   const feedbackBridgeSecret = optional("FEEDBACK_BRIDGE_SECRET");
   if (Boolean(feedbackBridgeUrl) !== Boolean(feedbackBridgeSecret)) {
@@ -45,6 +49,7 @@ export function loadEnv(): CaptainEnv {
   }
   const env: CaptainEnv = {
     mode,
+    archivedMode,
     publicUrl: (process.env.CAPTAIN_PUBLIC_URL?.trim() || "http://127.0.0.1:4178").replace(/\/$/, ""),
     databaseUrl: optional("DATABASE_URL"),
     telegramBotToken: optional("TELEGRAM_BOT_TOKEN"),
@@ -61,7 +66,7 @@ export function loadEnv(): CaptainEnv {
     supabaseUrl: optional("SUPABASE_URL"),
     supabasePublishableKey: optional("SUPABASE_PUBLISHABLE_KEY"),
     adminEmails: emailList(process.env.CAPTAIN_ADMIN_EMAILS),
-    conversationReviewEnabled: booleanValue(
+    conversationReviewEnabled: !archivedMode && booleanValue(
       process.env.CAPTAIN_CONVERSATION_REVIEW_ENABLED,
       false
     ),
@@ -79,7 +84,7 @@ export function loadEnv(): CaptainEnv {
     conversationReviewFrom: optional("CAPTAIN_CONVERSATION_REVIEW_FROM"),
     resendApiKey: optional("RESEND_API_KEY"),
     betaUserLimit: positiveInteger("CAPTAIN_BETA_USER_LIMIT", 25),
-    publicBetaEnabled: booleanValue(
+    publicBetaEnabled: !archivedMode && booleanValue(
       process.env.CAPTAIN_PUBLIC_BETA_ENABLED,
       mode !== "production"
     ),

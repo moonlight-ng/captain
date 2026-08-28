@@ -18,12 +18,27 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
       - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Wait for the archived flight worker
+        shell: bash
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error \
+              https://dr-flight-worker.fly.dev/ready \
+              | jq --exit-status \
+                '.status == "ready" and .mode == "archived" and .trackingEnabled == false' \
+              > /dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "The flight worker did not enter archived mode before Captain deploy."
+          exit 1
       - run: flyctl deploy . --config apps/captain/fly.toml --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_CAPTAIN }}

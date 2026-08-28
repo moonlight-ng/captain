@@ -9,8 +9,9 @@ primary_region = "lhr"
   DUFFEL_BASE_URL = "https://api.duffel.com"
   FLYSOAR_MCP_URL = "https://mcp.flysoar.ai/mcp"
   CAPTAIN_PUBLIC_URL = "https://dr-captain.fly.dev"
+  CAPTAIN_ARCHIVED_MODE = "true"
   CAPTAIN_LANGUAGE_MODEL = "openai/gpt-5.6-luna"
-  TRACKING_KILL_SWITCH = "false"
+  TRACKING_KILL_SWITCH = "true"
   FLIGHT_WORKER_ID = "flight-worker-1"
   FLIGHT_WORKER_TICK_MS = "60000"
   FLIGHT_WORKER_MAX_IDLE_TICK_MS = "300000"
@@ -21,9 +22,9 @@ primary_region = "lhr"
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "off"
+  auto_stop_machines = "stop"
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
 
   [[http_service.checks]]
     grace_period = "10s"
