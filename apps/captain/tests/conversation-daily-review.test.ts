@@ -155,7 +155,7 @@ describe("Captain conversation daily review", () => {
       email: { send },
       config: {
         timeZone: "Africa/Lagos",
-        recipients: ["ope@moonlight.ng", "fawaz@moonlight.ng"],
+        recipients: ["owner@example.com", "reviewer@example.com"],
         adminBaseUrl: "https://captain.example"
       },
       now: () => new Date("2026-08-14T06:15:00.000Z")
@@ -193,7 +193,7 @@ describe("Captain conversation daily review", () => {
       email: { send },
       config: {
         timeZone: "Africa/Lagos",
-        recipients: ["ope@moonlight.ng", "fawaz@moonlight.ng"],
+        recipients: ["owner@example.com", "reviewer@example.com"],
         adminBaseUrl: "https://captain.example"
       },
       now: () => new Date("2026-08-14T06:15:00.000Z")
@@ -218,7 +218,7 @@ describe("Captain conversation daily review", () => {
       },
       config: {
         timeZone: "Africa/Lagos",
-        recipients: ["ope@moonlight.ng", "fawaz@moonlight.ng"],
+        recipients: ["owner@example.com", "reviewer@example.com"],
         adminBaseUrl: "https://captain.example"
       },
       now: () => new Date("2026-08-14T06:15:00.000Z")

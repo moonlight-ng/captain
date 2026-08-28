@@ -1,4 +1,4 @@
-app = "dr-flight-worker"
+app = "captain-worker-example"
 primary_region = "lhr"
 
 [build]
@@ -8,7 +8,7 @@ primary_region = "lhr"
   PORT = "8080"
   DUFFEL_BASE_URL = "https://api.duffel.com"
   FLYSOAR_MCP_URL = "https://mcp.flysoar.ai/mcp"
-  CAPTAIN_PUBLIC_URL = "https://dr-captain.fly.dev"
+  CAPTAIN_PUBLIC_URL = "https://captain.example.com"
   CAPTAIN_ARCHIVED_MODE = "true"
   CAPTAIN_LANGUAGE_MODEL = "openai/gpt-5.6-luna"
   TRACKING_KILL_SWITCH = "true"

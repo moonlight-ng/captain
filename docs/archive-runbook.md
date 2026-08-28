@@ -36,11 +36,11 @@ the conspicuous one-command `CAPTAIN_ARCHIVE_OVERRIDE=true` escape hatch.
 
 ### Runtime and public entry points
 
-- Fly app `dr-captain`, region `lhr`, public host
-  `https://dr-captain.fly.dev`, was running one healthy machine (version 155).
+- Fly app `captain-app-example`, region `lhr`, public host
+  `https://captain.example.com`, was running one healthy machine (version 155).
   Fly runs `node scripts/release.mjs` before each release.
-- Fly app `dr-flight-worker`, region `lhr`, public host
-  `https://dr-flight-worker.fly.dev`, was running one healthy machine (version
+- Fly app `captain-worker-example`, region `lhr`, public host
+  `https://worker.captain.example.com`, was running one healthy machine (version
   78). Its live configuration had `TRACKING_KILL_SWITCH=false` before this
   archive change.
 - Captain exposes the Telegram webhook at `/eve/v1/telegram`; traveller pages
@@ -81,7 +81,7 @@ database action.
 Only names and purpose are inventoried here; values must never be copied into
 Git, tickets, logs, or shutdown notes.
 
-`dr-captain` had these deployed Fly secret names:
+The Captain Fly app had these deployed Fly secret names:
 
 - `AI_GATEWAY_API_KEY`
 - `DATABASE_URL`
@@ -98,7 +98,7 @@ Git, tickets, logs, or shutdown notes.
 - `CAPTAIN_SIMPLIFIED_MULTI_CITY_ENABLED`
 - retained legacy `CAPTAIN_PII_ENCRYPTION_KEY`
 
-`dr-flight-worker` had these deployed Fly secret names:
+The flight-worker Fly app had these deployed Fly secret names:
 
 - `DATABASE_URL`
 - `TELEGRAM_BOT_TOKEN`
@@ -145,9 +145,9 @@ ready, archived, and tracking-disabled.
 
 Verify:
 
-1. `dr-flight-worker` `/ready` returns `mode: "archived"` and
+1. The flight worker's `/ready` returns `mode: "archived"` and
    `trackingEnabled: false`.
-2. `dr-captain` `/ready` returns `mode: "archived"`.
+2. Captain's `/ready` returns `mode: "archived"`.
 3. A Telegram text and an old inline trip button both receive the closure copy;
    no new conversation, message, trip, or model-usage row appears.
 4. `/trips` renders the closure page, a traveller mutation returns `410`, and

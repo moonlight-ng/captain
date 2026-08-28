@@ -79,7 +79,6 @@ export function loadEnv(): CaptainEnv {
       || "openai/gpt-5.6-luna",
     conversationReviewRecipients: emailList(
       process.env.CAPTAIN_CONVERSATION_REVIEW_RECIPIENTS
-      || "ope@moonlight.ng,fawaz@moonlight.ng"
     ),
     conversationReviewFrom: optional("CAPTAIN_CONVERSATION_REVIEW_FROM"),
     resendApiKey: optional("RESEND_API_KEY"),

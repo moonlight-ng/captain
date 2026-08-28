@@ -90,10 +90,7 @@ describe("Captain public environment", () => {
       conversationReviewEnabled: false,
       conversationReviewTimeZone: "Africa/Lagos",
       conversationReviewModel: "openai/gpt-5.6-luna",
-      conversationReviewRecipients: [
-        "ope@moonlight.ng",
-        "fawaz@moonlight.ng"
-      ]
+      conversationReviewRecipients: []
     });
   });
 

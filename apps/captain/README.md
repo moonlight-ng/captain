@@ -136,7 +136,7 @@ storage directly.
 Before a production release:
 
 1. Create each administrator in Supabase Auth and disable public user signup.
-2. Add `https://dr-captain.fly.dev/admin` to the Supabase Auth redirect URLs
+2. Add `https://captain.example.com/admin` to the Supabase Auth redirect URLs
    (and `http://127.0.0.1:4178/admin` when testing locally).
 3. Configure `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and the comma-separated
    `CAPTAIN_ADMIN_EMAILS` as Fly secrets. The email allowlist is checked again

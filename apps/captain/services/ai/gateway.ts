@@ -1,7 +1,7 @@
 import { createGateway } from "ai";
 
 const CAPTAIN_GATEWAY_HEADERS = {
-  "http-referer": "https://dr-captain.fly.dev",
+  "http-referer": "https://captain.example.com",
   "x-title": "Captain"
 } as const;
 

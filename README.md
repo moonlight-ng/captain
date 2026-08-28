@@ -20,8 +20,8 @@ and reports a useful initial cost picture or a material change.
 - `packages` contains the flight domain, persistence, provider adapters,
   observability, and Telegram helpers shared by those two deployments.
 
-Captain deploys as `dr-captain`; its worker is independently deployed as
-`dr-flight-worker`. Pilot is a separate private product and repository.
+Captain and its worker deploy independently. Pilot is a separate private
+product and repository.
 
 Captain plans cities and searches flights. It does not book travel, take
 payments, or hold any traveller identity: there is no passenger record and no

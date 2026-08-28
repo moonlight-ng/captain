@@ -13,7 +13,7 @@ import { FlightWorker } from "./worker.js";
 
 const env = loadWorkerEnv({
   ...process.env,
-  CAPTAIN_PUBLIC_URL: process.env.CAPTAIN_PUBLIC_URL?.trim() || "https://dr-captain.fly.dev",
+  CAPTAIN_PUBLIC_URL: process.env.CAPTAIN_PUBLIC_URL?.trim() || "https://captain.example.com",
   TRACKING_KILL_SWITCH: "false",
   FLIGHT_WORKER_CLAIM_LIMIT: process.env.FLIGHT_WORKER_CLAIM_LIMIT ?? "4",
   FLIGHT_WORKER_LEASE_MS: process.env.FLIGHT_WORKER_LEASE_MS ?? "600000"

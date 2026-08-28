@@ -27,13 +27,13 @@ Install the equivalent Fly secrets without putting their values in
 `fly.toml`, Git, or GitHub variables stored as plain text:
 
 ```sh
-fly secrets set -a dr-captain \
+fly secrets set -a captain-app-example \
   TELEGRAM_BOT_TOKEN='…' TELEGRAM_WEBHOOK_SECRET_TOKEN='…' \
   DATABASE_URL='postgresql://…' WORKFLOW_POSTGRES_URL='postgresql://…'
 
-fly secrets set -a dr-flight-worker \
+fly secrets set -a captain-worker-example \
   TELEGRAM_BOT_TOKEN='…' DATABASE_URL='postgresql://…' \
-  CAPTAIN_PUBLIC_URL='https://dr-captain.fly.dev' DUFFEL_ACCESS_TOKEN='…'
+  CAPTAIN_PUBLIC_URL='https://captain.example.com' DUFFEL_ACCESS_TOKEN='…'
 ```
 
 ## Safe sequence

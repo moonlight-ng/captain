@@ -29,7 +29,7 @@ jobs:
         run: |
           for attempt in $(seq 1 60); do
             if curl --fail --silent --show-error \
-              https://dr-flight-worker.fly.dev/ready \
+              https://worker.captain.example.com/ready \
               | jq --exit-status \
                 '.status == "ready" and .mode == "archived" and .trackingEnabled == false' \
               > /dev/null; then

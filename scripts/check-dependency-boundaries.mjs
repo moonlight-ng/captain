@@ -64,8 +64,8 @@ for (const file of await sourceFiles(join("apps", webApp))) {
   }
 }
 
-await checkDeploymentIdentity("captain", "dr-captain");
-await checkDeploymentIdentity("flight-worker", "dr-flight-worker");
+await checkDeploymentIdentity("captain", "captain-app-example");
+await checkDeploymentIdentity("flight-worker", "captain-worker-example");
 await checkCaptainEnvironmentOwnership();
 
 if (failures.length > 0) {
